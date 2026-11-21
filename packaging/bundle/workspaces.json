@@ -1,0 +1,22 @@
+{
+  "Database": {
+    "Provider": "Postgres",
+    "RunMigrationsOnStartup": false
+  },
+  "DevelopmentWorkspaces": {
+    "Enabled": false,
+    "Profiles": {},
+    "Images": {},
+    "Repositories": []
+  },
+  "DevelopmentWorkspaceGateway": {
+    "Enabled": true
+  },
+  "DevelopmentWorkspaceWorker": {
+    "ManagementAddresses": [],
+    "PreviewServices": {
+      "connect": { "Port": 774 },
+      "web": { "Port": 8080 }
+    }
+  }
+}

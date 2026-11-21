@@ -240,6 +240,17 @@ class IdleTerminalTests(unittest.TestCase):
                 with self.assertRaisesRegex(rt.Blocked, "children"):
                     self.inspect()
 
+    def test_shell_children_guard_is_independent_of_process_inventory_order(self):
+        self.write(110, argv=["/bin/bash", "-i"])
+        for state in ("T", "Z"):
+            with self.subTest(state=state):
+                self.write(120, ppid=110, state=state, uid=2000)
+                inventory = self.reader.inventory()
+                child_first = dict(reversed(list(inventory.items())))
+                with patch.object(self.reader, "inventory", return_value=child_first):
+                    with self.assertRaisesRegex(rt.Blocked, "children"):
+                        self.inspect()
+
     def test_kernel_children_file_blocks_jobs_missing_from_first_inventory(self):
         self.write(110, children="120 ")
         with self.assertRaisesRegex(rt.Blocked, "children"):
