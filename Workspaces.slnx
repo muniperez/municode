@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/Workspaces.Common/Workspaces.Common.csproj" />
+  <Project Path="src/Workspaces.Api/Workspaces.Api.csproj" />
+  <Project Path="tests/Workspaces.Tests/Workspaces.Tests.csproj" />
+</Solution>

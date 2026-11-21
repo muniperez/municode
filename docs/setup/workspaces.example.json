@@ -1,0 +1,53 @@
+{
+  "Database": {
+    "Provider": "Sqlite",
+    "RunMigrationsOnStartup": false
+  },
+  "Bootstrap": {
+    "InstallationId": "workspace-example"
+  },
+  "Console": {
+    "BaseUrl": "https://console.example.test"
+  },
+  "Cors": {
+    "AllowedOrigins": ["https://console.example.test"]
+  },
+  "Kratos": {
+    "PublicBaseUrl": "http://127.0.0.1:4433",
+    "AdminBaseUrl": "http://127.0.0.1:4434",
+    "DashboardOrigin": "https://console.example.test"
+  },
+  "GitHub": {
+    "ApiUrl": "https://console.example.test"
+  },
+  "OpenBao": {
+    "Address": "https://bao.example.test",
+    "MountPath": "workspaces",
+    "EnvironmentPrefix": "example"
+  },
+  "DevelopmentWorkspaces": {
+    "Enabled": false,
+    "Profiles": {
+      "standard": {
+        "MemoryGiB": 8,
+        "CpuCount": 4,
+        "AllowedPlanIds": ["synthetic-plan"],
+        "AllowedSkus": ["synthetic-sku"],
+        "AllowedRegions": ["synthetic-region"]
+      }
+    },
+    "Images": {
+      "example-image": {
+        "Enabled": false,
+        "ProviderAccountId": "synthetic-account",
+        "ProviderImageId": "100",
+        "AllowedRegions": ["synthetic-region"],
+        "Architecture": "linux/amd64"
+      }
+    }
+  },
+  "DevelopmentWorkspaceGateway": {
+    "Enabled": false,
+    "GatewayDomain": "workspaces.example.test"
+  }
+}
