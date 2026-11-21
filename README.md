@@ -34,8 +34,8 @@ payloads. To include the optional PostgreSQL test, set
 Publishing API, worker and gateway is documented independently of client feature
 code. Release CI also builds the dashboard static output and four self-contained
 CLI targets through [package targets](packaging/targets.json). A synthetic
-handoff smoke test verifies all five package payloads before either client branch
-is merged.
+dashboard handoff smoke test verifies all five package payloads and the merged
+CLI project.
 
 ```sh
 dotnet publish src/Workspaces.Api -c Release -o .local/artifacts/publish/api
@@ -56,9 +56,10 @@ The archive contains the Compose/Caddy bundle, API/worker/gateway payloads,
 dashboard, CLI, installer, operator/user guides and a component inventory. Exact
 release checksums are written under `.local/artifacts/release`.
 
-Dashboard and CLI projects are not present on the integration base yet. Their
-final paths and release commands are fixed in `packaging/targets.json`; release
-tags fail closed until both artifacts are built. This delivery PR intentionally
+The CLI project is merged and its executable is included by delivery CI. The
+dashboard project is not present on the integration base yet; its final static
+output path and release command are fixed in `packaging/targets.json`, and release
+tags fail closed until that artifact is built. This delivery PR intentionally
 does not implement client UI or CLI internals.
 
 ## Start with a fresh database

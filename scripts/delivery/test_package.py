@@ -22,7 +22,7 @@ class PackageTests(unittest.TestCase):
             ("worker", "Workspaces.Worker.dll"),
             ("gateway", "Workspaces.Gateway.dll"),
             ("dashboard", "index.html"),
-            ("cli", "workspaces"),
+            ("cli", "municode"),
         ):
             payload = self.root / name
             payload.mkdir()
@@ -70,7 +70,7 @@ class PackageTests(unittest.TestCase):
             self.assertTrue(any(name.endswith("/runtime/worker/Workspaces.Worker.dll") for name in names))
             self.assertTrue(any(name.endswith("/runtime/gateway/Workspaces.Gateway.dll") for name in names))
             self.assertTrue(any(name.endswith("/dashboard/index.html") for name in names))
-            self.assertTrue(any(name.endswith("/cli/workspaces") for name in names))
+            self.assertTrue(any(name.endswith("/cli/municode") for name in names))
             self.assertTrue(any(name.endswith("/install.sh") for name in names))
             self.assertTrue(all(not member.issym() and not member.islnk() for member in bundle.getmembers()))
 

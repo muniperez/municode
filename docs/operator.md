@@ -107,8 +107,9 @@ OpenBao values, bootstrap material or worker private keys into support output.
 
 ## Final client integration
 
-The package target contract is `packaging/targets.json`. When the dashboard and
-CLI child projects merge, release CI builds
-`src/Workspaces.Dashboard/dist` and self-contained outputs from
-`src/Workspaces.Cli/Workspaces.Cli.csproj`; no packaging code assumes a client
-implementation. A tagged release fails closed while either artifact is missing.
+The package target contract is `packaging/targets.json`. Release CI builds the
+merged self-contained CLI outputs from
+`src/Workspaces.Cli/Workspaces.Cli.csproj`. When the dashboard child project
+merges, release CI consumes its `src/Workspaces.Dashboard/dist` static output;
+no packaging code assumes a client implementation. A tagged release fails closed
+while the dashboard artifact is missing.

@@ -23,9 +23,9 @@
     },
     "cli": {
       "project": "src/Workspaces.Cli/Workspaces.Cli.csproj",
-      "artifact": "workspaces",
+      "artifact": "municode",
       "rids": ["linux-x64", "linux-arm64", "osx-arm64", "win-x64"],
-      "integration": "Expected self-contained executable; CLI feature PR owns the project."
+      "integration": "Merged self-contained executable project consumed by delivery release targets."
     }
   }
 }

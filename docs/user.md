@@ -19,10 +19,10 @@ account assumptions.
 
 ## CLI
 
-The release archive stores executables below `cli/<runtime>/workspaces`
-(`workspaces.exe` on Windows). Install the matching executable into a protected
+The release archive stores executables below `cli/<runtime>/municode`
+(`municode.exe` on Windows). Install the matching executable into a protected
 location on your `PATH`. The CLI child project owns command behavior and exact
-help; run `workspaces --help` from its released binary for the accepted commands.
+help; run `municode --help` from its released binary for the accepted commands.
 
 Use the API URL and a short-lived or scoped key issued by your installation.
 Use `workspaces:read` for inspection and `workspaces:write` only for mutations.

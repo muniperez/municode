@@ -70,8 +70,9 @@ jobs:
           dotnet publish src/Workspaces.Gateway -c Release --no-build \
             -o "$root/gateway"
           printf '%s\n' '<!doctype html><title>synthetic</title>' > "$root/dashboard/index.html"
-          printf '%s\n' '#!/bin/sh' 'exit 0' > "$root/cli/workspaces"
-          chmod 755 "$root/cli/workspaces"
+          dotnet publish src/Workspaces.Cli/Workspaces.Cli.csproj -c Release \
+            --runtime linux-x64 --self-contained true \
+            -o "$root/cli/linux-x64"
           python3 -B scripts/delivery/package.py \
             --version 0.0.0-ci --source "$GITHUB_SHA" --rid linux-x64 \
             --api "$root/api" --worker "$root/worker" --gateway "$root/gateway" \

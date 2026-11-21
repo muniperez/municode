@@ -99,9 +99,12 @@ jobs:
               --runtime "$rid" --self-contained true \
               -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
               -p:PublishTrimmed=false -p:DebugType=None -p:DebugSymbols=false \
+              -p:Version="${RELEASE_TAG#workspaces-v}" \
+              -p:SourceRevisionId="$SOURCE_REVISION" \
+              -p:IncludeSourceRevisionInInformationalVersion=false \
+              -p:InformationalVersion="${RELEASE_TAG#workspaces-v}+sha.$SOURCE_REVISION" \
               -o "$PAYLOAD/cli/$rid"
-            test -f "$PAYLOAD/cli/$rid/Workspaces.Cli$suffix"
-            mv "$PAYLOAD/cli/$rid/Workspaces.Cli$suffix" "$PAYLOAD/cli/$rid/workspaces$suffix"
+            test -f "$PAYLOAD/cli/$rid/municode$suffix"
           done
       - name: Assemble independent release
         run: |
