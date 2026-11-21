@@ -1,10 +1,14 @@
-# Municode Workspaces control plane
+# Municode Workspaces
 
 The .NET API owns Workspaces identity, organizations, provider accounts, plans,
 workspace lifecycle, and Git access. It uses a dedicated SQLite or PostgreSQL
 database. Browser identity uses a dedicated Ory Kratos instance. Provider and
 GitHub App credentials use a dedicated OpenBao KV v2 mount. Hetzner, DigitalOcean,
 and Vultr have workspace-specific adapters.
+
+The standalone worker provisions and reconciles workspace VMs. The gateway
+serves authenticated T3 and preview traffic through private SSH forwards.
+See the [runtime setup and verification commands](docs/setup/runtime.md).
 
 ## Build and test
 
