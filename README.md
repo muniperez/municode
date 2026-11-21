@@ -32,22 +32,21 @@ payloads. To include the optional PostgreSQL test, set
 ## Package
 
 Publishing API, worker and gateway is documented independently of client feature
-code. Release CI also builds the dashboard static output and four self-contained
-CLI targets through [package targets](packaging/targets.json). A synthetic
-dashboard handoff smoke test verifies all five package payloads and the merged
-CLI project.
+code. Release CI builds the real merged dashboard static output and four
+self-contained CLI targets through [package targets](packaging/targets.json).
+The package handoff smoke test builds and verifies all five actual payloads.
 
 ```sh
 dotnet publish src/Workspaces.Api -c Release -o .local/artifacts/publish/api
 dotnet publish src/Workspaces.Worker -c Release -o .local/artifacts/publish/worker
 dotnet publish src/Workspaces.Gateway -c Release -o .local/artifacts/publish/gateway
-# Supply built src/Workspaces.Dashboard/dist and self-contained CLI RID outputs.
+# Supply the merged dashboard build and self-contained CLI RID outputs.
 python3 -B scripts/delivery/package.py \
   --version 0.0.0-local --source "$(git rev-parse HEAD)" --rid linux-any \
   --api .local/artifacts/publish/api \
   --worker .local/artifacts/publish/worker \
   --gateway .local/artifacts/publish/gateway \
-  --dashboard .local/artifacts/dashboard \
+  --dashboard .local/artifacts/dashboard-dist \
   --cli .local/artifacts/cli \
   --output .local/artifacts/release
 ```
@@ -56,11 +55,10 @@ The archive contains the Compose/Caddy bundle, API/worker/gateway payloads,
 dashboard, CLI, installer, operator/user guides and a component inventory. Exact
 release checksums are written under `.local/artifacts/release`.
 
-The CLI project is merged and its executable is included by delivery CI. The
-dashboard project is not present on the integration base yet; its final static
-output path and release command are fixed in `packaging/targets.json`, and release
-tags fail closed until that artifact is built. This delivery PR intentionally
-does not implement client UI or CLI internals.
+The merged CLI and dashboard projects are built and included by delivery CI.
+Their package paths and release commands are fixed in `packaging/targets.json`;
+release tags fail closed when either artifact cannot be built. This delivery PR
+intentionally does not implement client UI or CLI internals.
 
 ## Start with a fresh database
 

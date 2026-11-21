@@ -54,7 +54,7 @@ jobs:
           WORKSPACES_SECRETS_DIR="$secrets" docker compose \
             -f packaging/bundle/compose.yml \
             --env-file packaging/bundle/.env.example config --quiet
-      - name: Smoke-test a packaged synthetic client handoff
+      - name: Smoke-test the packaged dashboard and CLI handoff
         run: |
           set -eu
           root=.local/artifacts/package-smoke
@@ -65,7 +65,10 @@ jobs:
             -o "$root/worker"
           dotnet publish src/Workspaces.Gateway -c Release --no-build \
             -o "$root/gateway"
-          printf '%s\n' '<!doctype html><title>synthetic</title>' > "$root/dashboard/index.html"
+          npm ci --prefix modules/dashboard
+          npm test --prefix modules/dashboard -- --run
+          npm run build --prefix modules/dashboard
+          cp -R .local/artifacts/dashboard-dist/. "$root/dashboard/"
           dotnet publish src/Workspaces.Cli/Workspaces.Cli.csproj -c Release \
             --runtime linux-x64 --self-contained true \
             -o "$root/cli/linux-x64"

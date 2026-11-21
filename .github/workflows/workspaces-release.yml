@@ -72,8 +72,8 @@ jobs:
           set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^workspaces-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]
           test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
-          test -f src/Workspaces.Dashboard/package.json
-          test -f src/Workspaces.Dashboard/package-lock.json
+          test -f modules/dashboard/package.json
+          test -f modules/dashboard/package-lock.json
           test -f src/Workspaces.Cli/Workspaces.Cli.csproj
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             echo "::error::Release tags and assets are immutable."
@@ -87,9 +87,10 @@ jobs:
           dotnet publish src/Workspaces.Gateway -c Release -o "$PAYLOAD/gateway"
       - name: Build the expected dashboard static target
         run: |
-          npm ci --prefix src/Workspaces.Dashboard
-          npm run build --prefix src/Workspaces.Dashboard
-          cp -R src/Workspaces.Dashboard/dist "$PAYLOAD/dashboard"
+          npm ci --prefix modules/dashboard
+          npm test --prefix modules/dashboard -- --run
+          npm run build --prefix modules/dashboard
+          cp -R .local/artifacts/dashboard-dist "$PAYLOAD/dashboard"
       - name: Publish the expected CLI targets
         run: |
           for rid in linux-x64 linux-arm64 osx-arm64 win-x64; do

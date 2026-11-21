@@ -105,11 +105,11 @@ For a failed startup, inspect only service status and sanitized logs; bearer
 capabilities can occur in gateway requests. Do not paste request URLs, tokens,
 OpenBao values, bootstrap material or worker private keys into support output.
 
-## Final client integration
+## Client integration
 
 The package target contract is `packaging/targets.json`. Release CI builds the
 merged self-contained CLI outputs from
-`src/Workspaces.Cli/Workspaces.Cli.csproj`. When the dashboard child project
-merges, release CI consumes its `src/Workspaces.Dashboard/dist` static output;
-no packaging code assumes a client implementation. A tagged release fails closed
-while the dashboard artifact is missing.
+`src/Workspaces.Cli/Workspaces.Cli.csproj` and the merged dashboard static output
+from `modules/dashboard`, which Vite writes to
+`.local/artifacts/dashboard-dist`. No packaging code implements client behavior.
+A tagged release fails closed when either client artifact is missing.

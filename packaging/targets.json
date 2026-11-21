@@ -17,9 +17,9 @@
       "image": "ghcr.io/muniperez/municode-workspaces-gateway"
     },
     "dashboard": {
-      "project": "src/Workspaces.Dashboard/package.json",
-      "artifactDirectory": "dist",
-      "integration": "Expected static web build output; dashboard feature PR owns the project."
+      "project": "modules/dashboard/package.json",
+      "artifactDirectory": ".local/artifacts/dashboard-dist",
+      "integration": "Merged dashboard static build consumed by delivery package targets."
     },
     "cli": {
       "project": "src/Workspaces.Cli/Workspaces.Cli.csproj",
