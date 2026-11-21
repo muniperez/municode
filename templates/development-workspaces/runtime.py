@@ -1144,7 +1144,11 @@ class Linux:
                                 for group in preview_groups)) for p in values.values()),
                     "Preview service has unregistered children or leftover cgroup processes")
         verify_preview_children(inventory)
-        for process in inventory.values():
+        parents = {process["ppid"] for process in inventory.values()}
+        # Inspect shells before their children so any stopped/background child is
+        # rejected by the shell's children guard, independent of procfs ordering.
+        for process in sorted(inventory.values(),
+                               key=lambda value: (value["pid"] not in parents, value["pid"])):
             if self.config["uid"] not in process["uids"]:
                 continue
             require("/workspaceswork.slice/" in process["cgroup"],

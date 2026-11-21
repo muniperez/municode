@@ -37,6 +37,10 @@ jobs:
           dotnet build Workspaces.slnx -c Release
           dotnet test Workspaces.slnx -c Release --no-build \
             --results-directory .local/artifacts/test-results
+      - name: Verify guest runtime tests
+        run: |
+          templates/development-workspaces/test.sh
+          python3 -B templates/development-workspaces/image/test-t3-candidate.py
       - name: Validate the Compose interface
         run: |
           secrets="$PWD/.local/artifacts/compose-smoke/secrets"
