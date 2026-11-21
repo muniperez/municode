@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "components": {
+    "api": {
+      "project": "src/Workspaces.Api/Workspaces.Api.csproj",
+      "artifact": "Workspaces.Api.dll",
+      "image": "ghcr.io/muniperez/municode-api"
+    },
+    "worker": {
+      "project": "src/Workspaces.Worker/Workspaces.Worker.csproj",
+      "artifact": "Workspaces.Worker.dll",
+      "image": "ghcr.io/muniperez/municode-workspaces-worker"
+    },
+    "gateway": {
+      "project": "src/Workspaces.Gateway/Workspaces.Gateway.csproj",
+      "artifact": "Workspaces.Gateway.dll",
+      "image": "ghcr.io/muniperez/municode-workspaces-gateway"
+    },
+    "dashboard": {
+      "project": "src/Workspaces.Dashboard/package.json",
+      "artifactDirectory": "dist",
+      "integration": "Expected static web build output; dashboard feature PR owns the project."
+    },
+    "cli": {
+      "project": "src/Workspaces.Cli/Workspaces.Cli.csproj",
+      "artifact": "workspaces",
+      "rids": ["linux-x64", "linux-arm64", "osx-arm64", "win-x64"],
+      "integration": "Expected self-contained executable; CLI feature PR owns the project."
+    }
+  }
+}
