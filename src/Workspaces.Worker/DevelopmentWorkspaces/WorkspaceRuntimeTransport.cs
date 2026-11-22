@@ -15,6 +15,8 @@ public sealed record WorkspaceRuntimeTarget(string VmId, long Generation, string
 
 public interface IWorkspaceRuntimeTransport
 {
+    Task<bool> CheckSshReadinessAsync(WorkspaceRuntimeTarget target, CancellationToken ct) =>
+        throw new NotSupportedException("Pinned SSH readiness is required before ephemeral bootstrap.");
     Task<JsonElement> CallAsync(WorkspaceRuntimeTarget target, string operationId, string action, object? arguments, CancellationToken ct);
     Task<JsonElement> VolumeProbeAsync(WorkspaceRuntimeTarget target, string deviceId, CancellationToken ct);
     Task<JsonElement> VolumeFormatAsync(WorkspaceRuntimeTarget target, string deviceId, CancellationToken ct);
@@ -56,6 +58,24 @@ public sealed class WorkspaceRuntimeTransport(IOptions<WorkspaceSshOptions> opti
     private static void Pin(BaseClient client, WorkspaceRuntimeTarget target) =>
         client.HostKeyReceived += (_, key) => key.CanTrust = CryptographicOperations.FixedTimeEquals(
             Encoding.ASCII.GetBytes("SHA256:" + key.FingerPrintSHA256), Encoding.ASCII.GetBytes(target.HostFingerprint));
+
+    public async Task<bool> CheckSshReadinessAsync(WorkspaceRuntimeTarget target, CancellationToken ct)
+    {
+        using var client = Client(target);
+        try
+        {
+            await client.ConnectAsync(ct);
+            return true;
+        }
+        catch (Exception error) when (!ct.IsCancellationRequested && IsTemporarySshConnectFailure(error))
+        {
+            return false;
+        }
+    }
+
+    internal static bool IsTemporarySshConnectFailure(Exception error) =>
+        error is SshOperationTimeoutException ||
+        error is SocketException { SocketErrorCode: SocketError.ConnectionRefused or SocketError.TimedOut };
 
     public async Task<JsonElement> CallAsync(WorkspaceRuntimeTarget target, string operationId, string action, object? arguments, CancellationToken ct) =>
         Parse(await ExecuteAsync(target, CallCommand(target, operationId, action, arguments), ct));

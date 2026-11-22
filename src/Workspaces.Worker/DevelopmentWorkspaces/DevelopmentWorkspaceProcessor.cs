@@ -29,6 +29,8 @@ public sealed partial class DevelopmentWorkspaceProcessor(
         public string? VolumeDeviceId { get; set; }
         public bool FirewallAttempted { get; set; }
         public bool AllocationAttempted { get; set; }
+        public DateTimeOffset? SshReadinessDeadline { get; set; }
+        public DateTimeOffset? SshReadyAt { get; set; }
         public List<WorkspaceCloudAction> Actions { get; set; } = [];
         public DateTimeOffset? GatewayRevokedAt { get; set; }
         public string? ReceiptId { get; set; }
@@ -99,6 +101,7 @@ public sealed partial class DevelopmentWorkspaceProcessor(
                         vm.ErrorMessage += " Last recorded rejection: " + rejection.Summary;
                     op.ErrorCode = vm.ErrorCode; op.ErrorMessage = vm.ErrorMessage;
                     Release(op);
+                    if (op.Kind == "start" && op.Step == "ssh-ready") op.Status = "failed";
                 }, ct);
             }
             catch (DevelopmentWorkspaceException) { }
@@ -262,8 +265,25 @@ public sealed partial class DevelopmentWorkspaceProcessor(
                 if (running.Status != "running" || !running.FirewallsApplied || !running.FirewallIds!.Contains(vm.ProviderFirewallId!))
                 { await SaveAsync(op, evidence, op.Step, null, ct); break; }
                 await cloud.SecureWorkspacePrimaryIpAsync(running, ComputeLabels(workspace, vm), ct);
-                await SaveAsync(op, evidence, vm.Kind == "primary" ? "attach" : "bootstrap", (_, fresh, _) =>
+                if (vm.Kind == DevelopmentWorkspaceVmKinds.Ephemeral)
+                    evidence.SshReadinessDeadline ??= Now.AddMinutes(2);
+                await SaveAsync(op, evidence, vm.Kind == "primary" ? "attach" : "ssh-ready", (_, fresh, _) =>
                 { fresh.ProviderIpId = running.PrimaryIpId; fresh.IpAddress = running.Ipv4; }, ct); break;
+            case "ssh-ready":
+                if (vm.Kind != DevelopmentWorkspaceVmKinds.Ephemeral || evidence.SshReadinessDeadline is null)
+                    throw new InvalidOperationException("Ephemeral SSH readiness deadline is missing.");
+                if (Now >= evidence.SshReadinessDeadline)
+                    throw new InvalidOperationException("Ephemeral management SSH did not become ready within the startup deadline.");
+                if (!await runtime.CheckSshReadinessAsync(Target(vm), ct))
+                {
+                    logger?.LogInformation("Workspace operation {OperationId} is waiting for pinned management SSH during ephemeral startup.", op.Id);
+                    await SaveAsync(op, evidence, op.Step, null, ct);
+                    break;
+                }
+                if (Now >= evidence.SshReadinessDeadline)
+                    throw new InvalidOperationException("Ephemeral management SSH exceeded the startup deadline.");
+                evidence.SshReadyAt = Now;
+                await SaveAsync(op, evidence, "bootstrap", null, ct); break;
             case "attach":
                 if (workspace.VolumeAttachedVmId is not null && workspace.VolumeAttachedVmId != vm.Id)
                     throw new InvalidOperationException("A previous primary writer is not fenced.");
@@ -292,6 +312,13 @@ public sealed partial class DevelopmentWorkspaceProcessor(
                 await SaveAsync(op, evidence, "bootstrap", (_, fresh, parent) =>
                 { parent.VolumeFilesystemUuid = uuid; fresh.Phase = "bootstrapping"; }, ct); break;
             case "bootstrap":
+                // Operations checkpointed before the SSH gate must pass it before any bootstrap side effect.
+                if (vm.Kind == DevelopmentWorkspaceVmKinds.Ephemeral && evidence.SshReadyAt is null)
+                {
+                    evidence.SshReadinessDeadline ??= Now.AddMinutes(2);
+                    await SaveAsync(op, evidence, "ssh-ready", null, ct);
+                    break;
+                }
                 if (evidence.GitRecovery is { } recovery)
                 {
                     await RefreshRepositoryCredentialAsync(vm, ct, force: true);
