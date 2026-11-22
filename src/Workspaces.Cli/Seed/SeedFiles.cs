@@ -27,7 +27,11 @@ internal static class SeedFiles
         Check(full, true);
     }
 
-    public static void Check(string path, bool directory = false)
+    public static void Check(string path, bool directory = false) => Check(path, directory, false);
+
+    public static void CheckPublicKey(string path) => Check(path, false, true);
+
+    private static void Check(string path, bool directory, bool publicKey)
     {
         RejectUnsafe(path);
         var info = File.GetAttributes(path);
@@ -39,6 +43,11 @@ internal static class SeedFiles
             var mode = File.GetUnixFileMode(path);
             if (directory)
                 SeedGuard.Require(mode == ProtectedDirectoryMode, "Seed directories require mode 0700.");
+            else if (publicKey)
+                SeedGuard.Require(mode is ProtectedFileMode or UnixFileMode.UserRead
+                    || mode == (ProtectedFileMode | UnixFileMode.GroupRead | UnixFileMode.OtherRead)
+                    || mode == (UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead),
+                    "Seed public keys require mode 0600, 0400, 0644 or 0444.");
             else
                 SeedGuard.Require(mode is ProtectedFileMode or UnixFileMode.UserRead,
                     "Seed files require owner-only mode 0600 or 0400.");
