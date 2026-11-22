@@ -152,6 +152,7 @@ internal sealed class SeedRelease(
         }
         var archive = Path.Combine(directory, bundle);
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var verifiedFiles = new HashSet<string>(StringComparer.Ordinal);
         long expanded = 0;
         byte[]? inArchiveManifest = null;
         using var raw = File.OpenRead(archive);
@@ -162,8 +163,15 @@ internal sealed class SeedRelease(
         {
             SeedGuard.Require(entry.EntryType is TarEntryType.RegularFile or TarEntryType.Directory
                 or TarEntryType.V7RegularFile, "The release archive contains a link or special file.");
-            SeedGuard.Require(SafeMember(entry.Name) && seen.Add(entry.Name),
+            var name = entry.EntryType == TarEntryType.Directory
+                && entry.Name.EndsWith("/", StringComparison.Ordinal)
+                ? entry.Name[..^1]
+                : entry.Name;
+            SeedGuard.Require(SafeMember(name) && seen.Add(name),
                 "The release archive contains an unsafe or duplicate member.");
+            SeedGuard.Require(name.StartsWith(expectedRoot + "/", StringComparison.Ordinal)
+                || (entry.EntryType == TarEntryType.Directory && name == expectedRoot),
+                "The release archive contains a member outside its exact root.");
             expanded += entry.Length;
             SeedGuard.Require(entry.Length <= 128L * 1024 * 1024 && expanded <= 2L * 1024 * 1024 * 1024,
                 "The release archive exceeds its member or expanded-size safety bound.");
@@ -171,16 +179,16 @@ internal sealed class SeedRelease(
             using var memory = new MemoryStream();
             entry.DataStream!.CopyTo(memory);
             var bytes = memory.ToArray();
-            if (entry.Name.EndsWith("/release-manifest.json", StringComparison.Ordinal))
+            if (name == expectedRoot + "/release-manifest.json")
                 inArchiveManifest = bytes;
-            if (expectedFiles.TryGetValue(entry.Name, out var digest))
+            if (expectedFiles.TryGetValue(name, out var digest))
+            {
                 SeedGuard.Require(Hash(bytes) == digest,
                     "A signed archive component digest does not match the external manifest.");
-            else
-                SeedGuard.Require(entry.Name.StartsWith(expectedRoot + "/", StringComparison.Ordinal),
-                    "The release archive contains a file outside its exact root.");
+                verifiedFiles.Add(name);
+            }
         }
-        SeedGuard.Require(expectedFiles.Keys.All(seen.Contains)
+        SeedGuard.Require(expectedFiles.Keys.All(verifiedFiles.Contains)
             && inArchiveManifest is not null && Hash(inArchiveManifest) == Hash(File.ReadAllBytes(
                 Path.Combine(directory, "release-manifest.json"))),
             "The release archive is missing signed components or carries a different manifest.");

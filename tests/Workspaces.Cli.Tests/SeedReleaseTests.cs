@@ -12,10 +12,12 @@ namespace Workspaces.Cli.Tests;
 
 public sealed class SeedReleaseTests
 {
-    [Fact]
-    public void ExactSignedInventoryAndArchiveIdentityAreVerified()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ExactSignedInventoryAndArchiveIdentityAreVerified(bool includeDirectories)
     {
-        using var fixture = new ReleaseFixture();
+        using var fixture = new ReleaseFixture(includeDirectories: includeDirectories);
         var verified = SeedRelease.VerifyFiles("workspaces-v1.2.3", fixture.Root);
         Assert.Equal(ReleaseFixture.Revision(), verified.Identity.SourceRevision);
         Assert.Equal("github-sigstore", verified.Identity.Trust);
@@ -28,6 +30,51 @@ public sealed class SeedReleaseTests
         var error = Assert.Throws<CliCommandException>(
             () => SeedRelease.VerifyFiles("workspaces-v1.2.3", fixture.Root));
         Assert.Contains("component digest", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("municode-workspaces-1.2.3//", TarEntryType.Directory)]
+    [InlineData("municode-workspaces-1.2.3/runtime/api//", TarEntryType.Directory)]
+    [InlineData("municode-workspaces-1.2.3/runtime//extra/", TarEntryType.Directory)]
+    [InlineData("municode-workspaces-1.2.3/../extra/", TarEntryType.Directory)]
+    [InlineData("municode-workspaces-1.2.3/./extra/", TarEntryType.Directory)]
+    [InlineData("/municode-workspaces-1.2.3/extra/", TarEntryType.Directory)]
+    [InlineData("municode-workspaces-1.2.3/runtime\\extra/", TarEntryType.Directory)]
+    [InlineData("municode-workspaces-1.2.3/C:extra/", TarEntryType.Directory)]
+    [InlineData("municode-workspaces-1.2.3/extra.txt/", TarEntryType.RegularFile)]
+    [InlineData("municode-workspaces-1.2.3/extra.txt/", TarEntryType.V7RegularFile)]
+    [InlineData("municode-workspaces-1.2.3/runtime/api", TarEntryType.Directory)]
+    [InlineData("municode-workspaces-1.2.3/runtime/api/", TarEntryType.Directory)]
+    [InlineData("municode-workspaces-1.2.3/runtime/api/Workspaces.Api.dll/", TarEntryType.Directory)]
+    [InlineData("municode-workspaces-1.2.3/runtime/api/Workspaces.Api.dll", TarEntryType.RegularFile)]
+    public void UnsafeOrDuplicateArchiveMembersFailClosed(string name, TarEntryType type)
+    {
+        using var fixture = new ReleaseFixture(extraMember: name, extraType: type);
+        var error = Assert.Throws<CliCommandException>(
+            () => SeedRelease.VerifyFiles("workspaces-v1.2.3", fixture.Root));
+        Assert.Contains("unsafe or duplicate member", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("other-root/")]
+    [InlineData("municode-workspaces-1.2.30/extra/")]
+    [InlineData("municode-workspaces-1.2.3-extra/")]
+    public void DirectoriesOutsideTheExactArchiveRootFailClosed(string name)
+    {
+        using var fixture = new ReleaseFixture(extraMember: name);
+        var error = Assert.Throws<CliCommandException>(
+            () => SeedRelease.VerifyFiles("workspaces-v1.2.3", fixture.Root));
+        Assert.Contains("outside its exact root", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DirectoryCannotSubstituteForSignedComponentFile()
+    {
+        using var fixture = new ReleaseFixture(omitApi: true,
+            extraMember: "municode-workspaces-1.2.3/runtime/api/Workspaces.Api.dll/");
+        var error = Assert.Throws<CliCommandException>(
+            () => SeedRelease.VerifyFiles("workspaces-v1.2.3", fixture.Root));
+        Assert.Contains("missing signed components", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -43,15 +90,25 @@ public sealed class SeedReleaseTests
 
     private sealed class ReleaseFixture : IDisposable
     {
-        public ReleaseFixture(bool tamperComponent = false)
+        public ReleaseFixture(
+            bool tamperComponent = false,
+            bool includeDirectories = true,
+            string? extraMember = null,
+            TarEntryType extraType = TarEntryType.Directory,
+            bool omitApi = false)
         {
             Root = SeedTestDirectory.Create("release");
-            Build(tamperComponent);
+            Build(tamperComponent, includeDirectories, extraMember, extraType, omitApi);
         }
 
         public string Root { get; }
 
-        private void Build(bool tamperComponent)
+        private void Build(
+            bool tamperComponent,
+            bool includeDirectories,
+            string? extraMember,
+            TarEntryType extraType,
+            bool omitApi)
         {
             var version = "1.2.3";
             var archiveRoot = "municode-workspaces-" + version;
@@ -115,9 +172,20 @@ public sealed class SeedReleaseTests
             using (var gzip = new GZipStream(raw, CompressionMode.Compress))
             using (var tar = new TarWriter(gzip, TarEntryFormat.Pax))
             {
+                if (includeDirectories)
+                {
+                    foreach (var path in new[]
+                    {
+                        "", "runtime", "runtime/api", "runtime/worker", "runtime/gateway",
+                        "dashboard", "cli", "cli/linux-x64"
+                    })
+                        tar.WriteEntry(new PaxTarEntry(TarEntryType.Directory,
+                            archiveRoot + (path.Length == 0 ? "" : "/" + path) + "/"));
+                }
                 Write(tar, archiveRoot, manifest, "release-manifest.json");
                 foreach (var (path, bytes) in componentBytes)
                 {
+                    if (omitApi && path.StartsWith("api/", StringComparison.Ordinal)) continue;
                     var root = path.Split('/')[0] switch
                     {
                         "api" => "runtime/api",
@@ -128,6 +196,16 @@ public sealed class SeedReleaseTests
                         _ => throw new InvalidOperationException()
                     };
                     Write(tar, archiveRoot, bytes, root + "/" + path[(path.IndexOf('/') + 1)..]);
+                }
+                if (extraMember is not null)
+                {
+                    using var data = new MemoryStream("extra"u8.ToArray());
+                    TarEntry extra = extraType == TarEntryType.V7RegularFile
+                        ? new V7TarEntry(extraType, extraMember)
+                        : new PaxTarEntry(extraType, extraMember);
+                    if (extraType is TarEntryType.RegularFile or TarEntryType.V7RegularFile)
+                        extra.DataStream = data;
+                    tar.WriteEntry(extra);
                 }
             }
             Protect(archivePath);
