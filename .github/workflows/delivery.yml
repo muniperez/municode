@@ -90,6 +90,17 @@ jobs:
             --install-root "$PWD/.local/artifacts/install/release" \
             --secrets-dir "$PWD/.local/artifacts/install/secrets"
           grep -F 'workspaces' .local/artifacts/package/release-manifest.json
+          cd .local/artifacts/install/release
+          project="runtime-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          compose() {
+            docker compose --project-name "$project" --env-file .env -f compose.yml "$@"
+          }
+          trap 'compose down --volumes --remove-orphans' EXIT
+          for service in api-migrate api worker workspace-gateway; do
+            output=$(compose run --rm --no-deps -T "$service" --info)
+            printf '%s\n' "$output"
+            printf '%s\n' "$output" | grep -F 'Microsoft.NETCore.App '
+          done
 
   images:
     runs-on: ubuntu-24.04
