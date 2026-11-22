@@ -162,6 +162,143 @@ class ImageTests(unittest.TestCase):
                 with self.assertRaisesRegex(native.ProbeError, "T3_RESTART_DELAY_NOT_OBSERVED"):
                     probe.t3_restart_delay("signal")
 
+    def frozen_kill_probe(self):
+        temporary = tempfile.TemporaryDirectory(prefix="synthetic-t3-kill-")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        child = root / native.T3_UNIT
+        child.mkdir()
+        (child / "cgroup.kill").write_text("")
+        (root / "cgroup.kill").write_text("parent-sentinel")
+        sibling = root / "unrelated.service"
+        sibling.mkdir()
+        (sibling / "cgroup.kill").write_text("sibling-sentinel")
+        (root / "cgroup.freeze").write_text("1\n")
+        (root / "cgroup.events").write_text("populated 1\nfrozen 1\n")
+        (root / "main.cgroup").write_text("0::/workspaceswork.slice/workspaces-t3.service\n")
+        probe = native.Native.__new__(native.Native)
+        probe.owns_runtime = True
+        probe.fresh_authorization = Mock()
+        probe.t3_unit = Mock(return_value=dict(ActiveState="active", SubState="running",
+                                              Job="", ControlPID=0, MainPID=123))
+        read_text, open_fd = Path.read_text, os.open
+        reads = {native.WORK_CGROUP / name: root / name
+                 for name in ("cgroup.freeze", "cgroup.events")}
+        reads[Path("/proc/123/cgroup")] = root / "main.cgroup"
+        def synthetic_read(path, *args, **kwargs):
+            return read_text(reads.get(path, path), *args, **kwargs)
+        def synthetic_open(path, flags, **kwargs):
+            if isinstance(path, Path):
+                self.assertEqual(path, Path("/sys/fs/cgroup/workspaceswork.slice"))
+                path = root
+            else:
+                self.assertIn(path, ("workspaces-t3.service", "cgroup.kill"))
+                self.assertIn("dir_fd", kwargs)
+            return open_fd(path, flags, **kwargs)
+        patches = (
+            patch.object(native, "command",
+                         return_value="/workspaceswork.slice/workspaces-t3.service"),
+            patch.object(Path, "resolve", autospec=True, side_effect=lambda path, **kw: path),
+            patch.object(Path, "is_file", autospec=True,
+                         side_effect=lambda path: path == Path("/sys/fs/cgroup/cgroup.controllers")),
+            patch.object(Path, "read_text", autospec=True, side_effect=synthetic_read),
+            patch.object(native.os, "open", side_effect=synthetic_open),
+        )
+        mocks = [item.start() for item in patches]
+        for item in patches:
+            self.addCleanup(item.stop)
+        return probe, root, mocks
+
+    def test_frozen_t3_full_kill_writes_only_exact_child(self):
+        probe, root, mocks = self.frozen_kill_probe()
+        probe.kill_frozen_t3_cgroup(123)
+        self.assertEqual("1", (root / native.T3_UNIT / "cgroup.kill").read_text())
+        self.assertEqual("parent-sentinel", (root / "cgroup.kill").read_text())
+        self.assertEqual("sibling-sentinel", (root / "unrelated.service/cgroup.kill").read_text())
+        self.assertEqual("1\n", (root / "cgroup.freeze").read_text())
+        probe.fresh_authorization.assert_called_once_with()
+        mocks[0].assert_called_once_with(
+            ["systemctl", "show", native.T3_UNIT, "-p", "ControlGroup", "--value"])
+        self.assertEqual(3, mocks[4].call_count)
+
+    def test_frozen_t3_full_kill_rejects_identity_and_freezer_drift(self):
+        probe, root, mocks = self.frozen_kill_probe()
+        state = probe.t3_unit.return_value.copy()
+        cases = [
+            ("state", state | change) for change in (
+                dict(MainPID=124), dict(MainPID=0), dict(ControlPID=456),
+                dict(Job="42"), dict(SubState="start-pre"), dict(ActiveState="activating"))
+        ] + [
+            ("group", group) for group in (
+                "", "/", "/workspaceswork.slice", "/system.slice/workspaces-t3.service",
+                "/workspaceswork.slice/unrelated.service",
+                "/workspaceswork.slice/workspaces-t3.service/nested")
+        ] + [("pid", "0::/workspaceswork.slice/unrelated.service\n"),
+             ("freeze", "0\n"), ("events", "populated 1\nfrozen 0\n"),
+             ("v2", False)]
+        for kind, value in cases:
+            with self.subTest(kind=kind, value=value):
+                probe.t3_unit.return_value = value if kind == "state" else state
+                mocks[0].return_value = value if kind == "group" else \
+                    "/workspaceswork.slice/workspaces-t3.service"
+                (root / "main.cgroup").write_text(value if kind == "pid" else
+                    "0::/workspaceswork.slice/workspaces-t3.service\n")
+                (root / "cgroup.freeze").write_text(value if kind == "freeze" else "1\n")
+                (root / "cgroup.events").write_text(value if kind == "events" else "frozen 1\n")
+                mocks[2].return_value = value if kind == "v2" else True
+                mocks[2].side_effect = None
+                with self.assertRaises(native.ProbeError):
+                    probe.kill_frozen_t3_cgroup(123)
+                self.assertEqual("", (root / native.T3_UNIT / "cgroup.kill").read_text())
+                self.assertEqual("parent-sentinel", (root / "cgroup.kill").read_text())
+                self.assertEqual("sibling-sentinel",
+                                 (root / "unrelated.service/cgroup.kill").read_text())
+
+    def test_frozen_t3_full_kill_forbids_wider_scope_and_symlinks(self):
+        probe, root, mocks = self.frozen_kill_probe()
+        for name, value in (("T3_CGROUP", Path("/sys/fs/cgroup")),
+                            ("T3_CGROUP", native.WORK_CGROUP),
+                            ("T3_CGROUP", native.WORK_CGROUP / "unrelated.service"),
+                            ("WORK_CGROUP", Path("/sys/fs/cgroup")),
+                            ("T3_UNIT", "unrelated.service")):
+            with self.subTest(name=name, value=value), patch.object(native, name, value):
+                with self.assertRaisesRegex(native.ProbeError, "T3_KILL_SCOPE_NOT_OWNED"):
+                    probe.kill_frozen_t3_cgroup(123)
+        mocks[1].side_effect = lambda path, **kw: Path("/sys/fs/cgroup")
+        with self.assertRaisesRegex(native.ProbeError, "T3_KILL_SCOPE_NOT_OWNED"):
+            probe.kill_frozen_t3_cgroup(123)
+        mocks[4].assert_not_called()
+        self.assertEqual("", (root / native.T3_UNIT / "cgroup.kill").read_text())
+
+    def test_frozen_t3_full_kill_requires_current_authorization_and_owned_runtime(self):
+        probe, root, mocks = self.frozen_kill_probe()
+        probe.fresh_authorization.side_effect = native.ProbeError("AUTHORIZATION_EXPIRED")
+        with self.assertRaisesRegex(native.ProbeError, "AUTHORIZATION_EXPIRED"):
+            probe.kill_frozen_t3_cgroup(123)
+        probe.fresh_authorization.side_effect = None
+        probe.owns_runtime = False
+        with self.assertRaisesRegex(native.ProbeError, "T3_PROBE_RUNTIME_NOT_OWNED"):
+            probe.kill_frozen_t3_cgroup(123)
+        mocks[4].assert_not_called()
+        self.assertEqual("", (root / native.T3_UNIT / "cgroup.kill").read_text())
+
+    def test_frozen_t3_full_kill_does_not_follow_child_or_kill_file_symlinks(self):
+        probe, root, _ = self.frozen_kill_probe()
+        child = root / native.T3_UNIT
+        kill = child / "cgroup.kill"
+        kill.unlink()
+        kill.symlink_to(root / "cgroup.kill")
+        with self.assertRaises(OSError):
+            probe.kill_frozen_t3_cgroup(123)
+        self.assertEqual("parent-sentinel", (root / "cgroup.kill").read_text())
+        kill.unlink()
+        child.rmdir()
+        child.symlink_to(root, target_is_directory=True)
+        with self.assertRaises(OSError):
+            probe.kill_frozen_t3_cgroup(123)
+        self.assertEqual("parent-sentinel", (root / "cgroup.kill").read_text())
+        self.assertEqual("sibling-sentinel", (root / "unrelated.service/cgroup.kill").read_text())
+
     def test_t3_cancelled_restart_allows_retained_signal_result(self):
         probe = native.Native.__new__(native.Native)
         probe.rt = Mock()
