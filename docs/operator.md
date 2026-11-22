@@ -90,6 +90,25 @@ offline custody before production use. On host restart, follow the ordinary
 unseal procedure; seed never copies unseal material into the Workspaces
 application or provider account.
 
+An interrupted OpenBao initialization is not automatically recoverable. Resume
+requires a valid readiness response: unknown or malformed status preserves the
+volume and recovery records and fails. If OpenBao positively reports initialized
+but the seed recovery output is missing or malformed, resume also fails without
+resetting the volume or deleting the pending output. Installation ownership and
+the absence of a configuration marker do not make initialized data safe to reset.
+An automatic volume reset requires a positive uninitialized response, an existing
+seed recovery record, no configured marker, and verified ownership of the unique
+volume and its containers.
+
+For an initialized volume, a valid `openbao-seed-init.json.pending` can be promoted
+on resume without reinitialization. If the record is damaged or missing, preserve
+the volume and remaining evidence and reconcile under the approved offline
+recovery procedure. Only genuine recovery material verified to belong to that
+same OpenBao initialization can be restored to the protected seed recovery record;
+syntactically valid JSON or keys from another initialization are not recovery.
+Seed cannot reconstruct lost unseal keys or a lost root token, and this path
+provides no automatic reset or bypass for initialized data.
+
 Synthetic provider, SSH and release fixtures exercise the retry paths in CI.
 Do not turn those fixtures into live credentials. The explicit
 [live seed validation checklist](setup/live-seed-validation.md) remains a
@@ -147,9 +166,10 @@ docker compose up -d postgres
 docker compose up -d openbao
 ```
 
-Initialize and unseal OpenBao with your approved offline ceremony. OpenBao's
-unseal material and root token are never written into the installation by this
-bundle. From a protected temporary root-token file, configure the Workspaces
+Initialize and unseal OpenBao with your approved offline ceremony. This manual
+installation path does not write OpenBao's unseal material or root token into the
+installation (unlike the protected recovery record created by seed). From a
+protected temporary root-token file, configure the Workspaces
 mount and AppRole:
 
 ```sh

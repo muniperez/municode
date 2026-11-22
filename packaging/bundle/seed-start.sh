@@ -354,7 +354,7 @@ if [ ! -s "$openbao_init" ]; then
             bao operator init -key-shares=1 -key-threshold=1 -format=json > "$openbao_pending"
         chmod 600 "$openbao_pending"
         valid_openbao_record "$openbao_pending" || {
-            echo "OpenBao initialization output is incomplete; owned unconfigured state is recoverable on resume." >&2
+            echo "OpenBao initialization output is incomplete; preserving state. Resume requires a positive readiness status and valid recovery material if initialized; otherwise operator reconciliation is required." >&2
             exit 1
         }
         mv "$openbao_pending" "$openbao_init"
@@ -365,7 +365,7 @@ elif [ "$initialized" = "false" ]; then
     docker compose exec -T openbao \
         bao operator init -key-shares=1 -key-threshold=1 -format=json > "$openbao_pending"
     valid_openbao_record "$openbao_pending" || {
-        echo "OpenBao initialization output is incomplete; owned unconfigured state is recoverable on resume." >&2
+        echo "OpenBao initialization output is incomplete; preserving state. Resume requires a positive readiness status and valid recovery material if initialized; otherwise operator reconciliation is required." >&2
         exit 1
     }
     mv "$openbao_pending" "$openbao_init"
