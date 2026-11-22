@@ -329,9 +329,7 @@ public sealed class SeedHostTests
     {
         public HostFixture()
         {
-            Root = Path.Combine(Directory.GetCurrentDirectory(), ".local", "artifacts", "seed-tests",
-                "host-" + Guid.NewGuid().ToString("N"));
-            SeedFiles.CreateDirectory(Root);
+            Root = SeedTestDirectory.Create("host");
         }
 
         public string Root { get; }
