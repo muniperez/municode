@@ -140,9 +140,7 @@ public sealed class CliSeedTests
 
         public SeedCliFixture()
         {
-            _root = Path.Combine(Directory.GetCurrentDirectory(), ".local", "artifacts", "seed-tests",
-                "municode-seed-cli-" + Guid.NewGuid().ToString("N"));
-            SeedFiles.CreateDirectory(_root);
+            _root = SeedTestDirectory.Create("municode-seed-cli");
             CredentialPath = Path.Combine(_root, "provider.token");
             File.WriteAllText(CredentialPath, Credential + "\n");
             if (!OperatingSystem.IsWindows())
