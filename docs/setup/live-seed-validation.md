@@ -26,9 +26,48 @@ credentials, existing customer data or a shared installation.
 - [ ] Confirm exactly one operation-owned control-plane VPS exists in the
       provider console. Resume from a new process and confirm no second create
       request/server appears.
-- [ ] Read the ed25519 fingerprint from the authenticated provider console,
-      pass `--confirm-console-fingerprint`, and verify a changed fingerprint is
-      rejected without host commands.
+- [ ] Confirm apply or resume pauses for independent SSH identity after public
+      IPv4 assignment and returns before SSH host commands or secret transfer.
+      This is expected, not an installation failure; the VPS remains billable.
+      Resume without confirmation must repeat the pause.
+- [ ] For Hetzner, sign in to the authenticated Hetzner Console, open the seed
+      project, select the server, and match its ID, public IPv4 and operation
+      ownership marker to seed. Select the console icon at the top right of the
+      server page to open the VNC console on the installed Ubuntu system.
+- [ ] Log in there as `root` with the initial password supplied by Hetzner. If
+      created with an SSH key or the password is unavailable, use **Rescue** >
+      **Root password** > **Reset root password** on the server page and read the
+      new password only in the authenticated Console. Do not enable or boot
+      Rescue: its SSH host key is not the installed system's key.
+- [ ] If Ubuntu requires changing the initial root password before a shell,
+      complete the current-password, new-password and confirmation prompts;
+      log in again if prompted. Password input is not echoed. Seed disables SSH
+      password login; use this password only for the provider console and do not
+      re-enable SSH password authentication.
+- [ ] In that server's root console shell, run the literal command below,
+      preserving the underscores in the filename. Read only the `SHA256:...`
+      field from the `(ED25519)` output, not the comment or whole line:
+
+```sh
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+```
+
+- [ ] On the operator workstation, resume with that independently obtained
+      fingerprint:
+
+```sh
+workspaces seed resume <operation> \
+  --credential-file /protected/provider.token \
+  --confirm-console-fingerprint SHA256:...
+```
+
+- [ ] Confirm the CLI compares the SSH key offered by the recorded VPS public
+      IPv4 to the console fingerprint before pinning it. Network-observed keys
+      alone are not a trust source. Verify a different candidate or changed
+      pinned fingerprint is rejected without SSH host commands or secret
+      transfer; reconcile identity instead of accepting it or replacing the pin.
+      See the [operator handoff](../operator.md#seed-a-fresh-control-plane) and
+      [Hetzner console instructions](https://docs.hetzner.com/cloud/servers/getting-started/vnc-console/).
 
 ## DNS, release and first owner
 
