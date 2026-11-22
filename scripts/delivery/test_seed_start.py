@@ -99,9 +99,6 @@ if len(args) >= 3 and args[:2] == ["compose", "exec"] and "bao status" in " ".jo
             "MALFORMED_OPENBAO_ALWAYS") == "1":
         print("temporarily unavailable")
         raise SystemExit(0)
-    if os.environ.get("FORCE_OPENBAO_UNINITIALIZED") == "1":
-        print('{"initialized": false}')
-        raise SystemExit(0)
     initialized = exists("openbao-initialized")
     print(f'{{"initialized": {str(initialized).lower()}}}')
     raise SystemExit(0)
@@ -173,7 +170,7 @@ if len(args) >= 2 and args[0] == "inspect":
     if service == "worker" and os.environ.get("FLAP_WORKER_ONCE") == "1":
         count = int((state / "worker-checks").read_text()) if exists("worker-checks") else 0
         touch("worker-checks", str(count + 1))
-        print("false" if count == 0 else "true")
+        print("false" if count == 1 else "true")
     else:
         print("true")
     raise SystemExit(0)
@@ -246,21 +243,64 @@ class SeedStartTests(unittest.TestCase):
             "workspaces-seed-operation workspaces-v1.2.3 complete",
         )
 
-    def test_partial_openbao_is_reset_then_token_rotated_and_services_settle(self):
-        partial = self.run_seed(PARTIAL_OPENBAO_ONCE="1",
-                                EXISTING_SETUP_RECORD="1", FLAP_WORKER_ONCE="1")
+    def test_initialized_openbao_with_malformed_recovery_is_preserved_and_refused(self):
+        partial = self.run_seed(PARTIAL_OPENBAO_ONCE="1")
         self.assertNotEqual(partial.returncode, 0)
-        self.assertIn("OpenBao", partial.stderr)
-        resumed = self.run_seed(EXISTING_SETUP_RECORD="1", FLAP_WORKER_ONCE="1")
+        self.assertIn("preserving state", partial.stderr)
+        self.assertNotIn("recoverable on resume", partial.stderr)
+        pending = self.secrets / "openbao-seed-init.json.pending"
+        self.assertEqual(pending.read_bytes(), b"{\n")
+        initialized = self.state / "openbao-initialized"
+        self.assertTrue(initialized.exists())
+        original_state = initialized.read_bytes()
+        owner = Path(str(self.secrets) + ".seed-owner")
+        original_owner = owner.read_bytes()
+        initial_log = (self.state / "docker.log").read_text()
+
+        resumed = self.run_seed()
+        self.assertNotEqual(resumed.returncode, 0)
+        self.assertIn("positively reports initialized", resumed.stderr)
+        self.assertIn("seed recovery output is invalid; preserving data", resumed.stderr)
+        self.assertEqual(pending.read_bytes(), b"{\n")
+        self.assertEqual(initialized.read_bytes(), original_state)
+        self.assertEqual(owner.read_bytes(), original_owner)
+        self.assertFalse((self.secrets / "openbao-seed-init.json").exists())
+        self.assertFalse((self.secrets / "openbao-seed-configured").exists())
+        self.assertFalse((self.state / "openbao-reset").exists())
+        self.assertFalse((self.state / "token-rotated").exists())
+        self.assertFalse(self.token.exists())
+        resumed_log = (self.state / "docker.log").read_text()[len(initial_log):]
+        self.assertIn("bao status -format=json", resumed_log)
+        for mutation in ("volume rm", "rm -f", "operator init",
+                         "operator unseal", "openbao-configure", "api-bootstrap",
+                         "database-initialize", "kratos-migrate", "api-migrate"):
+            with self.subTest(mutation=mutation):
+                self.assertNotIn(mutation, resumed_log)
+
+    def test_existing_setup_record_without_token_is_rotated_before_handoff(self):
+        resumed = self.run_seed(EXISTING_SETUP_RECORD="1")
         self.assertEqual(resumed.returncode, 0, resumed.stderr)
-        self.assertTrue((self.state / "openbao-reset").exists())
+        self.assertTrue((self.state / "prepare-existing").exists())
         self.assertTrue((self.state / "token-rotated").exists())
         self.assertEqual(self.token.read_text(), "b" * 64 + "\n")
-        self.assertGreaterEqual(int((self.state / "worker-checks").read_text()), 4)
+        self.assertFalse((self.state / "openbao-reset").exists())
+
+    def test_worker_flap_requires_three_consecutive_service_settlement_checks(self):
+        completed = self.run_seed(FLAP_WORKER_ONCE="1")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(int((self.state / "worker-checks").read_text()), 5)
         log = (self.state / "docker.log").read_text()
-        self.assertIn("database-initialize database-initialize", log)
-        self.assertIn("kratos-migrate kratos-migrate", log)
-        self.assertIn("api-migrate api-migrate", log)
+        for migration in ("database-initialize", "kratos-migrate", "api-migrate"):
+            with self.subTest(migration=migration):
+                self.assertIn(f"--exit-code-from {migration} {migration}", log)
+        for service in ("postgres", "openbao", "openbao-agent", "kratos", "api",
+                        "worker", "workspace-gateway", "caddy"):
+            with self.subTest(service=service):
+                checks = [line for line in log.splitlines()
+                          if line.startswith("inspect -f {{.State.Running}} ")
+                          and line.endswith(" cid-" + service)]
+                self.assertGreaterEqual(len(checks), 3)
+        self.assertIn("is installed and running", completed.stdout)
 
     def test_partial_setup_token_output_is_removed_then_rotated(self):
         interrupted = self.run_seed(PARTIAL_SETUP_ONCE="1",
@@ -309,9 +349,37 @@ class SeedStartTests(unittest.TestCase):
         self.assertTrue((self.secrets / "openbao-seed-init.json").exists())
         self.assertFalse((self.secrets / "openbao-seed-configured").exists())
 
-        resumed = self.run_seed(FORCE_OPENBAO_UNINITIALIZED="1")
+        (self.state / "openbao-initialized").unlink()
+        initial_log = (self.state / "docker.log").read_text()
+        resumed = self.run_seed()
         self.assertEqual(resumed.returncode, 0, resumed.stderr)
         self.assertTrue((self.state / "openbao-reset").exists())
+        self.assertTrue((self.state / "openbao-initialized").exists())
+        self.assertTrue((self.secrets / "openbao-seed-configured").exists())
+        resumed_log = (self.state / "docker.log").read_text()[len(initial_log):]
+        self.assertLess(resumed_log.index("bao status -format=json"),
+                        resumed_log.index("volume rm "))
+        self.assertLess(resumed_log.index("volume rm "),
+                        resumed_log.index("bao operator init "))
+
+    def test_initialized_openbao_valid_pending_recovery_is_promoted_without_reset(self):
+        interrupted = self.run_seed(FAIL_OPENBAO_CONFIGURE_ONCE="1")
+        self.assertNotEqual(interrupted.returncode, 0)
+        recovery = self.secrets / "openbao-seed-init.json"
+        original_record = recovery.read_bytes()
+        pending = recovery.with_name(recovery.name + ".pending")
+        recovery.rename(pending)
+        initial_log = (self.state / "docker.log").read_text()
+
+        resumed = self.run_seed()
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertEqual(recovery.read_bytes(), original_record)
+        self.assertFalse(pending.exists())
+        self.assertTrue((self.secrets / "openbao-seed-configured").exists())
+        self.assertFalse((self.state / "openbao-reset").exists())
+        resumed_log = (self.state / "docker.log").read_text()[len(initial_log):]
+        self.assertNotIn("volume rm", resumed_log)
+        self.assertNotIn("operator init", resumed_log)
 
     def test_expired_first_owner_token_is_rotated_before_handoff(self):
         initial = self.run_seed()
