@@ -110,11 +110,13 @@ public sealed partial class DevelopmentWorkspaceProcessor(
     }
 
     private Task SaveAsync(DevelopmentWorkspaceOperation op, Evidence evidence, string step,
-        Action<DevelopmentWorkspaceOperation, DevelopmentWorkspaceVm, DevelopmentWorkspace>? update, CancellationToken ct, bool release = true) =>
+        Action<DevelopmentWorkspaceOperation, DevelopmentWorkspaceVm, DevelopmentWorkspace>? update, CancellationToken ct,
+        bool release = true, DrainBlocker? blocker = null) =>
         lifecycle.UpdateClaimedOperationAsync(op.Id, op.LeaseToken!, (fresh, vm, workspace) =>
         {
             fresh.Step = step; fresh.ProviderEvidenceJson = JsonSerializer.Serialize(evidence, Json);
-            vm.ErrorCode = null; vm.ErrorMessage = null; fresh.ErrorCode = null; fresh.ErrorMessage = null;
+            vm.ErrorCode = fresh.ErrorCode = blocker?.Code;
+            vm.ErrorMessage = fresh.ErrorMessage = blocker?.Message;
             update?.Invoke(fresh, vm, workspace);
             if (release && fresh.Status != "completed") Release(fresh);
         }, ct);

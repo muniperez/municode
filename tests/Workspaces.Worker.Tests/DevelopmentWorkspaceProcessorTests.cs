@@ -703,6 +703,17 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         t3Threads = [new { status = "idle", activeRunId = (string?)null, pendingRuntimeRequest = new { id = "fixture-request" } }];
         await AssertHold("workspace_drain_t3_activity", "T3");
 
+        t3Threads = Enumerable.Range(1, 2).Select(i => (object)new
+            { status = "queued", latestRunId = $"queued-{i}", activeRunId = (string?)null, pendingRuntimeRequest = (object?)null }).ToArray();
+        await AssertHold("workspace_drain_t3_activity", "T3");
+        t3Threads = [new
+        {
+            status = "completed", activeRunId = (string?)null, pendingRuntimeRequest = (object?)null,
+            pendingBackgroundTasks = Enumerable.Range(1, 6).Select(i => new { taskId = $"background-{i}" })
+        }];
+        await AssertHold("workspace_drain_t3_activity", "T3");
+        Assert.DoesNotContain("quiesce", runtime.Actions);
+
         t3Threads = [];
         await Hop("gateway-drain");
         Assert.Null((await CurrentVm(vm.Id)).ErrorCode);
@@ -736,6 +747,58 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         Assert.Equal("provider-absence-confirmed", (await CurrentOperation(deletionId)).Step);
         Assert.Equal("volume-retained", Assert.Single(cloud.DeletedVolumes));
         Assert.Null(cloud.Volume);
+    }
+
+    [Fact]
+    public async Task StopReportsCommittedT3RejectionEvenWhileRetryingAnIdleShell()
+    {
+        var (_, vm, operation) = await SeedStop("pending");
+        runtime.Rejections["quiesce"] = JsonSerializer.SerializeToElement(new
+        {
+            ok = false, state = "Blocked",
+            reason = "T3 has active/pending work or an unknown status in orchestration_v2_projection_nodes",
+            diagnostic = new { stage = "t3-snapshot", failureType = "blocked" }
+        }, Json);
+        runtime.BeforeAction = action =>
+        {
+            if (action == "quiesce" && runtime.Rejections.ContainsKey(action))
+                runtime.Phase = "Frozen";
+        };
+
+        await Hop("gateway-drain");
+        clock.Advance(TimeSpan.FromSeconds(76));
+        await Hop("quiesce");
+        await Hop("wait-for-tasks");
+        Assert.Contains("resume", runtime.Actions);
+        Assert.True((await CurrentVm(vm.Id)).GatewayReady);
+        Assert.True(shellAuthorizations.Count > 1);
+
+        async Task AssertCommittedHold()
+        {
+            var current = await CurrentVm(vm.Id);
+            var stop = await CurrentOperation(operation.Id);
+            Assert.Equal("draining", current.Phase);
+            Assert.Equal("workspace_drain_t3_committed_state", current.ErrorCode);
+            Assert.Contains("t3_work_not_idle_nodes", current.ErrorMessage);
+            Assert.Contains("t3-snapshot", current.ErrorMessage);
+            Assert.Equal((current.ErrorCode, current.ErrorMessage), (stop.ErrorCode, stop.ErrorMessage));
+            Assert.Null(current.QuiescenceReceipt);
+            Assert.Equal(0, cloud.Detaches);
+            Assert.Equal(0, cloud.Deletes);
+        }
+
+        await AssertCommittedHold();
+        await Hop("gateway-drain");
+        await AssertCommittedHold();
+        await Hop("gateway-drain");
+        await AssertCommittedHold();
+        clock.Advance(TimeSpan.FromSeconds(76));
+        await Hop("quiesce");
+        await AssertCommittedHold();
+        runtime.Rejections.Remove("quiesce");
+        await Hop("detach");
+        Assert.Null((await CurrentVm(vm.Id)).ErrorCode);
+        Assert.Null((await CurrentOperation(operation.Id)).ErrorCode);
     }
 
     [Fact]
