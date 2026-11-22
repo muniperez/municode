@@ -17,20 +17,28 @@
 {$CONSOLE_HOSTNAME} {
 	encode zstd gzip
 	root * /srv/workspaces-dashboard
-	respond /runtime-config.json ` {
-		"apiBaseUrl": "{$API_URL}",
-		"sourceUrl": "{$WORKSPACES_SOURCE_URL}",
-		"auth": {
-			"origin": "{$API_URL}",
-			"capabilitiesUrl": "{$API_URL}/api/account/capabilities"
+	handle /runtime-config.json {
+		header {
+			Content-Type application/json
+			Cache-Control no-store
 		}
-	}	`
-	header /settings/github/* {
-		Referrer-Policy no-referrer
-		Cache-Control no-store
+		respond ` {
+			"apiBaseUrl": "{$API_URL}",
+			"sourceUrl": "{$WORKSPACES_SOURCE_URL}",
+			"auth": {
+				"origin": "{$API_URL}",
+				"capabilitiesUrl": "{$API_URL}/api/account/capabilities"
+			}
+		}	`
 	}
-	try_files {path} /index.html
-	file_server
+	handle {
+		header /settings/github/* {
+			Referrer-Policy no-referrer
+			Cache-Control no-store
+		}
+		try_files {path} /index.html
+		file_server
+	}
 }
 
 https:// {
