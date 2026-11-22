@@ -47,6 +47,57 @@ application database/roles, and ships no emulator or preview canary application.
 A browser executable or additional application SDK is intentionally not
 silently downloaded; register an explicit pinned workload extension if needed.
 
+### Retrieving the pinned Ubuntu base image
+
+The Noble `20251001` release URL can redirect to Canonical's public archive over
+HTTP; the archive's HTTPS listener can time out. Canonical's released
+[simplestreams metadata](https://cloud-images.ubuntu.com/releases/streams/v1/com.ubuntu.cloud:released:download.json)
+and archive `SHA256SUMS` independently report the lock's SHA-256
+`02dc186dc491514254df58df29a5877c93ca90ac790cc91a164ea90ed3a0bb05`;
+simplestreams also identifies a **620695552-byte QCOW2**. Do not change the source
+serial or digest, substitute another image, or treat a redirect/HTML body as an image.
+
+Run this in a download directory with `curl` and GNU `sha256sum`. It first tries
+the real release URL and archive over HTTPS with normal certificate validation,
+HTTPS-only redirects and bounded timeouts. If both fail, it explicitly fetches
+only this public artifact from Canonical's HTTP archive, without following
+redirects or sending credentials. This is not a general TLS-policy relaxation:
+never use HTTP for secrets, authenticated downloads or other build inputs.
+
+```sh
+(
+  set -eu
+  image=ubuntu-24.04-server-cloudimg-amd64.img
+  release=https://cloud-images.ubuntu.com/releases/noble/release-20251001
+  archive=cloud-images-archive.ubuntu.com/releases/noble/release-20251001
+  digest=02dc186dc491514254df58df29a5877c93ca90ac790cc91a164ea90ed3a0bb05
+  test ! -e "$image" || { echo "Refusing to overwrite $image" >&2; exit 1; }
+  tmp=$(mktemp -d ./ubuntu-download.XXXXXX)
+  trap 'rm -f "$tmp/image.part"; rmdir "$tmp"' EXIT
+  if ! curl --disable --fail --show-error --location --proto '=https' --proto-redir '=https' \
+      --connect-timeout 15 --max-time 900 --output "$tmp/image.part" "$release/$image"; then
+    if ! curl --disable --fail --show-error --location --proto '=https' --proto-redir '=https' \
+        --connect-timeout 15 --max-time 900 --output "$tmp/image.part" "https://$archive/$image"; then
+      echo "HTTPS unavailable; fetching only the pinned public Canonical artifact over HTTP" >&2
+      curl --disable --fail --show-error --proto '=http' --connect-timeout 15 --max-time 900 \
+        --output "$tmp/image.part" "http://$archive/$image"
+    fi
+  fi
+  printf '%s  %s\n' "$digest" "$tmp/image.part" | sha256sum --check --strict -
+  test "$(wc -c < "$tmp/image.part")" -eq 620695552 ||
+    { echo "Unexpected image size; refusing disk use" >&2; exit 1; }
+  mv "$tmp/image.part" "$image"
+  printf 'Verified QCOW2: %s\n' "$image"
+)
+```
+
+**SHA-256 verification against the existing lock is mandatory before any
+decompression, conversion, import, boot or disk write.** A checksum/size failure
+stops the example and removes the temporary download; never bypass it or adopt
+a digest from the HTTP response. The `.img` is already QCOW2, not a compressed
+archive. Retrieval alone does not qualify an image: re-run native image
+qualification on the disposable builder before resolving #16/#18 or capture.
+
 An operator must download and verify the specified base image, then boot it in a
 **disposable isolated builder VM without workspace volumes**. No build script allocates
 provider resources. Stage only this subtree at `/opt/workspaces-image-source` inside that
