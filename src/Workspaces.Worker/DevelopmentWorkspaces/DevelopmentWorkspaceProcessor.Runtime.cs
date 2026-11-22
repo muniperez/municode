@@ -273,17 +273,34 @@ public sealed partial class DevelopmentWorkspaceProcessor
         await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "", timeout.Token);
     }
 
-    private async Task<bool> IsRuntimeIdleAsync(DevelopmentWorkspaceVm vm, string operationId, CancellationToken ct)
+    private sealed record DrainBlocker(string Code, string Message);
+
+    private static readonly DrainBlocker T3NotIdle = new("workspace_drain_t3_activity",
+        "T3 has active work or pending requests, or its idle state could not be verified. Resolve outstanding work or requests before stopping.");
+
+    private async Task<DrainBlocker?> GetRuntimeIdleBlockerAsync(DevelopmentWorkspaceVm vm, string operationId, CancellationToken ct)
     {
         var status = Result(await runtime.CallAsync(Target(vm), operationId, "status", new { includeWorkInventory = true }, ct));
-        if (status.GetProperty("phase").GetString() != "Ready" ||
-            status.GetProperty("tasks").EnumerateObject().Any(task => task.Value.GetProperty("state").GetString() != "Completed") ||
-            !status.TryGetProperty("workInventory", out var inventory) ||
-            inventory.GetProperty("state").GetString() != "IdleCandidate")
-            return false;
+        if (status.GetProperty("phase").GetString() != "Ready")
+            return new("workspace_drain_guest_not_ready", "The guest is not ready to verify that work has stopped.");
+        if (status.GetProperty("tasks").EnumerateObject().Any(task => task.Value.GetProperty("state").GetString() != "Completed"))
+            return new("workspace_drain_guest_tasks", "The guest still has unresolved tasks. Wait for them to finish or stop them cleanly.");
+        if (!status.TryGetProperty("workInventory", out var inventory) || inventory.ValueKind != JsonValueKind.Object ||
+            !inventory.TryGetProperty("state", out var state) || state.ValueKind != JsonValueKind.String ||
+            state.GetString() != "IdleCandidate")
+        {
+            return WorkspaceRuntimeRejection.ReadReasonCode(inventory) switch
+            {
+                "unregistered_coding_process" => new("workspace_drain_unregistered_process",
+                    "The guest detected an unregistered coding process. Stop it cleanly in the workspace so draining can continue."),
+                "t3_account_approval_pending" => new("workspace_drain_t3_approval",
+                    "T3 account approval is pending. Finish or cancel the approval so draining can continue."),
+                _ => new("workspace_drain_guest_inventory", "The guest could not confirm that all coding processes are idle. Check for running or detached work.")
+            };
+        }
         var port = await tunnels.EnsureAsync(Target(vm), ct);
         using var client = T3Client(port, await SecretAsync(vm.RuntimeCredentialRef!, ct));
-        return T3WorkspaceEvidence.IsIdle(await GetJsonAsync(client, "/api/orchestration/shell", ct));
+        return T3WorkspaceEvidence.IsIdle(await GetJsonAsync(client, "/api/orchestration/shell", ct)) ? null : T3NotIdle;
     }
 
     public async Task MonitorReadyAsync(CancellationToken ct)
@@ -315,7 +332,7 @@ public sealed partial class DevelopmentWorkspaceProcessor
             vm = await db.DevelopmentWorkspaceVms.AsNoTracking().SingleAsync(x => x.Id == vm.Id, ct);
             if (vm.Phase != "ready" || vm.DesiredState != "running" ||
                 vm.ErrorCode == DevelopmentWorkspaceService.RetainedStorageUnavailable) return;
-            if (!await IsRuntimeIdleAsync(vm, vm.OperationId ?? vm.AllocationOperationId ?? operationId, ct))
+            if (await GetRuntimeIdleBlockerAsync(vm, vm.OperationId ?? vm.AllocationOperationId ?? operationId, ct) is not null)
             {
                 await lifecycle.ActivityAsync(vm.WorkspaceId, vm.OrganizationId, vm.Id, vm.Generation, ct);
                 return;

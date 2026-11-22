@@ -908,6 +908,14 @@ reported partial, with another checkout's tracked files unchanged. Synthetic tes
 qualify a hosted image; repeat these checks on the exact newly built image before claiming
 hosted acceptance or rollout. No hosted/provider changes are part of #42.
 
+### Stop held in Draining
+
+While a stop is `Draining`, the workspace and CLI report whether unresolved control-plane
+tasks, guest work inventory, or the T3 orchestration snapshot is holding the stop. These
+holds retry automatically. Stop detached work cleanly and resolve T3 runs or pending requests
+through T3; a provider process exiting does not by itself prove orchestration is idle. Stop
+must finish before permanent workspace deletion is allowed.
+
 ### JSON control protocol
 
 Run `python3 -B /opt/workspaces-workspace/runtime.py call`, sending one newline-terminated

@@ -35,10 +35,9 @@ public sealed partial class DevelopmentWorkspaceProcessor
                     x.RevokedAt != null, ct);
                 await RefreshRuntimeAsync(workspace, vm, op.Id, ct, publishRoute: publishRoute);
                 vm = await db.DevelopmentWorkspaceVms.AsNoTracking().SingleAsync(x => x.Id == vm.Id, ct);
-                if (await lifecycle.HasUnresolvedTasksAsync(vm, ct) || !await IsRuntimeIdleAsync(vm, op.Id, ct))
+                if (await GetDrainBlockerAsync(vm, op.Id, ct) is { } blocker)
                 {
-                    await SaveAsync(op, evidence, "wait-for-tasks", (_, fresh, _) =>
-                    { fresh.Phase = "draining"; fresh.GatewayReady = publishRoute; fresh.LastHeartbeatAt = Now; }, ct);
+                    await SaveDrainHoldAsync(op, evidence, blocker, publishRoute, ct);
                     break;
                 }
                 var discard = vm.DiscardGeneration == vm.Generation && vm.DiscardOperationId == op.Id &&
@@ -76,15 +75,19 @@ public sealed partial class DevelopmentWorkspaceProcessor
                 {
                     await RefreshRuntimeAsync(workspace, vm, op.Id, ct, publishRoute: false);
                     vm = await db.DevelopmentWorkspaceVms.AsNoTracking().SingleAsync(x => x.Id == vm.Id, ct);
-                    if (await lifecycle.HasUnresolvedTasksAsync(vm, ct) || !await IsRuntimeIdleAsync(vm, op.Id, ct))
+                    if (await GetDrainBlockerAsync(vm, op.Id, ct) is { } finalBlocker)
                     {
-                        await ReopenAfterFailedFreezeAsync(workspace, vm, op, evidence, false, ct);
+                        await ReopenAfterFailedFreezeAsync(workspace, vm, op, evidence, false, ct, finalBlocker);
                         break;
                     }
                     var port = await tunnels.EnsureAsync(Target(vm), ct);
                     using var client = T3Client(port, await SecretAsync(vm.RuntimeCredentialRef!, ct));
                     var snapshot = await GetJsonAsync(client, "/api/orchestration/shell", ct);
-                    if (!T3WorkspaceEvidence.IsIdle(snapshot)) throw new InvalidOperationException("T3 activity is not quiescent.");
+                    if (!T3WorkspaceEvidence.IsIdle(snapshot))
+                    {
+                        await ReopenAfterFailedFreezeAsync(workspace, vm, op, evidence, false, ct, T3NotIdle);
+                        break;
+                    }
                     evidence.T3SnapshotSequence = snapshot.GetProperty("snapshotSequence").GetInt64();
                     await SaveAsync(op, evidence, op.Step, null, ct, release: false);
                 }
@@ -108,7 +111,10 @@ public sealed partial class DevelopmentWorkspaceProcessor
                 if (!reply.TryGetProperty("ok", out var success) || success.ValueKind != JsonValueKind.True)
                 {
                     var awaitingGit = reply.TryGetProperty("state", out var state) && state.GetString() == "AwaitingGitSave";
-                    await ReopenAfterFailedFreezeAsync(workspace, vm, op, evidence, awaitingGit, ct);
+                    var refusal = evidence.LastRuntimeRejection is { } rejection
+                        ? new DrainBlocker("workspace_drain_quiescence_refused", rejection.Summary)
+                        : null;
+                    await ReopenAfterFailedFreezeAsync(workspace, vm, op, evidence, awaitingGit, ct, refusal);
                     break;
                 }
                 var receipt = Result(reply);
@@ -215,6 +221,20 @@ public sealed partial class DevelopmentWorkspaceProcessor
         }
     }
 
+    private async Task<DrainBlocker?> GetDrainBlockerAsync(DevelopmentWorkspaceVm vm, string operationId, CancellationToken ct) =>
+        await lifecycle.HasUnresolvedTasksAsync(vm, ct)
+            ? new("workspace_drain_task_leases", "The control plane still has unresolved workspace tasks. Wait for them to finish or stop them cleanly.")
+            : await GetRuntimeIdleBlockerAsync(vm, operationId, ct);
+
+    private Task SaveDrainHoldAsync(DevelopmentWorkspaceOperation op, Evidence evidence, DrainBlocker? blocker,
+        bool gatewayReady, CancellationToken ct) =>
+        SaveAsync(op, evidence, "wait-for-tasks", (stop, vm, _) =>
+        {
+            vm.Phase = "draining"; vm.GatewayReady = gatewayReady; vm.LastHeartbeatAt = Now;
+            vm.ErrorCode = stop.ErrorCode = blocker?.Code;
+            vm.ErrorMessage = stop.ErrorMessage = blocker?.Message;
+        }, ct);
+
     private Task AwaitGitAsync(DevelopmentWorkspaceOperation op, Evidence evidence, CancellationToken ct) =>
         SaveAsync(op, evidence, "wait-for-save", (_, fresh, _) =>
         {
@@ -224,7 +244,7 @@ public sealed partial class DevelopmentWorkspaceProcessor
         }, ct);
 
     private async Task ReopenAfterFailedFreezeAsync(DevelopmentWorkspace workspace, DevelopmentWorkspaceVm vm,
-        DevelopmentWorkspaceOperation op, Evidence evidence, bool awaitingGit, CancellationToken ct)
+        DevelopmentWorkspaceOperation op, Evidence evidence, bool awaitingGit, CancellationToken ct, DrainBlocker? blocker = null)
     {
         var state = Result(await CallStopRuntimeAsync(vm, op, evidence, "status", null, ct, recovery: true)).GetProperty("phase").GetString();
         if (state == "Frozen")
@@ -243,7 +263,7 @@ public sealed partial class DevelopmentWorkspaceProcessor
         }, ct, release: false);
         await RefreshRuntimeAsync(workspace, vm, op.Id, ct, allowRevive: true);
         if (awaitingGit) await AwaitGitAsync(op, evidence, ct);
-        else await SaveAsync(op, evidence, "wait-for-tasks", (_, fresh, _) => fresh.GatewayReady = true, ct);
+        else await SaveDrainHoldAsync(op, evidence, blocker, true, ct);
     }
 
     private async Task<JsonElement> CallStopRuntimeAsync(DevelopmentWorkspaceVm vm, DevelopmentWorkspaceOperation op,

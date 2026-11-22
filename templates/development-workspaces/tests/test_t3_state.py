@@ -144,6 +144,21 @@ class T3StateTests(unittest.TestCase):
         with self.assertRaisesRegex(rt.Blocked, "active/pending"):
             rt.t3_idle_database(self.db, 0)
 
+    def test_stopped_provider_session_does_not_clear_stale_run_or_pending_request(self):
+        self.writer.executescript("""
+            UPDATE orchestration_v2_projection_runs SET status='running';
+            UPDATE orchestration_v2_projection_runtime_requests SET status='pending';
+        """)
+        with self.assertRaisesRegex(rt.Blocked, "projection_runs"):
+            rt.t3_idle_database(self.db, 0)
+        self.writer.execute("UPDATE orchestration_v2_projection_runs SET status='interrupted'")
+        self.writer.commit()
+        with self.assertRaisesRegex(rt.Blocked, "projection_runtime_requests"):
+            rt.t3_idle_database(self.db, 0)
+        self.writer.execute("UPDATE orchestration_v2_projection_runtime_requests SET status='resolved'")
+        self.writer.commit()
+        rt.t3_idle_database(self.db, 0)
+
     def test_unknown_schema_version_missing_table_and_invalid_cursor_fail_closed(self):
         for sequence in (-1, True, "0"):
             with self.subTest(sequence=sequence), self.assertRaises(rt.Blocked):

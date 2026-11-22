@@ -21,7 +21,7 @@ internal sealed record WorkspaceRuntimeRejection(
             Allowed(action, ["git-check", "git-save", "quiesce", "discard", "status", "resume",
                 "cancel-drain", "receipt-validate"]) ?? "unknown",
             Allowed(Text(response, "state"), ["Blocked", "AwaitingGitSave"]) ?? "Unknown",
-            CodeForReason(Text(response, "reason")),
+            ReadReasonCode(response),
             Allowed(Text(detail, "stage"), ["request", "git-preflight", "freeze-guard",
                 "idle-before-freeze", "kernel-freeze", "idle-after-freeze", "t3-snapshot",
                 "stop-services", "idle-after-stop", "t3-final-snapshot", "remount-readonly",
@@ -47,8 +47,9 @@ internal sealed record WorkspaceRuntimeRejection(
     private static string? Allowed(string? value, string[] allowed) =>
         value is not null && allowed.Contains(value, StringComparer.Ordinal) ? value : null;
 
-    private static string CodeForReason(string? reason)
+    internal static string ReadReasonCode(JsonElement response)
     {
+        var reason = Text(response, "reason");
         foreach (var table in new[] { "runs", "run_attempts", "nodes", "runtime_requests", "provider_sessions",
                      "provider_threads", "provider_turns", "turn_items", "subagents" })
             if (reason == "T3 has active/pending work or an unknown status in orchestration_v2_projection_" + table)
@@ -81,6 +82,7 @@ internal sealed record WorkspaceRuntimeRejection(
         "Designated service did not stop cleanly" => "service_stop_unconfirmed",
         "PostgreSQL still running; refuse quiescence" => "postgres_still_running",
         "Registered task still running; lease expiry is not completion" => "registered_task_running",
+        "T3 account approval is pending" => "t3_account_approval_pending",
         "Coding process escaped supervised work slice" => "coding_process_outside_slice",
         "Unregistered live coding process; terminal input observation is not qualified" => "unregistered_coding_process",
         "Coding process inventory changed during inspection" => "process_inventory_changed",
