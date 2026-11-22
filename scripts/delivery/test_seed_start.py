@@ -94,6 +94,29 @@ def exists(name):
 
 if args == ["compose", "version"]:
     raise SystemExit(0)
+if args[:2] == ["compose", "exec"] and any(
+        command in " ".join(args) for command in
+        ("bao status", "bao operator init", "bao operator unseal")):
+    environment = {}
+    index = 2
+    while args[index] != "openbao":
+        if args[index] == "-T":
+            index += 1
+        elif args[index] == "-e":
+            key, separator, value = args[index + 1].partition("=")
+            environment[key] = value if separator else os.environ.get(key)
+            index += 2
+        else:
+            raise SystemExit("Unexpected OpenBao exec option")
+    if (environment.get("BAO_ADDR") != "https://openbao:8200"
+            or environment.get("BAO_CACERT") != "/run/secrets/openbao-ca.crt"
+            or environment.get("BAO_SKIP_VERIFY") not in (None, "false")
+            or "-tls-skip-verify" in " ".join(args)):
+        touch("openbao-tls-rejected")
+        raise SystemExit("OpenBao exec requires verified internal TLS")
+    touch("openbao-tls-" + ("status" if "bao status" in " ".join(args)
+                          else "init" if "operator init" in " ".join(args)
+                          else "unseal"))
 if len(args) >= 3 and args[:2] == ["compose", "exec"] and "bao status" in " ".join(args):
     if os.environ.get("UNKNOWN_OPENBAO_ALWAYS") == "1" or os.environ.get(
             "MALFORMED_OPENBAO_ALWAYS") == "1":
@@ -228,6 +251,39 @@ class SeedStartTests(unittest.TestCase):
         env.update(values)
         return subprocess.run(self.command(), env=env, capture_output=True, text=True)
 
+    def test_openbao_commands_use_verified_internal_tls(self):
+        completed = self.run_seed(
+            BAO_ADDR="https://untrusted.invalid:8200",
+            BAO_CACERT="/untrusted/ca.crt",
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertFalse((self.state / "openbao-tls-rejected").exists())
+        for command in ("status", "init", "unseal"):
+            with self.subTest(command=command):
+                self.assertTrue((self.state / ("openbao-tls-" + command)).exists())
+
+    def test_synthetic_openbao_rejects_missing_tls_settings(self):
+        settings = (
+            "BAO_ADDR=https://openbao:8200",
+            "BAO_CACERT=/run/secrets/openbao-ca.crt",
+        )
+        for command in (["status", "-format=json"],
+                        ["operator", "init", "-format=json"],
+                        ["operator", "unseal", "synthetic-key"]):
+            for missing in settings:
+                with self.subTest(command=command, missing=missing):
+                    args = [str(self.bin / "docker"), "compose", "exec", "-T"]
+                    for setting in settings:
+                        if setting != missing:
+                            args.extend(["-e", setting])
+                    result = subprocess.run(
+                        args + ["openbao", "bao"] + command,
+                        env=self.env, capture_output=True, text=True,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("requires verified internal TLS", result.stderr)
+        self.assertFalse((self.state / "openbao-initialized").exists())
+
     def test_owned_partial_install_is_discarded_and_retried_from_staging(self):
         failed = self.run_seed(FAIL_INSTALL_ONCE="1")
         self.assertNotEqual(failed.returncode, 0)
@@ -356,6 +412,7 @@ class SeedStartTests(unittest.TestCase):
         self.assertTrue((self.state / "openbao-reset").exists())
         self.assertTrue((self.state / "openbao-initialized").exists())
         self.assertTrue((self.secrets / "openbao-seed-configured").exists())
+        self.assertFalse((self.state / "openbao-tls-rejected").exists())
         resumed_log = (self.state / "docker.log").read_text()[len(initial_log):]
         self.assertLess(resumed_log.index("bao status -format=json"),
                         resumed_log.index("volume rm "))
