@@ -18,13 +18,22 @@ public sealed class SeedJournalTests
             journal.Save(state);
             Assert.Equal(state.Plan.Approval, journal.Load().Plan.Approval);
         }
-        File.WriteAllText(Path.Combine(fixture.Root, "seed", id, "operation.pending"), "{}");
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(Path.Combine(fixture.Root, "seed", id, "operation.pending"),
-                UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        var journalPath = Path.Combine(fixture.Root, "seed", id, "operation.json");
+        var pendingPath = journalPath + ".pending";
+        var journalContents = File.ReadAllBytes(journalPath);
+        byte[] pendingContents = "{}"u8.ToArray();
+        SeedFiles.WriteNew(pendingPath, pendingContents);
         using var resumed = new SeedJournal(fixture.Root, id);
         var error = Assert.Throws<CliCommandException>(() => resumed.Load());
         Assert.Contains("interrupted journal write", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("operation.json plus operation.json.pending", error.Message);
+        Assert.Equal(journalContents, File.ReadAllBytes(journalPath));
+        Assert.Equal(pendingContents, File.ReadAllBytes(pendingPath));
+
+        var saveError = Assert.Throws<CliCommandException>(() => resumed.Save(state));
+        Assert.Contains("operation.json and operation.json.pending", saveError.Message);
+        Assert.Equal(journalContents, File.ReadAllBytes(journalPath));
+        Assert.Equal(pendingContents, File.ReadAllBytes(pendingPath));
     }
 
     [Fact]
