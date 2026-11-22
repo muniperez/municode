@@ -305,11 +305,18 @@ reset_unconfigured_openbao() {
     docker compose up -d openbao
 }
 
+openbao_exec() {
+    docker compose exec -T \
+        -e BAO_ADDR=https://openbao:8200 \
+        -e BAO_CACERT=/run/secrets/openbao-ca.crt \
+        openbao "$@"
+}
+
 read_openbao_initialized() {
     attempt=0
     while [ "$attempt" -lt 12 ]; do
         attempt=$((attempt + 1))
-        result="$(docker compose exec -T openbao \
+        result="$(openbao_exec \
             sh -c 'bao status -format=json 2>/dev/null || true' |
             python3 -c 'import json,sys
 try:
@@ -350,7 +357,7 @@ if [ ! -s "$openbao_init" ]; then
             echo "OpenBao positively reports initialized but no owned seed recovery record exists; preserving data." >&2
             exit 1
         }
-        docker compose exec -T openbao \
+        openbao_exec \
             bao operator init -key-shares=1 -key-threshold=1 -format=json > "$openbao_pending"
         chmod 600 "$openbao_pending"
         valid_openbao_record "$openbao_pending" || {
@@ -362,7 +369,7 @@ if [ ! -s "$openbao_init" ]; then
 elif [ "$initialized" = "false" ]; then
     reset_unconfigured_openbao
     rm -f "$openbao_init"
-    docker compose exec -T openbao \
+    openbao_exec \
         bao operator init -key-shares=1 -key-threshold=1 -format=json > "$openbao_pending"
     valid_openbao_record "$openbao_pending" || {
         echo "OpenBao initialization output is incomplete; preserving state. Resume requires a positive readiness status and valid recovery material if initialized; otherwise operator reconciliation is required." >&2
@@ -387,7 +394,7 @@ for path, content in ((unseal, keys[0]), (root, value["root_token"])):
     os.chmod(path, 0o600)
 PY
 unseal_key="$(cat "$secrets_dir/openbao-unseal-key")"
-docker compose exec -T openbao bao operator unseal "$unseal_key" >/dev/null 2>&1 || true
+openbao_exec bao operator unseal "$unseal_key" >/dev/null 2>&1 || true
 unset unseal_key
 
 OPENBAO_ROOT_TOKEN_FILE="$secrets_dir/openbao-root-token" \
