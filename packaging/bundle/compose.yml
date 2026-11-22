@@ -5,6 +5,7 @@ x-installation-labels: &installation-labels
 
 x-runtime: &runtime
   image: ${WORKSPACES_DOTNET_IMAGE:?set WORKSPACES_DOTNET_IMAGE}
+  entrypoint: ["/usr/bin/dotnet"]
   restart: unless-stopped
   read_only: true
   tmpfs:
