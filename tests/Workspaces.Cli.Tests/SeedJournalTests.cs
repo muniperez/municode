@@ -57,9 +57,7 @@ public sealed class SeedJournalTests
     {
         public JournalFixture()
         {
-            Root = Path.Combine(Directory.GetCurrentDirectory(), ".local", "artifacts", "seed-tests",
-                "journal-" + Guid.NewGuid().ToString("N"));
-            SeedFiles.CreateDirectory(Root);
+            Root = SeedTestDirectory.Create("journal");
         }
 
         public string Root { get; }

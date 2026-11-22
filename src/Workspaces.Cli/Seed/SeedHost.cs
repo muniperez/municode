@@ -35,7 +35,7 @@ internal sealed class SeedHost(ISeedProcess? runner = null) : ISeedHost
                 null, cancellationToken);
         }
         SeedFiles.Check(key);
-        SeedFiles.Check(key + ".pub");
+        SeedFiles.CheckPublicKey(key + ".pub");
         var derived = await RequireAsync("ssh-keygen", ["-y", "-f", key], null, cancellationToken);
         SeedGuard.Require(File.ReadAllText(key + ".pub")
                 .StartsWith(derived.Output.Trim(), StringComparison.Ordinal),
@@ -231,7 +231,7 @@ install -d -m 0700 __REMOTE__
         "-o", "UserKnownHostsFile=" + Path.Combine(directory, "known_hosts")
     ];
 
-    private async Task<SeedProcessResult> SshAsync(
+    internal async Task<SeedProcessResult> SshAsync(
         SeedState state,
         string directory,
         string command,
@@ -241,8 +241,8 @@ install -d -m 0700 __REMOTE__
             "SSH commands require an attributed public IPv4 and pinned host fingerprint.");
         var args = StrictOptions(directory)
             .Concat(["-i", Path.Combine(directory, "id_ed25519"), "root@" + state.Server.Address])
-            .Append("env -i HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "
-                + command)
+            .Append("env -i HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/sh -c "
+                + Quote(command))
             .ToArray();
         return await _process.RunAsync("ssh", args, null, cancellationToken);
     }

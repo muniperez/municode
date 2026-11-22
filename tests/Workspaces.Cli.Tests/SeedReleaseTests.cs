@@ -45,9 +45,7 @@ public sealed class SeedReleaseTests
     {
         public ReleaseFixture(bool tamperComponent = false)
         {
-            Root = Path.Combine(Directory.GetCurrentDirectory(), ".local", "artifacts", "seed-tests",
-                "release-" + Guid.NewGuid().ToString("N"));
-            SeedFiles.CreateDirectory(Root);
+            Root = SeedTestDirectory.Create("release");
             Build(tamperComponent);
         }
 
