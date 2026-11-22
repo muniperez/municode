@@ -11,6 +11,39 @@ credentials, worker SSH keys and Caddy proxy. Hetzner, DigitalOcean and Vultr us
 workspace-specific adapters. No application-hosting installation or account is
 required.
 
+## Seed a control plane
+
+From a released standalone CLI on an operator workstation:
+
+```sh
+chmod 600 /protected/hetzner.token
+workspaces seed plan \
+  --provider hetzner --region <location> --size <server-type> \
+  --dashboard-hostname console.example.com \
+  --api-hostname api.example.com \
+  --gateway-domain workspaces.example.com \
+  --release workspaces-vX.Y.Z \
+  --credential-file /protected/hetzner.token
+workspaces seed apply <operation> \
+  --credential-file /protected/hetzner.token --approve <plan-digest>
+```
+
+Seed is a signed-release, one-control-plane-VPS workflow for Hetzner, DigitalOcean
+or Vultr. It prints authoritative recurring costs and creates nothing before the
+exact plan digest is approved. The durable journal safely resumes an uncertain
+provider response, but pauses for an independently checked SSH console
+fingerprint and exact DNS records. `workspaces seed resume <operation>` continues
+preparation, bundle verification, HTTPS/health checks and first-owner setup.
+`municode seed` and `municode workspaces seed` are compatibility spellings.
+
+The bootstrap provider token is read only from a protected local file. It is
+never copied into the control-plane journal, release, server or provider-account
+store. Seed creates no coding VM; provider registration, image qualification and
+the first workspace are separate post-login actions. See the
+[operator guide](docs/operator.md) for the complete safety contract and
+[live validation checklist](docs/setup/live-seed-validation.md) for the manual
+test that must run on disposable provider capacity outside CI.
+
 ## Build and test
 
 Use the .NET 10 SDK and Python 3.11+ from the repository root. All generated
@@ -57,8 +90,9 @@ release checksums are written under `.local/artifacts/release`.
 
 The merged CLI and dashboard projects are built and included by delivery CI.
 Their package paths and release commands are fixed in `packaging/targets.json`;
-release tags fail closed when either artifact cannot be built. This delivery PR
-intentionally does not implement client UI or CLI internals.
+release tags fail closed when either artifact cannot be built. The package adds a
+`workspaces` command alias beside `municode` for each Unix RID and `workspaces.cmd`
+for Windows.
 
 ## Start with a fresh database
 

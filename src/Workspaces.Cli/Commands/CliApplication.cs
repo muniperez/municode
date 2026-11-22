@@ -6,19 +6,40 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using Municode.Cli.Api;
 using Municode.Cli.Auth;
+using Municode.Cli.Seed;
 
 namespace Municode.Cli.Commands;
 
-public sealed partial class CliApplication(
-    IConsole console,
-    CliEnvironment environment,
-    TokenStore tokenStore,
-    MunicodeApiClient apiClient)
+public sealed partial class CliApplication
 {
-    private readonly IConsole _console = console;
-    private readonly CliEnvironment _environment = environment;
-    private readonly TokenStore _tokenStore = tokenStore;
-    private readonly MunicodeApiClient _apiClient = apiClient;
+    private readonly IConsole _console;
+    private readonly CliEnvironment _environment;
+    private readonly TokenStore _tokenStore;
+    private readonly MunicodeApiClient _apiClient;
+    private readonly SeedRuntime _seed;
+
+    public CliApplication(
+        IConsole console,
+        CliEnvironment environment,
+        TokenStore tokenStore,
+        MunicodeApiClient apiClient)
+        : this(console, environment, tokenStore, apiClient, new SeedRuntime())
+    {
+    }
+
+    internal CliApplication(
+        IConsole console,
+        CliEnvironment environment,
+        TokenStore tokenStore,
+        MunicodeApiClient apiClient,
+        SeedRuntime seed)
+    {
+        _console = console;
+        _environment = environment;
+        _tokenStore = tokenStore;
+        _apiClient = apiClient;
+        _seed = seed;
+    }
 
     public async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
     {
@@ -44,6 +65,7 @@ public sealed partial class CliApplication(
         {
             return args[0] switch
             {
+                "seed" => await RunSeedAsync(args.Skip(1).ToArray(), cancellationToken),
                 "config" => RunConfig(args.Skip(1).ToArray()),
                 "token" => await RunTokenAsync(args.Skip(1).ToArray(), cancellationToken),
                 "login" => await RunLoginAsync(args.Skip(1).ToArray(), cancellationToken),
@@ -74,6 +96,12 @@ public sealed partial class CliApplication(
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            if (IsSeedCommand(args))
+            {
+                _console.WriteLine("Seed interrupted. Durable operation state and billable provider resources are retained; "
+                    + "use 'workspaces seed status <operation>' then resume with the original credential scope. Never start a replacement plan.");
+                return CliExitCodes.ValidationError;
+            }
             _console.WriteLine("Operation canceled.");
             return CliExitCodes.Success;
         }
@@ -145,6 +173,7 @@ public sealed partial class CliApplication(
         _console.WriteLine();
         _console.WriteLine("Commands:");
         _console.WriteLine("  workspaces  Create, inspect, start, stop, and delete workspaces");
+        _console.WriteLine("  seed        Plan, apply, and safely resume control-plane provisioning");
         _console.WriteLine("  login       Log in through the browser or with an API token");
         _console.WriteLine("  token       Store an API authentication token");
         _console.WriteLine("  config      Show or update the Municode API URL");
@@ -175,7 +204,15 @@ public sealed partial class CliApplication(
                 return CliExitCodes.Success;
             case "workspaces":
             case var workspace when workspace.StartsWith("workspaces ", StringComparison.Ordinal):
+                if (command == "workspaces seed" || command.StartsWith("workspaces seed ", StringComparison.Ordinal))
+                {
+                    PrintSeedHelp();
+                    return CliExitCodes.Success;
+                }
                 PrintWorkspaceHelp();
+                return CliExitCodes.Success;
+            case "seed":
+                PrintSeedHelp();
                 return CliExitCodes.Success;
             case "version":
                 PrintVersion();
@@ -196,6 +233,10 @@ public sealed partial class CliApplication(
         PrintHelp();
         return CliExitCodes.ValidationError;
     }
+
+    private static bool IsSeedCommand(string[] args) =>
+        args.FirstOrDefault() == "seed"
+        || args.Length >= 2 && args[0] == "workspaces" && args[1] == "seed";
 
     internal static string? GetOption(IReadOnlyList<string> args, string name)
     {

@@ -5,7 +5,100 @@ worker, gateway, dashboard, PostgreSQL, identity, secret storage and TLS proxy h
 independent state and credentials. The operator does not need an application-hosting
 installation, account, CLI or reachable service.
 
+## Seed a fresh control plane
+
+The preferred first installation path is `workspaces seed`. Use the exact CLI
+from an immutable `workspaces-vX.Y.Z` release, Cosign 2.6.5, OpenSSH, a protected
+provider-token file, and public DNS names you control. Seed supports Hetzner,
+DigitalOcean and Vultr. The token file must be owner-only and contain only the
+single API token:
+
+```sh
+install -m 600 /dev/null /protected/provider.token
+# Populate the protected file without putting its value in shell history.
+workspaces seed plan \
+  --provider hetzner --region <location> --size <server-type> \
+  --dashboard-hostname console.example.com \
+  --api-hostname api.example.com \
+  --gateway-domain workspaces.example.net \
+  --release workspaces-vX.Y.Z \
+  --credential-file /protected/provider.token
+```
+
+Plan verifies the Municode Workspaces GitHub Actions Sigstore identity, exact
+release manifest, checksum inventory, archive component hashes and immutable
+dependency image digests. It quotes the provider's current recurring cost and
+records a new local operation under the Municode config directory. It does not
+create a provider resource. Review the currency, hourly/monthly terms, taxes,
+traffic and optional-service exclusions. `workspaces` reports an approval digest;
+there is no `latest`, token-on-command-line or implicit-cost approval.
+
+```sh
+workspaces seed apply <operation> \
+  --credential-file /protected/provider.token --approve <approval-digest>
+```
+
+Apply refreshes the quote, refuses a changed approval, writes creation intent to
+the interruption-safe journal before the one create call, and adopts no resource
+without the operation's provider ownership marker. A timeout or process kill
+does not trigger a second create: `seed resume` inventories the account, requires
+exactly one matching control-plane VPS and continues from the durable journal.
+`workspaces seed status <operation>` is local state only and never proves live
+provider health. Created resources remain billable.
+
+After public IPv4 assignment, obtain the ed25519 host fingerprint only from the
+provider's authenticated console and compare its exact `SHA256:...` value:
+
+```sh
+workspaces seed resume <operation> \
+  --credential-file /protected/provider.token \
+  --confirm-console-fingerprint SHA256:...
+```
+
+The CLI pins that key in a protected `known_hosts` entry. A changed or different
+candidate fails before any SSH command or secret transfer. Resume prints these
+exact records and waits for them to resolve only to the new VPS:
+
+| Record | Value |
+| --- | --- |
+| `console.example.com` A | control-plane public IPv4 |
+| `api.example.com` A | control-plane public IPv4 |
+| `*.workspaces.example.net` A | control-plane public IPv4 |
+
+After DNS propagation, resume prepares Docker/Compose/Python, installs the exact
+archive, configures Caddy and starts API, worker, gateway, dashboard, PostgreSQL,
+Kratos and OpenBao. It verifies the dashboard, `/health` and setup endpoint over
+trusted public HTTPS. Caddy issues the API/dashboard certificates; the wildcard
+gateway certificate is acquired on demand only for valid workspace hosts after a
+workspace exists.
+
+The protected one-time owner token is downloaded to
+`<config-home>/seed/<operation>/setup-token` with owner-only permissions and is
+never printed. Open `https://console.example.com/setup`, enter the token manually
+and complete first-owner sign-in. Then register the provider account explicitly,
+qualify a workspace image and admit a plan. The seed token remains on the
+operator workstation and is not copied to OpenBao or the provider API store by
+seed. No coding VM is created by this flow.
+
+`municode seed` and `municode workspaces seed` are compatibility aliases. The
+release package's `workspaces` wrapper is the canonical spelling.
+
+OpenBao is initialized with one protected recovery record at
+`/etc/municode/workspaces/secrets/openbao-seed-init.json`. Move an independent
+copy of that recovery material and the other installation secrets to approved
+offline custody before production use. On host restart, follow the ordinary
+unseal procedure; seed never copies unseal material into the Workspaces
+application or provider account.
+
+Synthetic provider, SSH and release fixtures exercise the retry paths in CI.
+Do not turn those fixtures into live credentials. The explicit
+[live seed validation checklist](setup/live-seed-validation.md) remains a
+separate, disposable-machine operation.
+
 ## Release prerequisites and DNS
+
+The manual-host path below remains available for operators that already own a
+Linux host. It does not provide the provider/VPS journal offered by seed.
 
 Use a Linux host with Docker Engine, Compose v2, Python 3, OpenSSL and OpenSSH.
 Choose three controlled DNS names and create records that point to the host:
@@ -36,6 +129,8 @@ The installer refuses existing destinations, rejects symlink payloads, verifies
 component digests and generates protected database, gateway and Kratos secrets,
 an OpenBao service certificate and a dedicated worker SSH key. Protect and back
 up `/etc/municode/workspaces/secrets`; do not put it in the installation tree.
+Tagged releases also carry `checksums.txt.sigstore.json`; seed requires its exact
+Municode Workspaces workflow identity before any provider mutation.
 
 ## Configure and initialize
 

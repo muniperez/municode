@@ -83,6 +83,8 @@ jobs:
             --output .local/artifacts/package
           tar -xzf .local/artifacts/package/municode-workspaces-0.0.0-ci-linux-x64.tar.gz \
             -C .local/artifacts/package
+          .local/artifacts/package/municode-workspaces-0.0.0-ci/cli/linux-x64/workspaces \
+            help seed | grep -F 'workspaces seed plan'
           mkdir -p .local/artifacts/install
           .local/artifacts/package/municode-workspaces-0.0.0-ci/install.sh \
             --install-root "$PWD/.local/artifacts/install/release" \

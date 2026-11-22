@@ -20,9 +20,17 @@ account assumptions.
 ## CLI
 
 The release archive stores executables below `cli/<runtime>/municode`
-(`municode.exe` on Windows). Install the matching executable into a protected
-location on your `PATH`. The CLI child project owns command behavior and exact
-help; run `municode --help` from its released binary for the accepted commands.
+(`municode.exe` on Windows) plus the canonical `workspaces` wrapper
+(`workspaces.cmd` on Windows). Install the matching directory contents into a
+protected location on your `PATH`. The CLI child project owns command behavior
+and exact help; run `workspaces --help` or `municode --help` from its released
+binary for the accepted commands.
+
+Operators use `workspaces seed` before ordinary authenticated workspace commands.
+`municode seed` and `municode workspaces seed` are equivalent compatibility
+spellings. Seed never authenticates a workspace user or registers its bootstrap
+provider credential automatically. After first-owner setup, register a provider,
+image and plan in the dashboard before creating the first coding VM.
 
 Use the API URL and a short-lived or scoped key issued by your installation.
 Use `workspaces:read` for inspection and `workspaces:write` only for mutations.

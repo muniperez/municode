@@ -16,6 +16,8 @@ public sealed partial class CliApplication
     private async Task<int> RunWorkspacesAsync(string[] args, CancellationToken ct)
     {
         var action = args.FirstOrDefault();
+        if (action == "seed")
+            return await RunSeedAsync(args.Skip(1).ToArray(), ct);
         if (action is not ("list" or "selections" or "create" or "open" or "status" or "delete" or "start" or "stop"
             or "cancel-idle-stop" or "idle-timeout" or "resize-next-start" or "vms" or "launch" or "vm-status"
             or "vm-start" or "vm-stop" or "vm-cancel-idle-stop" or "vm-discard" or "vm-resize-next-start"
