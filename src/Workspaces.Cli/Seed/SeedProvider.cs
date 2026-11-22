@@ -227,7 +227,7 @@ ssh_pwauth: false
         return _provider switch
         {
             "hetzner" => new(Text(value, "id"), operationId,
-                Text(value.GetProperty("datacenter").GetProperty("location"), "name"),
+                HetznerLocation(value),
                 Text(value.GetProperty("server_type"), "name"), Text(value.GetProperty("image"), "id"), address),
             "digitalocean" => new(Text(value, "id"), operationId,
                 Text(value.GetProperty("region"), "slug"), Text(value, "size_slug"),
@@ -235,6 +235,17 @@ ssh_pwauth: false
             _ => new(Text(value, "id"), operationId, Text(value, "region"), Text(value, "plan"),
                 Text(value, "os_id"), address)
         };
+    }
+
+    private static string HetznerLocation(JsonElement value)
+    {
+        SeedGuard.Require(value.TryGetProperty("location", out var location)
+            && location.ValueKind == JsonValueKind.Object
+            && location.TryGetProperty("name", out var name)
+            && name.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(name.GetString()),
+            "Hetzner returned a VPS without a location name; refusing ambiguous reconciliation.");
+        return location.GetProperty("name").GetString()!;
     }
 
     private async Task<JsonElement> SendAsync(

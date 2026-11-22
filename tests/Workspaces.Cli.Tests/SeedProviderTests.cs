@@ -4,6 +4,8 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using Municode.Cli.Commands;
 using Municode.Cli.Seed;
 
 namespace Workspaces.Cli.Tests;
@@ -39,6 +41,144 @@ public sealed class SeedProviderTests
         Assert.All(handler.Authorizations, value => Assert.Equal("Bearer synthetic-credential", value));
     }
 
+    [Fact]
+    public async Task HetznerCreateAndFindReturnTheSameExactOperationAndImmutableFields()
+    {
+        var handler = new ProviderHandler("hetzner");
+        using var subject = new SeedProvider("hetzner", "synthetic-credential", handler);
+        var state = State("hetzner", await subject.QuoteAsync(
+            Selection("hetzner"), new string('a', 32), CancellationToken.None));
+        var created = await subject.CreateServerAsync(
+            state, "ssh-ed25519 AAAAsynthetic municode-seed", CancellationToken.None);
+        var found = await subject.FindServerAsync(state.Id, CancellationToken.None);
+
+        Assert.Equal(new SeedServer("42", state.Id, "nbg1", "cx22", "101", "203.0.113.40"), created);
+        Assert.Equal(created, found);
+        Assert.Null(await subject.FindServerAsync(new string('b', 32), CancellationToken.None));
+        Assert.Single(handler.CreateBodies);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HetznerRequiresExactOwnershipForCreateAndFind(bool create)
+    {
+        var handler = new ProviderHandler("hetzner");
+        handler.HetznerServer["labels"]!["municode-workspaces-seed"] = new string('a', 32) + "-other";
+        using var subject = new SeedProvider("hetzner", "synthetic-credential", handler);
+        if (create)
+        {
+            var state = State("hetzner", await subject.QuoteAsync(
+                Selection("hetzner"), new string('a', 32), CancellationToken.None));
+            var error = await Assert.ThrowsAsync<CliCommandException>(() => subject.CreateServerAsync(
+                state, "ssh-ed25519 AAAAsynthetic municode-seed", CancellationToken.None));
+            Assert.Contains("exact seed ownership marker", error.Message);
+        }
+        else
+        {
+            handler.HetznerServers.Add(handler.HetznerServer);
+            Assert.Null(await subject.FindServerAsync(new string('a', 32), CancellationToken.None));
+        }
+    }
+
+    [Fact]
+    public async Task HetznerFindRefusesDuplicateOperationOwnedServers()
+    {
+        var handler = new ProviderHandler("hetzner");
+        handler.HetznerServers.Add(handler.HetznerServer);
+        var duplicate = (JsonObject)handler.HetznerServer.DeepClone();
+        duplicate["id"] = 43;
+        handler.HetznerServers.Add(duplicate);
+        using var subject = new SeedProvider("hetzner", "synthetic-credential", handler);
+
+        var error = await Assert.ThrowsAsync<CliCommandException>(() =>
+            subject.FindServerAsync(new string('a', 32), CancellationToken.None));
+        Assert.Contains("More than one operation-owned", error.Message);
+        Assert.Empty(handler.CreateBodies);
+    }
+
+    [Theory]
+    [InlineData(false, "missing")]
+    [InlineData(true, "missing")]
+    [InlineData(false, "null")]
+    [InlineData(true, "null")]
+    [InlineData(false, "empty")]
+    [InlineData(true, "empty")]
+    [InlineData(false, "invalid")]
+    [InlineData(true, "invalid")]
+    public async Task HetznerRefusesUnverifiableLocation(bool create, string shape)
+    {
+        var handler = new ProviderHandler("hetzner");
+        handler.HetznerServer.Remove("location");
+        if (shape != "missing")
+            handler.HetznerServer["location"] = shape switch
+            {
+                "null" => null,
+                "empty" => new JsonObject { ["name"] = "" },
+                _ => JsonValue.Create("nbg1")
+            };
+        using var subject = new SeedProvider("hetzner", "synthetic-credential", handler);
+        CliCommandException error;
+        if (create)
+        {
+            var state = State("hetzner", await subject.QuoteAsync(
+                Selection("hetzner"), new string('a', 32), CancellationToken.None));
+            error = await Assert.ThrowsAsync<CliCommandException>(() => subject.CreateServerAsync(
+                state, "ssh-ed25519 AAAAsynthetic municode-seed", CancellationToken.None));
+            Assert.Single(handler.CreateBodies);
+        }
+        else
+        {
+            handler.HetznerServers.Add(handler.HetznerServer);
+            error = await Assert.ThrowsAsync<CliCommandException>(() =>
+                subject.FindServerAsync(new string('a', 32), CancellationToken.None));
+            Assert.Empty(handler.CreateBodies);
+        }
+        Assert.Contains("without a location name", error.Message);
+    }
+
+    [Theory]
+    [InlineData("location", "name", "hel1")]
+    [InlineData("server_type", "name", "cx32")]
+    [InlineData("image", "id", "102")]
+    [InlineData("", "id", "43")]
+    [InlineData("public_net", "ipv4", "203.0.113.41")]
+    public async Task HetznerReconciliationRefusesChangedImmutableFields(
+        string field, string property, string changed)
+    {
+        var handler = new ProviderHandler("hetzner");
+        using var subject = new SeedProvider("hetzner", "synthetic-credential", handler);
+        var state = State("hetzner", await subject.QuoteAsync(
+            Selection("hetzner"), new string('a', 32), CancellationToken.None));
+        state.ServerCreateStarted = true;
+        state.Server = await subject.CreateServerAsync(
+            state, "ssh-ed25519 AAAAsynthetic municode-seed", CancellationToken.None);
+        if (field == "public_net")
+            handler.HetznerServer[field]![property]!["ip"] = changed;
+        else if (field.Length == 0)
+            handler.HetznerServer[property] = int.Parse(changed);
+        else if (property == "id")
+            handler.HetznerServer[field]![property] = int.Parse(changed);
+        else
+            handler.HetznerServer[field]![property] = changed;
+
+        var root = Path.Combine(Directory.GetCurrentDirectory(), ".local", "artifacts", "seed-tests",
+            "provider-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var journal = new SeedJournal(root, state.Id, true);
+            var lifecycle = new SeedLifecycle(subject, new SeedHost(), journal, root, _ => { });
+            var error = await Assert.ThrowsAsync<CliCommandException>(() =>
+                lifecycle.ResumeAsync(state, null, null, CancellationToken.None));
+            Assert.Contains(field == "public_net" ? "public IPv4 changed" : "immutable operation", error.Message);
+            Assert.Single(handler.CreateBodies);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
     private static SeedSelection Selection(string provider) => new(
         provider, provider == "vultr" ? "ewr" : "nbg1",
         provider == "digitalocean" ? "s-2vcpu-4gb" : provider == "vultr" ? "vc2-2c-4gb" : "cx22",
@@ -61,6 +201,17 @@ public sealed class SeedProviderTests
         public List<string> CreateBodies { get; } = [];
         public List<string> RequestPaths { get; } = [];
         public List<string> Authorizations { get; } = [];
+        public List<JsonObject> HetznerServers { get; } = [];
+        public JsonObject HetznerServer { get; } = (JsonObject)JsonSerializer.SerializeToNode(new
+        {
+            id = 42, labels = new Dictionary<string, string>
+            {
+                ["municode-workspaces-seed"] = new string('a', 32)
+            },
+            location = new { name = "nbg1" },
+            server_type = new { name = "cx22" }, image = new { id = 101 },
+            public_net = new { ipv4 = new { ip = "203.0.113.40" } }
+        })!;
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -71,6 +222,7 @@ public sealed class SeedProviderTests
             if (request.Method == HttpMethod.Post)
             {
                 CreateBodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
+                if (provider == "hetzner") HetznerServers.Add(HetznerServer);
                 return Json(CreatedResponse());
             }
             return Json(ResponseFor(request.RequestUri.PathAndQuery));
@@ -119,7 +271,7 @@ public sealed class SeedProviderTests
                             }
                         }
                     },
-                    _ => new { servers = Array.Empty<object>() }
+                    _ => new { servers = HetznerServers }
                 };
             }
             if (provider == "digitalocean")
@@ -178,19 +330,7 @@ public sealed class SeedProviderTests
 
         private object CreatedResponse() => provider switch
         {
-            "hetzner" => new
-            {
-                server = new
-                {
-                    id = 42, labels = new Dictionary<string, string>
-                    {
-                        ["municode-workspaces-seed"] = new string('a', 32)
-                    },
-                    datacenter = new { location = new { name = "nbg1" } },
-                    server_type = new { name = "cx22" }, image = new { id = 101 },
-                    public_net = new { ipv4 = new { ip = "203.0.113.40" } }
-                }
-            },
+            "hetzner" => new { server = HetznerServer },
             "digitalocean" => new
             {
                 droplet = new
