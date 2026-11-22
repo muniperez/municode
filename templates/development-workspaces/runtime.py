@@ -1052,6 +1052,31 @@ class Linux:
     def thaw(self):
         run(["systemctl", "thaw", "workspaceswork.slice"])
 
+    def thaw_for_managed_stop(self):
+        try:
+            self.thaw()
+        except Blocked as error:
+            cause = error.__cause__
+            if not (isinstance(cause, subprocess.CalledProcessError) and cause.returncode > 0 and
+                    cause.cmd == ["systemctl", "thaw", "workspaceswork.slice"]):
+                raise
+            # A queued stop job can make systemd thaw the slice before our explicit thaw.
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                try:
+                    events = Path("/sys/fs/cgroup/workspaceswork.slice/cgroup.events").read_text().splitlines()
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    state = run(["systemctl", "show", "workspaceswork.slice",
+                                 "-p", "FreezerState", "--value"], timeout=min(1, remaining))
+                except (OSError, Blocked):
+                    raise error
+                if "frozen 0" in events and state == "running" and time.monotonic() < deadline:
+                    return
+                time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+            raise
+
     def writable(self):
         if self.config["kind"] == "primary":
             self.probe_volume(self.config["volume"])
@@ -1221,7 +1246,7 @@ class Linux:
             # Only explicitly managed infrastructure can stop; unknown work still blocks.
             try:
                 run(["systemctl", "stop", "--no-block", unit])
-                self.thaw()
+                self.thaw_for_managed_stop()
                 run(["systemctl", "stop", unit])
                 if unit == "workspaces-t3.service":
                     # The monitor can still be exiting after losing its T3 parent.
