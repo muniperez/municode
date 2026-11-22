@@ -618,7 +618,7 @@ class NativeRestoreTests(unittest.TestCase):
             observe(Mock(poll=Mock(return_value=None if running else 0)))
             shutil.rmtree(original)
 
-        lstat = os.lstat
+        lstat = Path.lstat
 
         def coding_lstat(path, *args, **kwargs):
             info = lstat(path, *args, **kwargs)
@@ -633,7 +633,7 @@ class NativeRestoreTests(unittest.TestCase):
     def test_codex_fixture_retains_documented_live_links_after_guard_cleanup_without_traversal(self):
         home, run_id, original, outside, initialize, coding_lstat = self.codex_fixture()
         with patch.object(native, "initialize_codex_without_credentials", side_effect=initialize), \
-                patch.object(native.os, "lstat", side_effect=coding_lstat), \
+                patch.object(native.Path, "lstat", autospec=True, side_effect=coding_lstat), \
                 patch.object(native.os, "chown") as chown:
             evidence = native.retain_codex_arg0_links(self.root, home, run_id)
         self.assertFalse(original.exists())
@@ -663,7 +663,7 @@ class NativeRestoreTests(unittest.TestCase):
                 home, run_id, _, _, initialize, coding_lstat = self.codex_fixture(
                     targets, running=running)
                 with patch.object(native, "initialize_codex_without_credentials", side_effect=initialize), \
-                        patch.object(native.os, "lstat", side_effect=coding_lstat), \
+                        patch.object(native.Path, "lstat", autospec=True, side_effect=coding_lstat), \
                         patch.object(native.os, "chown"), self.assertRaisesRegex(native.ProbeError, code):
                     native.retain_codex_arg0_links(self.root, home, run_id)
                 self.assertEqual(list((self.root / "artifacts").iterdir()), [])
