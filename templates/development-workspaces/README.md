@@ -899,9 +899,54 @@ Inspect `ok`, not only SSH exit status. Never log enrollment or T3 secret output
   `/var/lib/workspaces-scratch/repos`) are listed as excluded, non-selectable rows with
   `storage:"scratch"` and the `separate_mount` error, and are never walked or counted, even
   when scratch shares the workspace device.
+  A root scan also reports the managed ext4 recovery directory as an excluded,
+  non-selectable, non-deletable row with `exclusion:"ext4_recovery"`, unknown bytes and
+  no scan error. Its contents are never walked or included in user-data totals;
+  `complete` describes user data, not recovery contents or filesystem-wide allocation.
+  Recognition requires a safe root-owned regular ownership marker, the opened
+  workspace's kernel mount ID matching an ext4 mount of the filesystem root,
+  root inode 2, and root-owned, non-group/other-writable directory inode 11 on the
+  same device at root `lost+found`. Mounts at or beneath that directory prevent
+  recognition. Missing/unreadable kernel evidence, a different filesystem or inode,
+  and nested user directories named `lost+found` follow ordinary scan rules:
+  unreadable user data still reports `partial`/`permission_denied`. No name-only
+  exclusion or deletion-policy relaxation is applied. The extra `exclusion` field
+  is helper evidence; older control planes retain the excluded/protected row.
 * `fs-job-status` / `fs-job-cancel`: report `running`, `completed` (with the helper's
   JSON result), `lost` or `not_found`. Quiesce, Git save and discard stop running
   folder jobs before freezing.
+
+### Targeted disk-usage checks
+
+The synthetic scanner, deletion and filesystem-job checks run without privileges:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s templates/development-workspaces/tests -p test_disk_usage.py -v
+```
+
+The same test file includes an explicitly opt-in guest check. **Only inside a
+disposable image-builder VM** already marked as described above, stage this source
+at a coding-user-readable location (for example `/opt/workspaces-image-source`) and
+run as root:
+
+```sh
+WORKSPACES_DISK_USAGE_GUEST=RUN-DISK-USAGE-ON-DISPOSABLE-GUEST \
+  unshare --mount --propagation private \
+  python3 -B -m unittest discover \
+  -s templates/development-workspaces/tests -p test_disk_usage.py \
+  -k DiskUsageExt4GuestTests -v
+```
+
+The guard requires the root-owned disposable-builder marker, actual VM detection,
+and a mount namespace distinct from PID 1. It formats only its newly created
+64 MiB temporary image, mounts it privately, and invokes the scanner as UID/GID
+2000. It checks a complete fresh root scan, recovery deletion refusal, partial
+results for real unreadable user data (including nested `lost+found`), and an
+excluded separate-device mount over recovery. It unmounts and removes its fixture.
+Do not run it against an existing workspace or on a shared host. The #82 fix has
+synthetic coverage; fresh disposable-volume guest verification remains pending
+until this guarded check is actually run. It is not live-provider qualification.
 
 Normal stop checkpoints a bounded, sanitized runtime rejection in the operation's
 `providerEvidenceJson.lastRuntimeRejection` **before** attempting to reopen a failed

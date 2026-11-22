@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Synthetic folder size, deletion and resource telemetry checks. No root, mounts or systemd."""
+"""Synthetic checks by default; explicit disposable-guest opt-in enables real ext4 checks."""
 import io
 import json
 import os
 from pathlib import Path
+import stat
+import subprocess
 import sys
 import tempfile
 import threading
@@ -122,6 +124,117 @@ class DiskUsageTests(unittest.TestCase):
                 du.delete(str(self.workspace), path, dict(dev=1, ino=1))
             self.assertEqual("protected_path", error.exception.code)
 
+    def deny_directories(self, *names):
+        original = os.open
+
+        def guarded(name, flags, *args, **kwargs):
+            if name in names:
+                raise PermissionError(name)
+            return original(name, flags, *args, **kwargs)
+
+        return patch.object(du.os, "open", side_effect=guarded)
+
+    def test_proven_root_recovery_is_reported_separately_without_opening_or_counting(self):
+        write(self.workspace / "lost+found/recovered.bin", 8192)
+        with patch.object(du, "ext4_recovery_directory", return_value=True) as recognize, \
+                self.deny_directories("lost+found"):
+            result = self.scan()
+        recognize.assert_called_once()
+        row = next(row for row in result["entries"] if row["name"] == "lost+found")
+        self.assertEqual(("excluded", "ext4_recovery", None, False, False, []),
+                         (row["state"], row["exclusion"], row["bytes"], row["selectable"],
+                          row["deletable"], row["errors"]))
+        self.assertTrue(result["complete"])
+        self.assertEqual({}, result["errors"])
+        self.assertEqual(result["filesHereBytes"] + sum(r["bytes"] or 0 for r in result["entries"]),
+                         result["totalBytes"])
+
+    def test_unproven_root_recovery_and_real_unreadable_user_paths_stay_partial(self):
+        for path in ("lost+found", "repos/unreadable", "repos/project/lost+found"):
+            with self.subTest(path=path):
+                directory = self.workspace / path
+                directory.mkdir(parents=True)
+                with patch.object(du, "ext4_recovery_directory", return_value=False), \
+                        self.deny_directories(directory.name):
+                    result = self.scan()
+                self.assertFalse(result["complete"])
+                self.assertEqual({"permission_denied": 1}, result["errors"])
+                directory.rmdir()
+
+    def test_root_recovery_exclusion_does_not_hide_nested_user_lost_found(self):
+        (self.workspace / "lost+found").mkdir()
+        (self.workspace / "repos/lost+found").mkdir()
+        with patch.object(du, "ext4_recovery_directory", return_value=True) as recognize, \
+                self.deny_directories("lost+found"):
+            result = self.scan()
+            nested = self.scan("repos")
+        recognize.assert_called_once()
+        self.assertFalse(result["complete"])
+        self.assertEqual({"permission_denied": 1}, result["errors"])
+        row = next(row for row in nested["entries"] if row["name"] == "lost+found")
+        self.assertEqual("unreadable", row["state"])
+        self.assertNotIn("exclusion", row)
+
+    def test_recovery_symlink_and_scratch_mount_never_use_metadata_recognition(self):
+        recovery = self.workspace / "lost+found"
+        recovery.symlink_to(self.outside, target_is_directory=True)
+        with patch.object(du, "ext4_recovery_directory") as recognize:
+            self.assertNotIn("lost+found", [row["name"] for row in self.scan()["entries"]])
+            recovery.unlink()
+            recovery.mkdir()
+            result = self.scan(scratch={str(recovery)})
+        recognize.assert_not_called()
+        row = next(row for row in result["entries"] if row["name"] == "lost+found")
+        self.assertEqual(("excluded", "scratch", ["separate_mount"]),
+                         (row["state"], row["storage"], row["errors"]))
+
+    def test_ext4_recognition_requires_kernel_mount_and_reserved_inode_evidence(self):
+        device = os.stat(self.workspace).st_dev
+        root = SimpleNamespace(st_dev=device, st_ino=2)
+        recovery = SimpleNamespace(st_dev=device, st_ino=11, st_mode=stat.S_IFDIR | 0o700,
+                                   st_uid=0, st_gid=0)
+        marker = SimpleNamespace(st_mode=stat.S_IFREG | 0o644, st_uid=0)
+        mount = f"42 1 {os.major(device)}:{os.minor(device)} / /managed\\040workspace rw - ext4 /dev/vdb rw\n"
+        cases = [
+            ("verified", {}, {}, {}, mount, "mnt_id:\t42\n", True),
+            ("not-filesystem-root", {"st_ino": 100}, {}, {}, mount, "mnt_id:\t42\n", False),
+            ("user-inode", {}, {"st_ino": 100}, {}, mount, "mnt_id:\t42\n", False),
+            ("user-owner", {}, {"st_uid": 2000}, {}, mount, "mnt_id:\t42\n", False),
+            ("writable-recovery", {}, {"st_mode": stat.S_IFDIR | 0o777}, {}, mount, "mnt_id:\t42\n", False),
+            ("different-device", {}, {"st_dev": device + 1}, {}, mount, "mnt_id:\t42\n", False),
+            ("symlink", {}, {"st_mode": stat.S_IFLNK | 0o777}, {}, mount, "mnt_id:\t42\n", False),
+            ("unsafe-marker", {}, {}, {"st_uid": 2000}, mount, "mnt_id:\t42\n", False),
+            ("marker-link", {}, {}, {"st_mode": stat.S_IFLNK | 0o777}, mount, "mnt_id:\t42\n", False),
+            ("not-ext4", {}, {}, {}, mount.replace("ext4", "xfs"), "mnt_id:\t42\n", False),
+            ("subtree-bind", {}, {}, {}, mount.replace(" / /managed", " /subtree /managed"), "mnt_id:\t42\n", False),
+            ("stale-mount", {}, {}, {}, mount, "mnt_id:\t43\n", False),
+            ("missing-mount-id", {}, {}, {}, mount, "", False),
+            ("malformed-mount-id", {}, {}, {}, mount, "mnt_id:\n", False),
+            ("malformed", {}, {}, {}, "42 1 malformed\n", "mnt_id:\t42\n", False),
+            ("same-device-bind", {}, {}, {}, mount +
+             f"43 42 {os.major(device)}:{os.minor(device)} / /managed\\040workspace/lost+found rw - ext4 /dev/vdb rw\n",
+             "mnt_id:\t42\n", False),
+            ("nested-mount", {}, {}, {}, mount +
+             "43 42 0:5 / /managed\\040workspace/lost+found/recovered rw - tmpfs tmpfs rw\n",
+             "mnt_id:\t42\n", False),
+        ]
+        for label, root_changes, recovery_changes, marker_changes, mounts, fdinfo, expected in cases:
+            with self.subTest(label=label), \
+                    patch.object(du.os, "stat", return_value=SimpleNamespace(**(vars(marker) | marker_changes))), \
+                    patch.object(du.os, "readlink", return_value="/managed workspace"), \
+                    patch("builtins.open", side_effect=[io.StringIO(fdinfo), io.StringIO(mounts)]):
+                self.assertEqual(expected, du.ext4_recovery_directory(
+                    123, SimpleNamespace(**(vars(root) | root_changes)),
+                    SimpleNamespace(**(vars(recovery) | recovery_changes))))
+        for operation in ("stat", "readlink"):
+            with self.subTest(operation=operation), patch.object(du.os, "stat", return_value=marker), \
+                    patch.object(du.os, operation, side_effect=PermissionError):
+                self.assertFalse(du.ext4_recovery_directory(123, root, recovery))
+        with patch.object(du.os, "stat", return_value=marker), \
+                patch.object(du.os, "readlink", return_value="/managed workspace"), \
+                patch("builtins.open", side_effect=PermissionError):
+            self.assertFalse(du.ext4_recovery_directory(123, root, recovery))
+
     def test_path_traversal_and_symlink_components_are_refused(self):
         for path in (["..", "outside"], ["repos/../.."], ["repos", ""], ["repos", "a\0b"]):
             with self.assertRaises(du.Refused):
@@ -186,6 +299,99 @@ class DiskUsageTests(unittest.TestCase):
         first, second = [json.loads(line) for line in output.getvalue().splitlines()]
         self.assertEqual("scan", first["mode"])
         self.assertEqual("protected_path", second["refused"])
+
+
+@unittest.skipUnless(os.environ.get("WORKSPACES_DISK_USAGE_GUEST") ==
+                     "RUN-DISK-USAGE-ON-DISPOSABLE-GUEST", "requires explicit disposable guest opt-in")
+class DiskUsageExt4GuestTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        marker = Path("/etc/workspaces-disposable-image-builder")
+        if os.geteuid() != 0 or not marker.is_file() or marker.is_symlink():
+            raise RuntimeError("Requires root in a marked disposable image-builder VM")
+        info = marker.stat()
+        if info.st_uid != 0 or info.st_mode & 0o022 or \
+                marker.read_text().strip() != "DESTROY-DISPOSABLE-IMAGE-BUILDER":
+            raise RuntimeError("Unsafe disposable image-builder marker")
+        subprocess.run(["systemd-detect-virt", "--vm"], check=True, capture_output=True)
+        if os.stat("/proc/self/ns/mnt").st_ino == os.stat("/proc/1/ns/mnt").st_ino:
+            raise RuntimeError("Run this test in a private mount namespace")
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(prefix="municode-disk-usage-ext4-", dir="/var/tmp")
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.root.chmod(0o755)
+        image = self.root / "fresh.ext4"
+        with image.open("xb") as stream:
+            stream.truncate(64 * 1024 * 1024)
+        subprocess.run(["mkfs.ext4", "-q", "-F", "-E", "nodiscard,lazy_itable_init=1,lazy_journal_init=1",
+                        str(image)], check=True, capture_output=True)
+        self.workspace = self.root / "workspace"
+        self.workspace.mkdir()
+        subprocess.run(["mount", "-t", "ext4", "-o", "loop,nodev,nosuid", str(image),
+                        str(self.workspace)], check=True, capture_output=True)
+        self.addCleanup(subprocess.run, ["umount", str(self.workspace)], check=True, capture_output=True)
+        self.assertEqual({"lost+found"}, {entry.name for entry in self.workspace.iterdir()})
+        (self.workspace / ".workspaces-volume.json").write_text(json.dumps(dict(
+            organizationId="guest", workspaceId="disposable", providerAccountId="guest",
+            location="guest", providerVolumeId="disposable-loop")))
+
+    def helper(self, mode="scan", path=None, expect=None):
+        def coding_user():
+            os.setgroups([])
+            os.setgid(du.CODING_UID)
+            os.setuid(du.CODING_UID)
+
+        payload = dict(mode=mode, workspace=str(self.workspace), path=path or [])
+        if expect is not None:
+            payload["expect"] = expect
+        process = subprocess.run([sys.executable, "-I", "-B", str(HERE / "disk_usage.py"),
+                                  json.dumps(payload)], cwd="/", preexec_fn=coding_user,
+                                 check=True, capture_output=True, text=True, timeout=45)
+        return json.loads(process.stdout)
+
+    def test_fresh_volume_and_unreadable_user_data_with_real_coding_user(self):
+        result = self.helper()
+        self.assertTrue(result["complete"])
+        self.assertEqual({}, result["errors"])
+        recovery = result["entries"][0]
+        self.assertEqual(("lost+found", "excluded", "ext4_recovery", None, False, False),
+                         (recovery["name"], recovery["state"], recovery["exclusion"], recovery["bytes"],
+                          recovery["selectable"], recovery["deletable"]))
+        self.assertEqual(result["filesHereBytes"], result["totalBytes"])
+        refused = self.helper("delete", ["lost+found", "recovered"], dict(dev=1, ino=1))
+        self.assertEqual("protected_path", refused["refused"])
+        repos = self.workspace / "repos"
+        repos.mkdir()
+        os.chown(repos, du.CODING_UID, du.CODING_UID)
+        for name in ("private-user-data", "lost+found"):
+            with self.subTest(name=name):
+                private = repos / name
+                private.mkdir(mode=0o700)
+                write(private / "user.bin", 8192)
+                result = self.helper()
+                self.assertFalse(result["complete"])
+                self.assertEqual({"permission_denied": 1}, result["errors"])
+                nested = self.helper(path=["repos"])
+                self.assertEqual(("unreadable", ["permission_denied"]),
+                                 (nested["entries"][0]["state"], nested["entries"][0]["errors"]))
+                self.assertNotIn("exclusion", nested["entries"][0])
+                (private / "user.bin").unlink()
+                private.rmdir()
+        bind = self.root / "bind-source"
+        bind.mkdir()
+        write(bind / "private.bin", 8192)
+        subprocess.run(["mount", "--bind", str(bind), str(self.workspace / "lost+found")],
+                       check=True, capture_output=True)
+        try:
+            result = self.helper()
+            row = next(row for row in result["entries"] if row["name"] == "lost+found")
+            self.assertNotIn("exclusion", row)
+            self.assertEqual(("excluded", None, ["separate_mount"]),
+                             (row["state"], row["bytes"], row["errors"]))
+        finally:
+            subprocess.run(["umount", str(self.workspace / "lost+found")], check=True, capture_output=True)
 
 
 class FakeProc:

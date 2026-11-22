@@ -126,6 +126,44 @@ def scratch_mountpoints(mountinfo=MOUNTINFO, scratch=SCRATCH_ROOT):
             point != scratch and not point.startswith(scratch.rstrip("/") + "/")}
 
 
+def ext4_recovery_directory(root_fd, root, info, mountinfo=MOUNTINFO):
+    """Recognize ext4's reserved recovery inode, not an arbitrary directory with its name."""
+    if root.st_ino != 2 or info.st_ino != 11 or info.st_dev != root.st_dev or \
+            not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_gid != 0 or \
+            info.st_mode & 0o022:
+        return False
+    try:
+        marker = os.stat(".workspaces-volume.json", dir_fd=root_fd, follow_symlinks=False)
+        if not stat.S_ISREG(marker.st_mode) or marker.st_uid != 0 or marker.st_mode & 0o022:
+            return False
+        point = os.readlink(f"/proc/self/fd/{root_fd}")
+        with open(f"/proc/self/fdinfo/{root_fd}", encoding="utf-8") as stream:
+            mount_id = next((fields[1] for fields in (line.split() for line in stream)
+                             if len(fields) == 2 and fields[0] == "mnt_id:"), None)
+        with open(mountinfo, encoding="utf-8", errors="surrogateescape") as stream:
+            rows = [line.split() for line in stream]
+    except OSError:
+        # Failure to prove metadata leaves the directory subject to ordinary scan errors.
+        return False
+    unescape = lambda value: re.sub(r"\\([0-7]{3})", lambda match: chr(int(match.group(1), 8)), value)
+    recovery = point.rstrip("/") + "/lost+found"
+    device = f"{os.major(root.st_dev)}:{os.minor(root.st_dev)}"
+    verified = False
+    for fields in rows:
+        if len(fields) < 10 or "-" not in fields[6:]:
+            continue
+        separator = fields.index("-", 6)
+        if separator + 3 >= len(fields):
+            continue
+        mounted = unescape(fields[4])
+        if mounted == recovery or mounted.startswith(recovery + "/"):
+            return False
+        if fields[0] == mount_id:
+            verified = (fields[2] == device and fields[3] == "/" and mounted == point and
+                        fields[separator + 1] == "ext4")
+    return verified
+
+
 class Walk:
     """Allocated-size accounting shared across one job; hard links count once."""
     def __init__(self, device, budget, skip=frozenset()):
@@ -310,6 +348,10 @@ def scan(workspace, components, expect=None, budget=None, scratch=None):
             if info.st_dev != root.st_dev:
                 row.update(state="excluded", selectable=False)
                 row["errors"].append("separate_mount")
+                continue
+            if not components and entry.name == "lost+found" and \
+                    ext4_recovery_directory(root_fd, root, info):
+                row.update(state="excluded", selectable=False, exclusion="ext4_recovery")
                 continue
             try:
                 fd = os.open(entry.name, DIRECTORY, dir_fd=fds[-1])
