@@ -81,7 +81,7 @@ internal static class SeedFiles
         var pending = path + ".pending";
         if (File.Exists(pending)) throw new CliCommandException(
             CliExitCodes.ValidationError,
-            "An interrupted seed write remains. Preserve operation.json and operation.pending; do not reset the mutation journal.");
+            "An interrupted seed write remains. Preserve operation.json and operation.json.pending; do not reset the mutation journal.");
         using (var stream = CreateNew(pending))
         {
             stream.Write(data);
@@ -156,9 +156,9 @@ internal sealed class SeedJournal : IDisposable
 
     public SeedState Load()
     {
-        SeedGuard.Require(!File.Exists(Path.Combine(DirectoryPath, "operation.pending")),
-            "An interrupted journal write remains. Preserve and reconcile operation.json plus operation.pending.");
         var path = Path.Combine(DirectoryPath, "operation.json");
+        SeedGuard.Require(!File.Exists(path + ".pending"),
+            "An interrupted journal write remains. Preserve and reconcile operation.json plus operation.json.pending.");
         SeedFiles.Check(path);
         var state = JsonSerializer.Deserialize<SeedState>(File.ReadAllText(path), Json)
             ?? throw new JsonException("The seed journal is empty.");
