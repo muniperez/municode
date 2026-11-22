@@ -341,13 +341,15 @@ if [ ! -s "$openbao_init" ]; then
         elif [ "$initialized" = "false" ]; then
             rm -f "$openbao_pending"
         else
-            reset_unconfigured_openbao
-            initialized=false
+            echo "OpenBao positively reports initialized but seed recovery output is invalid; preserving data for reconciliation." >&2
+            exit 1
         fi
     fi
     if [ ! -s "$openbao_init" ]; then
-        [ "$initialized" = "false" ] || reset_unconfigured_openbao
-        initialized=false
+        [ "$initialized" = "false" ] || {
+            echo "OpenBao positively reports initialized but no owned seed recovery record exists; preserving data." >&2
+            exit 1
+        }
         docker compose exec -T openbao \
             bao operator init -key-shares=1 -key-threshold=1 -format=json > "$openbao_pending"
         chmod 600 "$openbao_pending"
@@ -357,7 +359,7 @@ if [ ! -s "$openbao_init" ]; then
         }
         mv "$openbao_pending" "$openbao_init"
     fi
-elif [ "$initialized" != "true" ]; then
+elif [ "$initialized" = "false" ]; then
     reset_unconfigured_openbao
     rm -f "$openbao_init"
     docker compose exec -T openbao \
@@ -404,6 +406,7 @@ done
 docker compose up -d
 
 setup_token="$secrets_dir/bootstrap/setup-token"
+token_rotated_this_run=false
 valid_setup_token() {
     [ -f "$1" ] &&
     [ "$(stat -c %a "$1")" = "600" ] &&
@@ -427,6 +430,7 @@ if ! valid_setup_token "$setup_token"; then
             "{\"installationId\":\"$installation_id\",\"operationId\":\"first-owner\"}" |
             docker compose --profile maintenance run --rm --no-TTY api-bootstrap \
                 rotate-token --stdin --output-file /run/workspaces-bootstrap/setup-token
+        token_rotated_this_run=true
     fi
 fi
 valid_setup_token "$setup_token" || {
@@ -462,6 +466,7 @@ case "$token_decision" in
             "{\"installationId\":\"$installation_id\",\"operationId\":\"first-owner\"}" |
             docker compose --profile maintenance run --rm --no-TTY api-bootstrap \
                 rotate-token --stdin --output-file /run/workspaces-bootstrap/setup-token
+        token_rotated_this_run=true
         valid_setup_token "$setup_token" || {
             echo "The expired first-owner token could not be rotated safely." >&2
             exit 1
@@ -472,7 +477,14 @@ case "$token_decision" in
 esac
 install -d -m 700 "$(dirname "$setup_token_output")"
 if [ -e "$setup_token_output" ]; then
-    valid_setup_token "$setup_token_output" || rm -f "$setup_token_output"
+    if ! valid_setup_token "$setup_token_output"; then
+        rm -f "$setup_token_output"
+    elif ! cmp -s "$setup_token" "$setup_token_output"; then
+        [ "$token_rotated_this_run" = true ] || {
+            echo "The protected setup-token output conflicts with the current admission token." >&2
+            exit 1
+        }
+    fi
 fi
 cp "$setup_token" "$setup_token_output.pending"
 chmod 600 "$setup_token_output.pending"

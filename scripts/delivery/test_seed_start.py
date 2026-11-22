@@ -95,8 +95,12 @@ def exists(name):
 if args == ["compose", "version"]:
     raise SystemExit(0)
 if len(args) >= 3 and args[:2] == ["compose", "exec"] and "bao status" in " ".join(args):
-    if os.environ.get("UNKNOWN_OPENBAO_ALWAYS") == "1":
+    if os.environ.get("UNKNOWN_OPENBAO_ALWAYS") == "1" or os.environ.get(
+            "MALFORMED_OPENBAO_ALWAYS") == "1":
         print("temporarily unavailable")
+        raise SystemExit(0)
+    if os.environ.get("FORCE_OPENBAO_UNINITIALIZED") == "1":
+        print('{"initialized": false}')
         raise SystemExit(0)
     initialized = exists("openbao-initialized")
     print(f'{{"initialized": {str(initialized).lower()}}}')
@@ -110,6 +114,9 @@ if len(args) >= 3 and args[:2] == ["compose", "exec"] and "operator init" in " "
         print('{"unseal_keys_b64":["recovery-key"],"root_token":"root-token"}')
     raise SystemExit(0)
 if "openbao-configure" in " ".join(args):
+    if os.environ.get("FAIL_OPENBAO_CONFIGURE_ONCE") == "1" and not exists("openbao-configure-failed"):
+        touch("openbao-configure-failed")
+        raise SystemExit(42)
     (secrets / "openbao-approle" / "role-id").write_text("role")
     (secrets / "openbao-approle" / "secret-id").write_text("secret")
     raise SystemExit(0)
@@ -130,6 +137,12 @@ if "api-bootstrap" in " ".join(args) and "rotate-token" in args:
 if "api-bootstrap" in " ".join(args) and "status" in args:
     if os.environ.get("EXPIRED_SETUP_TOKEN") == "1" and not exists("token-rotated"):
         print('{"state":"required","expiresAt":"2000-01-01T00:00:00Z"}')
+    elif os.environ.get("NEAR_EXPIRY_SETUP_TOKEN") == "1" and not exists("token-rotated"):
+        expires = "2099-01-01T00:00:00Z"
+        if os.environ.get("NEAR_EXPIRY_SETUP_TOKEN") == "1":
+            from datetime import datetime, timedelta, timezone
+            expires = (datetime.now(timezone.utc) + timedelta(minutes=2)).isoformat()
+        print(f'{{"state":"required","expiresAt":"{expires}"}}')
     else:
         print('{"state":"required","expiresAt":"2099-01-01T00:00:00Z"}')
     raise SystemExit(0)
@@ -284,11 +297,46 @@ class SeedStartTests(unittest.TestCase):
         self.assertIn("valid readiness status", refused.stderr)
         self.assertFalse((self.state / "openbao-reset").exists())
 
+    def test_malformed_openbao_status_preserves_volume_and_recovery(self):
+        refused = self.run_seed(MALFORMED_OPENBAO_ALWAYS="1")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("valid readiness status", refused.stderr)
+        self.assertFalse((self.state / "openbao-reset").exists())
+
+    def test_positive_uninitialized_status_allows_owned_reset(self):
+        interrupted = self.run_seed(FAIL_OPENBAO_CONFIGURE_ONCE="1")
+        self.assertNotEqual(interrupted.returncode, 0)
+        self.assertTrue((self.secrets / "openbao-seed-init.json").exists())
+        self.assertFalse((self.secrets / "openbao-seed-configured").exists())
+
+        resumed = self.run_seed(FORCE_OPENBAO_UNINITIALIZED="1")
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertTrue((self.state / "openbao-reset").exists())
+
     def test_expired_first_owner_token_is_rotated_before_handoff(self):
+        initial = self.run_seed()
+        self.assertEqual(initial.returncode, 0, initial.stderr)
         completed = self.run_seed(EXPIRED_SETUP_TOKEN="1")
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertTrue((self.state / "token-rotated").exists())
         self.assertEqual(self.token.read_text(), "b" * 64 + "\n")
+
+    def test_near_expiry_first_owner_token_is_rotated_before_handoff(self):
+        initial = self.run_seed()
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        completed = self.run_seed(NEAR_EXPIRY_SETUP_TOKEN="1")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertTrue((self.state / "token-rotated").exists())
+        self.assertEqual(self.token.read_text(), "b" * 64 + "\n")
+
+    def test_setup_token_output_conflict_is_preserved_without_authorized_rotation(self):
+        completed = self.run_seed()
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.token.write_text("c" * 64 + "\n")
+        conflicted = self.run_seed()
+        self.assertNotEqual(conflicted.returncode, 0)
+        self.assertIn("conflicts with the current admission token", conflicted.stderr)
+        self.assertEqual(self.token.read_text(), "c" * 64 + "\n")
 
     def test_openbao_services_carry_the_reset_ownership_label(self):
         compose = (ROOT / "packaging" / "bundle" / "compose.yml").read_text()
