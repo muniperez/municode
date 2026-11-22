@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -56,6 +57,25 @@ def download(item, target):
     require(checksum.hexdigest() == item[algorithm], "Pinned artifact checksum mismatch")
 
 
+RUNTIME_FILES = ("runtime.py", "bootstrap.py", "issue-t3-session.py", "git-credential.py",
+                 "t3_connect.py", "t3-connect.html", "t3-connect.js", "t3-connect.css",
+                 "copilot_provider.py", "disk_usage.py", "t3_project_defaults.py",
+                 "storage_tiers.py", "scratch_mounts.py")
+SYSTEMD_FILES = ("workspaces-workspace.service", "workspaces-workspace-mount.service",
+                 "workspaces-t3.service", "workspaceswork.slice",
+                 "workspaces-t3-connect.service", "workspaces-t3-connect-activate.service",
+                 "workspaces-scratch-mounts.service", "workspaces-scratch-watch.service")
+PINNED_EXECUTABLE_FILES = (
+    "/opt/workspaces-node/bin/node", "/opt/workspaces-dotnet/dotnet",
+    "/opt/workspaces-tools/node_modules/@openai/codex/bin/codex.js",
+    "/opt/workspaces-copilot/copilot", "/opt/workspaces-muse/muse",
+    "/opt/workspaces-antigravity/agy_acp_server.par",
+    "/opt/workspaces-antigravity/localharness_external",
+    "/usr/local/bin/cloudflared", "/usr/local/bin/gh", "/usr/local/bin/glab",
+    "/usr/local/bin/copilot", "/usr/local/bin/claude", "/usr/local/bin/muse",
+)
+
+
 def install_systemd_units(source_directory, destination_directory):
     for source in source_directory.iterdir():
         destination = destination_directory / source.name
@@ -77,6 +97,46 @@ def install_storage_tiers(source_directory, runtime, root=Path("/")):
         shutil.copy2(source_directory / name, destination)
         os.chown(destination, 0, 0)
         destination.chmod(0o644)
+
+
+def write_image_manifest(lock, source_directory=HERE.parent, root=Path("/")):
+    """Record actual immutable inputs, checking source-managed copies before publication."""
+    runtime = "/opt/workspaces-workspace"
+    copies = [(source_directory / name, runtime + "/" + name) for name in RUNTIME_FILES]
+    copies += [(source_directory / "storage" / name, target.format(runtime=runtime))
+               for name, target in STORAGE_TIER_FILES]
+    copies += [(source_directory / "systemd" / name, "/etc/systemd/system/" + name)
+               for name in SYSTEMD_FILES]
+    copies += [(source_directory / "image/tools" / name, "/opt/workspaces-tools/" + name)
+               for name in ("package.json", "package-lock.json")]
+    files = {}
+
+    def record(path, source=None):
+        info = path.lstat()
+        require(path.is_absolute() and path.resolve() == path and stat.S_ISREG(info.st_mode)
+                and info.st_uid == 0 and not info.st_mode & 0o022,
+                "Unsafe installed immutable input: " + str(path))
+        with path.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        if source is not None:
+            with source.open("rb") as stream:
+                require(digest == hashlib.file_digest(stream, "sha256").hexdigest(),
+                        "Installed immutable input differs from source: " + str(path))
+        files[str(path)] = digest
+
+    for source, target in copies:
+        record(root / target.lstrip("/"), source)
+    for target in (*PINNED_EXECUTABLE_FILES,
+                   "/opt/workspaces-tools/" + lock["claude"]["executable"],
+                   "/opt/workspaces-t3/" + lock["t3"]["resourceMonitor"]["path"]):
+        record(root / target.lstrip("/"))
+    # The release's T3 directory is discovered during installation; record the real file,
+    # not the /usr/local/bin symlink which the native guard deliberately rejects.
+    t3 = (root / "usr/local/bin/t3").resolve(strict=True)
+    require(t3.is_relative_to(root / "opt/workspaces-t3"), "Unexpected installed T3 executable")
+    record(t3)
+    lock["provenance"]["installedImmutableInputs"] = {"files": files}
+    atomic_json(root / runtime.lstrip("/") / "image-manifest.json", lock)
 
 
 def install_copilot(lock, cache):
@@ -221,6 +281,8 @@ def install(source_revision, builder):
     tools.mkdir(exist_ok=True)
     for name in ("package.json", "package-lock.json"):
         shutil.copy2(HERE / "tools" / name, tools / name)
+        os.chown(tools / name, 0, 0)
+        (tools / name).chmod(0o644)
     run(["npm", "ci", "--prefix", str(tools), "--ignore-scripts", "--omit=dev"],
         env=dict(os.environ, HOME=str(cache), npm_config_cache=str(cache / "npm")), timeout=600)
     Path("/usr/local/bin/codex").symlink_to(tools / "node_modules/.bin/codex")
@@ -234,10 +296,9 @@ def install(source_revision, builder):
          "--no-create-home", "--shell", "/usr/sbin/nologin", "coding"])
     runtime = Path("/opt/workspaces-workspace")
     runtime.mkdir(exist_ok=True)
-    for name in ("runtime.py", "bootstrap.py", "issue-t3-session.py", "git-credential.py",
-                 "t3_connect.py", "t3-connect.html", "t3-connect.js", "t3-connect.css", "copilot_provider.py",
-                 "disk_usage.py", "t3_project_defaults.py", "storage_tiers.py", "scratch_mounts.py"):
+    for name in RUNTIME_FILES:
         shutil.copy2(HERE.parent / name, runtime / name)
+        os.chown(runtime / name, 0, 0)
         (runtime / name).chmod(0o755)
     install_storage_tiers(HERE.parent / "storage", runtime)
     install_systemd_units(HERE.parent / "systemd", Path("/etc/systemd/system"))
@@ -269,7 +330,7 @@ def install(source_revision, builder):
                               toolArtifactsVerified=True, headlessAuthOptionsChecked=True)
     lock["provenance"]["copilotStdioAcpVersionChecked"] = copilot["version"]
     lock["provenance"]["agentArtifactsVerified"] = [agent["id"] for agent in lock["agents"]]
-    atomic_json("/opt/workspaces-workspace/image-manifest.json", lock)
+    write_image_manifest(lock)
     shutil.rmtree(cache)
 
 
