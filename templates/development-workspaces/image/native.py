@@ -266,7 +266,7 @@ def bootstrap_with_local_enrollment(config, directory):
         enrollment.unlink(missing_ok=True)
 
 
-def initialize_codex_without_credentials(workspace, home):
+def initialize_codex_without_credentials(workspace, home, *, observe=None):
     binaries = list(Path("/opt/workspaces-tools/node_modules/@openai").glob("codex*/vendor/*/bin/codex"))
     check(len(binaries) == 1, "NATIVE_CODEX_EXECUTABLE_AMBIGUOUS")
     binary = binaries[0]
@@ -286,6 +286,10 @@ def initialize_codex_without_credentials(workspace, home):
         check(bool(ready), "CODEX_NATIVE_INITIALIZE_TIMEOUT")
         response = json.loads(process.stdout.readline(65537))
         check(response.get("id") == 1 and "result" in response, "CODEX_NATIVE_INITIALIZE_REJECTED")
+        if observe is not None:
+            check(process.poll() is None, "CODEX_NATIVE_EXITED_BEFORE_OBSERVATION")
+            observe(process)
+            check(process.poll() is None, "CODEX_NATIVE_EXITED_DURING_OBSERVATION")
         process.stdin.close()
         process.wait(timeout=15)
         check(process.returncode == 0, "CODEX_NATIVE_INITIALIZE_EXIT_FAILED")
@@ -300,6 +304,60 @@ def initialize_codex_without_credentials(workspace, home):
         if not process.stdin.closed:
             process.stdin.close()
         process.stdout.close()
+
+
+def retain_codex_arg0_links(workspace, home, run_id):
+    check(re.fullmatch(r"native-[a-f0-9]{32}", run_id), "BAD_CODEX_FIXTURE_RUN_ID")
+    codex_home = home / ".codex"
+    check(not (codex_home / "auth.json").exists() and
+          not (codex_home / "auth.json").is_symlink(), "CODEX_FIXTURE_CREDENTIALS_PRESENT")
+    arg0 = codex_home / "tmp/arg0-linux"
+    before = set(arg0.iterdir()) if arg0.exists() else set()
+    fixture = workspace / "artifacts" / ("native-codex-arg0-" + run_id)
+    observed = []
+
+    def observe(process):
+        check(arg0.is_dir() and not arg0.is_symlink() and
+              not arg0.parent.is_symlink(), "INVALID_CODEX_ARG0_DIRECTORY")
+        directories = [path for path in arg0.iterdir() if path not in before]
+        check(len(directories) == 1 and directories[0].is_dir() and
+              not directories[0].is_symlink(), "ACTUAL_CODEX_ARG0_DIRECTORY_MISSING")
+        for path in sorted(directories[0].iterdir()):
+            info = path.lstat()
+            if not stat.S_ISLNK(info.st_mode):
+                continue
+            target = os.readlink(path)
+            check(os.path.isabs(target) and info.st_uid == info.st_gid == 2000,
+                  "ACTUAL_CODEX_SYMLINK_METADATA_INVALID")
+            observed.append(dict(observedRelativePath=str(path.relative_to(workspace)),
+                relativePath=str((fixture / path.name).relative_to(workspace)), target=target,
+                uid=info.st_uid, gid=info.st_gid, mode=stat.S_IMODE(info.st_mode)))
+        check({Path(link["relativePath"]).name for link in observed} >=
+              {"codex-linux-sandbox", "apply_patch", "applypatch"},
+              "ACTUAL_CODEX_ABSOLUTE_SYMLINK_FIXTURE_MISSING")
+        check(process.poll() is None, "CODEX_NATIVE_EXITED_DURING_OBSERVATION")
+
+    initialize_codex_without_credentials(workspace, home, observe=observe)
+    # Codex owns and may remove its arg0 directory on exit; retain only observed link text.
+    fixture.mkdir(mode=0o700)
+    os.chown(fixture, 2000, 2000)
+    for link in observed:
+        path = workspace / link["relativePath"]
+        path.symlink_to(link["target"])
+        os.chown(path, link["uid"], link["gid"], follow_symlinks=False)
+        info = path.lstat()
+        check(os.readlink(path) == link["target"] and
+              (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) ==
+              (link["uid"], link["gid"], link["mode"]), "RETAINED_CODEX_LINK_METADATA_CHANGED")
+    evidence = dict(codexVersion="0.169.0", codingUid=2000,
+        codexHome=str(codex_home), workingDirectory=str(workspace),
+        transport="auth-free-local-app-server-stdio", observedWhileProcessRunning=True,
+        appServerExitedCleanly=True, fixtureKind="exact-copy-of-observed-arg0-symlinks",
+        links=observed)
+    manifest = workspace / "config/native-codex-arg0-links.json"
+    write_json(manifest, evidence)
+    os.chown(manifest, 2000, 2000)
+    return evidence
 
 
 def source_control_versions(path, lock):
@@ -792,6 +850,17 @@ class Native:
             env={"PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"})
         check(codex.returncode == 0 and "0.169.0" in codex.stdout and not codex.stderr.strip(),
               "CODEX_VERSION_NOT_WARNING_FREE_AS_CODING_USER")
+        self.fresh_authorization()
+        check(self.owns_runtime and self.config["vmId"] == self.run_id and
+              self.config["workspace"] == "/workspace" and
+              self.config["volume"]["owner"]["workspaceId"] == self.run_id,
+              "CODEX_RESTORE_FIXTURE_NOT_OWNED")
+        guarded_loop(self.device, self.directory / "fixture.ext4")
+        check(command(["findmnt", "-rn", "-M", "/workspace", "-o", "UUID"]) == fs_uuid and
+              json.loads(Path("/workspace/.workspaces-volume.json").read_text()) ==
+              self.config["volume"]["owner"], "CODEX_RESTORE_FIXTURE_MOUNT_CHANGED")
+        self.codex_link_fixture = retain_codex_arg0_links(
+            Path("/workspace"), Path("/workspace/home"), self.run_id)
         for name, value in (("config/native-user.json", '{"userCreated":true}\n'),
                             ("transcripts/native-user.txt", "representative-user-data\n"),
                             ("config/lost+found/.workspaces-volume.json", "nested user metadata-like file\n"),
@@ -811,6 +880,7 @@ class Native:
                 "codexHomeExists": True, "codexHomeUid": 2000, "codexHomeGid": 2000,
                 "codexHomeMode": "0700", "codexVersionAsCodingUid": "0.169.0",
                 "codexVersionStderrEmpty": True, "codexLoginNotRequiredForVersionProof": True,
+                "codexArg0LinkFixture": self.codex_link_fixture,
                 "enrollmentPeer": "synthetic-loopback-verified-TLS-only"}
 
     def retained_volume_remount(self):
@@ -1795,7 +1865,7 @@ class Native:
     def encrypted_restore(self):
         names = ("artifacts/native-input-seen", "config/native-user.json", "transcripts/native-user.txt",
                  "config/lost+found/.workspaces-volume.json", "artifacts/lost+found",
-                 "transcripts/.workspaces-volume.json")
+                 "transcripts/.workspaces-volume.json", "config/native-codex-arg0-links.json")
         mounted = self.directory / "restore-readback"
         restored = self.directory / "restore-target"
         backing = self.directory / "restore-target.ext4"
@@ -1819,12 +1889,16 @@ class Native:
             expected = {name: sha(mounted / name) for name in names}
             source_links = {str(path.relative_to(mounted)): os.readlink(path)
                             for path in mounted.rglob("*") if path.is_symlink()}
-            codex_links = {name: target for name, target in source_links.items()
-                           if name.startswith("home/.codex/tmp/arg0-linux/")}
-            check({Path(name).name for name in codex_links} >=
-                  {"codex-linux-sandbox", "apply_patch", "applypatch"} and
-                  all(os.path.isabs(target) for target in codex_links.values()),
-                  "ACTUAL_CODEX_ABSOLUTE_SYMLINK_FIXTURE_MISSING")
+            check(json.loads((mounted / "config/native-codex-arg0-links.json").read_text()) ==
+                  self.codex_link_fixture, "CODEX_LINK_FIXTURE_DOCUMENT_CHANGED")
+            codex_links = {link["relativePath"]: link["target"]
+                           for link in self.codex_link_fixture["links"]}
+            for link in self.codex_link_fixture["links"]:
+                info = (mounted / link["relativePath"]).lstat()
+                check(source_links.get(link["relativePath"]) == link["target"] and
+                      (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) ==
+                      (link["uid"], link["gid"], link["mode"]),
+                      "RETAINED_CODEX_LINK_METADATA_CHANGED")
             self.rt.validate_backup_tree(mounted)
             command(["age-keygen", "--output", str(key)])
             recipient = command(["age-keygen", "-y", str(key)])
@@ -1846,6 +1920,12 @@ class Native:
                             relative = member.name.removeprefix("data/")
                             check(relative in source_links and member.linkname == source_links[relative]
                                   and member.size == 0, "SYMLINK_TARGET_CONTENT_ARCHIVED")
+                            if relative in codex_links:
+                                observed = next(link for link in self.codex_link_fixture["links"]
+                                                if link["relativePath"] == relative)
+                                check((member.uid, member.gid, member.mode) ==
+                                      (observed["uid"], observed["gid"], observed["mode"]),
+                                      "ARCHIVED_CODEX_SYMLINK_METADATA_CHANGED")
                             archived_links[relative] = member.linkname
                 inspect_archive.stdout.read()
                 check(inspect_archive.wait(timeout=10) == 0, "BACKUP_ARCHIVE_DECRYPTION_FAILED")
@@ -1858,6 +1938,9 @@ class Native:
                   "PRODUCTION_WRITER_INCLUDED_ROOT_FILESYSTEM_METADATA")
             check(all("data/" + name in members for name in names), "NESTED_USER_DATA_OMITTED")
             check(archived_links == source_links, "SOURCE_SYMLINK_METADATA_NOT_ARCHIVED")
+            check(not any(member.startswith("data/" + name + "/")
+                          for name in source_links for member in members),
+                  "SYMLINK_TARGET_CONTENT_ARCHIVED")
             with backing.open("xb") as stream:
                 stream.truncate(512 * 1024**2)
             target_device = command(["losetup", "--find", "--show", "--nooverlap", str(backing)])
@@ -1941,6 +2024,9 @@ class Native:
                 check(link.is_symlink() and os.readlink(link) == target and
                       link.lstat().st_uid == link.lstat().st_gid == 2000,
                       "RESTORED_SYMLINK_METADATA_OR_OWNERSHIP_MISMATCH")
+            check(all(stat.S_IMODE((restored / link["relativePath"]).lstat().st_mode) ==
+                      link["mode"] for link in self.codex_link_fixture["links"]),
+                  "RESTORED_CODEX_SYMLINK_MODE_CHANGED")
             check(target_marker.read_bytes() == target_owner and
                   (target_marker.stat().st_ino, target_marker.stat().st_uid,
                    stat.S_IMODE(target_marker.stat().st_mode)) == marker_identity,
@@ -1958,6 +2044,7 @@ class Native:
                     "productionBackupTreeValidationUsed": True,
                     "allWorkspaceSymlinkMetadataRestored": True,
                     "actualCodexSymlinkCount": len(codex_links),
+                    "codexArg0LinkFixture": self.codex_link_fixture,
                     "actualCodexSymlinkMetadataRestored": True,
                     "symlinkTargetBytesNotArchived": True, "symlinkUidsAllCoding": True,
                     "representativeUserFilesAllCodingOwned": True,
