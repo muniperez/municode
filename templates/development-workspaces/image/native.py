@@ -1095,6 +1095,38 @@ class Native:
               "frozen " + expected in (WORK_CGROUP / "cgroup.events").read_text().splitlines(),
               "T3_UNEXPECTED_WORK_SLICE_FREEZER_STATE")
 
+    def kill_frozen_t3_cgroup(self, original_pid):
+        self.fresh_authorization()
+        check(self.owns_runtime, "T3_PROBE_RUNTIME_NOT_OWNED")
+        expected_parent = Path("/sys/fs/cgroup/workspaceswork.slice")
+        expected_child = expected_parent / "workspaces-t3.service"
+        check(T3_UNIT == "workspaces-t3.service" and WORK_CGROUP == expected_parent and
+              T3_CGROUP == expected_child and
+              WORK_CGROUP.resolve(strict=True) == expected_parent and
+              T3_CGROUP.resolve(strict=True) == expected_child, "T3_KILL_SCOPE_NOT_OWNED")
+        check(Path("/sys/fs/cgroup/cgroup.controllers").is_file(), "CGROUP_V2_REQUIRED")
+        parent_fd = os.open(WORK_CGROUP, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            child_fd = os.open(T3_UNIT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                               dir_fd=parent_fd)
+            try:
+                with os.fdopen(os.open("cgroup.kill", os.O_WRONLY | os.O_NOFOLLOW,
+                                       dir_fd=child_fd), "w") as kill:
+                    state = self.t3_unit()
+                    check(state["ActiveState"] == "active" and state["SubState"] == "running" and
+                          state["Job"] == "" and state["ControlPID"] == 0 and
+                          state["MainPID"] == original_pid, "T3_KILL_MAIN_PID_CHANGED")
+                    check(command(["systemctl", "show", T3_UNIT, "-p", "ControlGroup", "--value"]) ==
+                          "/workspaceswork.slice/workspaces-t3.service", "T3_KILL_SCOPE_NOT_OWNED")
+                    self.check_t3_pid(original_pid)
+                    self.check_t3_freezer(True)
+                    # Kill the monitor too without systemd 255's failing auxiliary-process signal.
+                    check(kill.write("1") == 1, "T3_CGROUP_KILL_WRITE_FAILED")
+            finally:
+                os.close(child_fd)
+        finally:
+            os.close(parent_fd)
+
     def t3_stays_stopped(self, *, frozen=False, failed=False, after_crash=False):
         # Check immediately and through an entire RestartSec=5 window.
         deadline = time.monotonic() + 6
@@ -1181,8 +1213,7 @@ class Native:
             if stop_at == "start-pre":
                 # In the disposable fixture, kill the monitor too. A remaining
                 # service cgroup lets systemd thaw its parent on a restart job.
-                self.check_t3_pid(before["MainPID"])
-                command(["systemctl", "kill", "--kill-whom=all", "--signal=SIGKILL", T3_UNIT])
+                self.kill_frozen_t3_cgroup(before["MainPID"])
             else:
                 self.signal_t3_main(signal.SIGKILL)
             during_delay = self.t3_restart_delay("signal")
@@ -1256,6 +1287,7 @@ class Native:
 
         frozen = {}
         for stop_at in ("before-freeze", "auto-restart", "start-pre"):
+            command(["systemctl", "reset-failed", unit])
             adapter.start_services()
             frozen[stop_at] = self.t3_frozen_stop(adapter, stop_at)
         evidence.update(frozenCrashThenRuntimeStopStaysStopped=True, frozenStopStages=frozen)
