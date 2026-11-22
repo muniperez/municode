@@ -82,7 +82,7 @@ kratos_password = (root / "kratos-db-password").read_text().strip()
 (root / "kratos.env").write_text(
     f"DSN=postgres://kratos:{kratos_password}@postgres:5432/kratos?sslmode=disable\n"
     f"SECRETS_COOKIE={secrets.token_hex(32)}\n"
-    f"SECRETS_CIPHER={secrets.token_hex(32)}\n"
+    f"SECRETS_CIPHER={secrets.token_urlsafe(24)}\n"
 )
 (root / "kratos.env").chmod(0o600)
 PY

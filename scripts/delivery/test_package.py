@@ -164,6 +164,18 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn("synthetic-contract", env)
         self.assertEqual(env.count("WORKSPACES_SECRETS_DIR="), 1)
 
+        kratos_env = secrets / "kratos.env"
+        cipher_values = [
+            line.partition(b"=")[2]
+            for line in kratos_env.read_bytes().splitlines()
+            if line.startswith(b"SECRETS_CIPHER=")
+        ]
+        self.assertEqual(len(cipher_values), 1)
+        self.assertEqual(len(cipher_values[0]), 32)
+        self.assertTrue(all(byte in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+                            for byte in cipher_values[0]))
+        self.assertEqual(kratos_env.stat().st_mode & 0o7777, 0o600)
+
 
 if __name__ == "__main__":
     unittest.main()
