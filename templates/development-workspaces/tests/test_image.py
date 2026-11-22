@@ -2,6 +2,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -341,6 +342,139 @@ class NativeRestoreTests(unittest.TestCase):
             native.restore_selected_files(self.archive({"config/settings.json": b"changed"}), expected, self.root)
         with self.assertRaisesRegex(native.ProbeError, "USER_BACKUP_MEMBER_MISSING"):
             native.restore_selected_files(self.archive({}), expected, self.root)
+
+
+class InstalledManifestTests(unittest.TestCase):
+    def setUp(self):
+        ARTIFACTS.mkdir(parents=True, exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(prefix="immutable-image-", dir=ARTIFACTS)
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.runtime = self.root / "opt/workspaces-workspace"
+        self.runtime.mkdir(parents=True)
+        self.manifest = self.runtime / "image-manifest.json"
+        self.lock = json.loads((HERE / "image/manifest.lock.json").read_text())
+        self.lock["provenance"]["sourceRevision"] = "a" * 40
+        self.owners = {}
+        original_lstat = Path.lstat
+
+        def root_owned(path, *args, **kwargs):
+            info = list(original_lstat(path, *args, **kwargs))
+            info[4] = self.owners.get(path, 0)
+            return os.stat_result(info)
+
+        ownership = patch.object(builder.Path, "lstat", autospec=True, side_effect=root_owned)
+        ownership.start()
+        self.addCleanup(ownership.stop)
+        # Only ownership is synthetic; copying, hashing, modes and JSON publication use real files.
+        with patch.object(builder.os, "chown"):
+            for name in builder.RUNTIME_FILES:
+                shutil.copy2(HERE / name, self.runtime / name)
+                (self.runtime / name).chmod(0o755)
+            builder.install_storage_tiers(HERE / "storage", "/opt/workspaces-workspace", self.root)
+            units = self.root / "etc/systemd/system"
+            units.mkdir(parents=True)
+            builder.install_systemd_units(HERE / "systemd", units)
+        tools = self.root / "opt/workspaces-tools"
+        tools.mkdir()
+        for name in ("package.json", "package-lock.json"):
+            shutil.copy2(HERE / "image/tools" / name, tools / name)
+            (tools / name).chmod(0o644)
+        for target in (*builder.PINNED_EXECUTABLE_FILES,
+                       "/opt/workspaces-tools/" + self.lock["claude"]["executable"],
+                       "/opt/workspaces-t3/" + self.lock["t3"]["resourceMonitor"]["path"],
+                       "/opt/workspaces-t3/release/t3"):
+            path = self.root / target.lstrip("/")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(("synthetic installed bytes: " + target).encode())
+            path.chmod(0o755)
+        (self.root / "usr/local/bin/t3").symlink_to("../../../opt/workspaces-t3/release/t3")
+
+    def write_manifest(self):
+        builder.write_image_manifest(self.lock, HERE, self.root)
+        return json.loads(self.manifest.read_text())
+
+    def test_manifest_records_actual_installed_bytes_and_canonical_t3_target(self):
+        unrelated = self.runtime / "unselected-user-data"
+        unrelated.write_bytes(b"not an immutable input")
+        manifest = self.write_manifest()
+        files = manifest["provenance"]["installedImmutableInputs"]["files"]
+        self.assertTrue(files)
+        self.assertEqual(manifest["provenance"]["sourceRevision"], "a" * 40)
+        for name, digest in files.items():
+            path = Path(name)
+            self.assertTrue(path.is_absolute() and path.resolve() == path and path.is_file())
+            self.assertFalse(path.is_symlink() or path.stat().st_mode & 0o022)
+            self.assertEqual(digest, hashlib.sha256(path.read_bytes()).hexdigest())
+        for name in ("runtime.py", "storage_tiers.py", "scratch_mounts.py", "t3-connect.js", "scratch.env"):
+            self.assertIn(str(self.runtime / name), files)
+        for name in native.UNIT_HASHES:
+            self.assertIn(str(self.root / "etc/systemd/system" / name), files)
+        for name in ("etc/tmpfiles.d/workspaces-scratch.conf",
+                     "etc/profile.d/workspaces-scratch.sh",
+                     "opt/workspaces-tools/package-lock.json", "opt/workspaces-node/bin/node",
+                     "opt/workspaces-t3/release/t3"):
+            self.assertIn(str(self.root / name), files)
+        self.assertNotIn(str(self.root / "usr/local/bin/t3"), files)
+        self.assertNotIn(str(unrelated), files)
+        self.assertNotIn(str(self.manifest), files)
+        executable = self.root / "usr/local/bin/gh"
+        executable.write_bytes(b"changed synthetic executable bytes")
+        updated = self.write_manifest()["provenance"]["installedImmutableInputs"]["files"]
+        self.assertNotEqual(files[str(executable)], updated[str(executable)])
+        self.assertEqual(updated[str(executable)], hashlib.sha256(executable.read_bytes()).hexdigest())
+
+    def test_source_copy_mismatches_block_without_publishing_manifest(self):
+        for name in ("opt/workspaces-workspace/runtime.py",
+                     "opt/workspaces-workspace/scratch_mounts.py",
+                     "opt/workspaces-workspace/t3-connect.js",
+                     "opt/workspaces-workspace/scratch.env",
+                     "etc/tmpfiles.d/workspaces-scratch.conf",
+                     "etc/profile.d/workspaces-scratch.sh",
+                     "etc/systemd/system/workspaces-t3.service",
+                     "opt/workspaces-tools/package-lock.json"):
+            with self.subTest(name=name):
+                path = self.root / name
+                original = path.read_bytes()
+                path.write_bytes(original + b"\nchanged installed bytes\n")
+                with self.assertRaisesRegex(builder.Blocked, "differs from source"):
+                    self.write_manifest()
+                self.assertFalse(self.manifest.exists())
+                path.write_bytes(original)
+
+    def test_unsafe_or_missing_inputs_do_not_replace_an_existing_manifest(self):
+        self.manifest.write_bytes(b"existing manifest sentinel")
+        path = self.root / "usr/local/bin/gh"
+        for mode, uid in ((0o775, 0), (0o757, 0), (0o755, 2000)):
+            with self.subTest(mode=mode, uid=uid):
+                path.chmod(mode)
+                self.owners[path] = uid
+                with self.assertRaisesRegex(builder.Blocked, "Unsafe installed immutable input"):
+                    self.write_manifest()
+                self.assertEqual(self.manifest.read_bytes(), b"existing manifest sentinel")
+        self.owners[path] = 0
+        path.unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.write_manifest()
+        path.symlink_to(self.root / "usr/local/bin/glab")
+        with self.assertRaisesRegex(builder.Blocked, "Unsafe installed immutable input"):
+            self.write_manifest()
+        self.assertEqual(self.manifest.read_bytes(), b"existing manifest sentinel")
+
+    def test_parent_aliases_and_t3_targets_outside_its_installation_are_rejected(self):
+        units = self.root / "etc/systemd/system"
+        units.rename(units.with_name("real-system"))
+        units.symlink_to("real-system", target_is_directory=True)
+        with self.assertRaisesRegex(builder.Blocked, "Unsafe installed immutable input"):
+            self.write_manifest()
+        units.unlink()
+        units.with_name("real-system").rename(units)
+        t3 = self.root / "usr/local/bin/t3"
+        t3.unlink()
+        t3.symlink_to("gh")
+        with self.assertRaisesRegex(builder.Blocked, "Unexpected installed T3 executable"):
+            self.write_manifest()
+        self.assertFalse(self.manifest.exists())
 
 
 class SourceControlInstallTests(unittest.TestCase):

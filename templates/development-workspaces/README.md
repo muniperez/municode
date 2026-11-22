@@ -170,6 +170,11 @@ Provider differences that affect isolation and operations:
 
 Installed manifest: `/opt/workspaces-workspace/image-manifest.json`, including actual dpkg
 versions, source revision, builder identity, artifact integrity and runtime CLI checks.
+The builder also writes `provenance.installedImmutableInputs.files`: canonical root-owned
+installed paths and their actual SHA-256 hashes for the curated runtime files, storage
+inputs, systemd units, npm locks, pinned executable entry points and T3 telemetry helper.
+Source-managed copies must match the staged source bytes exactly before the manifest is
+written. This evidence is checked by native qualification, not a qualification pass.
 This is a reproducible **input/toolchain recipe**, not a claim of byte-identical cloud
 snapshot disks. Package auto-updates are masked: patch by building/registering a new pinned
 image, not by silently changing an existing image. Toolchain installation happens only
