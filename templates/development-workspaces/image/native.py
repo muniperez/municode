@@ -929,6 +929,7 @@ class Native:
                 os.chown(directory, 2000, 2000)
             if data is None:
                 path.mkdir(mode=0o700, exist_ok=True)
+                os.chown(path, 2000, 2000)
                 path = path / "native-cache-entry"
                 data = "regenerable\n"
             path.write_text(data)
@@ -948,8 +949,11 @@ class Native:
         finally:
             # stop_services leaves workspaceswork.slice frozen; T3 must not start inside it.
             adapter.thaw()
+        # Earlier fault probes can exhaust the watcher's independent fixture budget.
+        command(["systemctl", "reset-failed", "workspaces-scratch-watch.service"])
         adapter.start_services()
         self.t3_recovered(previous)
+        self.wait(lambda: command(["systemctl", "is-active", "workspaces-scratch-watch.service"]) == "active")
         marker = Path(tiers.MARKER)
         check(tiers.read_marker(marker) is True and stat.S_IMODE(marker.stat().st_mode) == 0o600,
               "CACHE_MIGRATION_MARKER_NOT_WRITTEN")

@@ -11,6 +11,7 @@ import tempfile
 import sys
 import unittest
 import zipfile
+from contextlib import ExitStack, contextmanager
 from unittest.mock import Mock, patch
 
 
@@ -27,6 +28,101 @@ def load(name, filename):
 
 builder = load("generic_image_builder", "build.py")
 native = load("generic_native_qualification", "native.py")
+
+
+class NativeScratchFixtureTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self, directory, watcher="active"):
+        home = Path(directory) / "home"
+        home.mkdir(mode=0o700)
+        environ = Path(directory) / "environ"
+        environ.write_text("")
+        marker = Path(directory) / "migration-marker"
+        marker.touch()
+        tiers = Mock(SCRATCH="/synthetic-scratch", ENV_FILE="/synthetic-scratch.env", MARKER=str(marker))
+        tiers.load_environment.return_value = {}
+        tiers.scratch_ready.return_value = False
+        probe = native.Native.__new__(native.Native)
+        probe.storage_tiers = Mock(return_value=tiers)
+        probe.t3_unit = Mock(return_value={"MainPID": 123})
+        probe.rt = Mock()
+        probe.config = {}
+        adapter = probe.rt.Linux.return_value
+        events = []
+        adapter.stop_services.side_effect = lambda: events.append("stop")
+        adapter.thaw.side_effect = lambda: events.append("thaw")
+        adapter.start_services.side_effect = lambda: events.append("start")
+        probe.t3_recovered = Mock(side_effect=lambda pid: events.append(("recovered", pid)))
+        owners = {}
+        real_stat = os.stat
+
+        def path(*parts):
+            value = Path(*parts)
+            if value == Path("/workspace/home"):
+                return home
+            if value == Path("/proc/123/environ"):
+                return environ
+            return value
+
+        def file_stat(value, *args, **kwargs):
+            if os.fspath(value) == tiers.SCRATCH:
+                return Mock(st_dev=home.stat().st_dev + 1)
+            if os.fspath(value) == "/workspace":
+                return home.stat()
+            return real_stat(value, *args, **kwargs)
+
+        def command(argv, **kwargs):
+            if argv[:2] == ["systemctl", "show"]:
+                return tiers.ENV_FILE
+            if argv[:2] == ["systemctl", "reset-failed"]:
+                events.append(argv)
+            if argv[:2] == ["systemctl", "is-active"]:
+                events.append(argv)
+                return watcher
+            return ""
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(native, "Path", side_effect=path))
+            stack.enter_context(patch.object(native.os, "stat", side_effect=file_stat))
+            stack.enter_context(patch.object(native.os, "chown",
+                                            side_effect=lambda path, uid, gid: owners.update({path: (uid, gid)})))
+            stack.enter_context(patch.object(native.shutil, "which", return_value=None))
+            stack.enter_context(patch.object(native, "command", side_effect=command))
+            yield probe, adapter, home, owners, events
+
+    def test_cache_fixture_owns_private_leaf_directories_as_well_as_ancestors_and_files(self):
+        with tempfile.TemporaryDirectory(dir=ARTIFACTS) as directory:
+            with self.fixture(directory) as (probe, adapter, home, owners, _):
+                adapter.stop_services.side_effect = RuntimeError("fixture-created")
+                with self.assertRaisesRegex(RuntimeError, "fixture-created"):
+                    probe.scratch_tier()
+                leaves = list(home.rglob("native-cache-entry"))
+                self.assertEqual(len(leaves), 7)
+                for path in home.rglob("*"):
+                    self.assertEqual(owners.get(path), (2000, 2000), str(path))
+                    if path.is_dir():
+                        self.assertEqual(path.stat().st_mode & 0o777, 0o700, str(path))
+
+    def test_watcher_budget_reset_precedes_normal_t3_start_and_dependency_must_be_active(self):
+        for watcher in ("active", "failed"):
+            with self.subTest(watcher=watcher), tempfile.TemporaryDirectory(dir=ARTIFACTS) as directory, \
+                    self.fixture(directory, watcher) as (probe, _, _, _, events):
+
+                def wait(predicate):
+                    native.check(predicate(), "EXPECTED_NATIVE_STATE_TIMEOUT")
+                    raise RuntimeError("watcher-verified")
+
+                probe.wait = Mock(side_effect=wait)
+                error = RuntimeError if watcher == "active" else native.ProbeError
+                message = "watcher-verified" if watcher == "active" else "EXPECTED_NATIVE_STATE_TIMEOUT"
+                with self.assertRaisesRegex(error, message):
+                    probe.scratch_tier()
+                self.assertEqual(events, [
+                    "stop", "thaw",
+                    ["systemctl", "reset-failed", "workspaces-scratch-watch.service"],
+                    "start", ("recovered", 123),
+                    ["systemctl", "is-active", "workspaces-scratch-watch.service"],
+                ])
 
 
 class ImageTests(unittest.TestCase):
