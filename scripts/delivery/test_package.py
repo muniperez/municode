@@ -29,6 +29,11 @@ class PackageTests(unittest.TestCase):
             target = payload / binary
             target.write_text(f"synthetic {name}\n")
             if name == "cli":
+                target.unlink()
+                platform = payload / "linux-x64"
+                platform.mkdir()
+                target = platform / "municode"
+                target.write_text(f"synthetic {name}\n")
                 target.chmod(0o755)
             self.payloads[name] = payload
         self.output = self.root / "output"
@@ -70,8 +75,12 @@ class PackageTests(unittest.TestCase):
             self.assertTrue(any(name.endswith("/runtime/worker/Workspaces.Worker.dll") for name in names))
             self.assertTrue(any(name.endswith("/runtime/gateway/Workspaces.Gateway.dll") for name in names))
             self.assertTrue(any(name.endswith("/dashboard/index.html") for name in names))
-            self.assertTrue(any(name.endswith("/cli/municode") for name in names))
+            self.assertTrue(any(name.endswith("/cli/linux-x64/municode") for name in names))
+            self.assertTrue(any(name.endswith("/cli/linux-x64/workspaces") for name in names))
             self.assertTrue(any(name.endswith("/install.sh") for name in names))
+            seed_installer = next(member for member in bundle.getmembers()
+                                  if member.name.endswith("/seed-start.sh"))
+            self.assertTrue(seed_installer.mode & 0o100)
             self.assertTrue(all(not member.issym() and not member.islnk() for member in bundle.getmembers()))
 
     def test_manifest_records_component_digests_and_no_floating_dependencies(self):

@@ -25,7 +25,7 @@
       "project": "src/Workspaces.Cli/Workspaces.Cli.csproj",
       "artifact": "municode",
       "rids": ["linux-x64", "linux-arm64", "osx-arm64", "win-x64"],
-      "integration": "Merged self-contained executable project consumed by delivery release targets."
+      "integration": "Merged self-contained executable project consumed by delivery release targets; package adds the workspaces command alias."
     }
   }
 }

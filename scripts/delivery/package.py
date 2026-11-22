@@ -78,6 +78,24 @@ def component_inventory(root: Path) -> dict[str, object]:
     }
 
 
+def add_cli_aliases(root: Path, targets: dict[str, object]) -> None:
+    for rid in targets["components"]["cli"]["rids"]:
+        directory = root / rid
+        if not directory.exists():
+            continue
+        if rid == "win-x64":
+            binary = directory / "municode.exe"
+            alias = directory / "workspaces.cmd"
+            if binary.is_file() and not alias.exists():
+                alias.write_bytes(b'@echo off\r\n"%~dp0municode.exe" %*\r\n')
+        else:
+            binary = directory / "municode"
+            alias = directory / "workspaces"
+            if binary.is_file() and not alias.exists():
+                alias.write_text('#!/bin/sh\nexec "$(dirname "$0")/municode" "$@"\n')
+                alias.chmod(0o755)
+
+
 def validate_targets() -> dict[str, object]:
     targets = json.loads(TARGETS.read_text())
     require(targets.get("schemaVersion") == 1, "Unsupported package target schema.")
@@ -192,6 +210,8 @@ def package(args: argparse.Namespace) -> Path:
         for name, (relative, source) in components.items():
             destination = root / relative
             copy_tree(source, destination)
+            if name == "cli":
+                add_cli_aliases(destination, targets)
             inventories[name] = component_inventory(destination)
 
         manifest = {
