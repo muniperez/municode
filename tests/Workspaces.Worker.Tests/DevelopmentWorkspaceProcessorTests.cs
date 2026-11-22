@@ -257,6 +257,11 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
                 { Port = 8080, SupervisedUnit = "workspaces-preview-static.service" };
         await db.SaveChangesAsync();
 
+        if (ephemeral)
+        {
+            await Hop("ssh-ready");
+            await Hop("bootstrap");
+        }
         await Hop("bootstrap");
 
         Assert.NotNull(runtime.BootstrapConfiguration);
@@ -296,6 +301,8 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         runtime.RecoverySourceChanged = remoteChanged;
         await db.SaveChangesAsync();
 
+        await Hop("ssh-ready");
+        await Hop("bootstrap");
         await Hop("bootstrap");
 
         Assert.Equal(recovery, Assert.Single(runtime.VerifiedRecoverySources));
@@ -1563,6 +1570,16 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
 
     private sealed class FakeRuntime : IWorkspaceRuntimeTransport
     {
+        public Queue<Exception?> SshConnectResults { get; } = [];
+        public List<WorkspaceRuntimeTarget> SshReadinessTargets { get; } = [];
+        public Task<bool> CheckSshReadinessAsync(WorkspaceRuntimeTarget target, CancellationToken ct)
+        {
+            SshReadinessTargets.Add(target);
+            var error = SshConnectResults.Count > 0 ? SshConnectResults.Dequeue() : null;
+            if (error is null) return Task.FromResult(true);
+            if (WorkspaceRuntimeTransport.IsTemporarySshConnectFailure(error)) return Task.FromResult(false);
+            throw error;
+        }
         public bool ConnectAdmitted { get; set; } = true;
         public bool FailConnectExport { get; set; }
         public int ConnectAdmissionChecks { get; private set; }
@@ -1583,6 +1600,7 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         public bool FailRead { get; set; }
         public bool FailReceipt { get; set; }
         public JsonElement? BootstrapConfiguration { get; private set; }
+        public int BootstrapCalls { get; private set; }
         public Func<WorkspaceRuntimeTarget, JsonElement, Task>? Enroll { get; set; }
         public bool RecoverySourceChanged { get; set; }
         public List<DevelopmentWorkspaceGitRecoverySource> VerifiedRecoverySources { get; } = [];
@@ -1661,6 +1679,7 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         }
         public async Task<JsonElement> BootstrapAsync(WorkspaceRuntimeTarget target, object config, object enrollment, CancellationToken ct)
         {
+            BootstrapCalls++;
             BootstrapConfiguration = JsonSerializer.SerializeToElement(config, Json);
             if (Enroll is null) throw new InvalidOperationException("Bootstrap was not expected in this stage.");
             await Enroll(target, JsonSerializer.SerializeToElement(enrollment, Json));
