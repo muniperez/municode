@@ -61,11 +61,24 @@ try {
   browser = await chromium.launch({ headless: true });
   const failures = [];
   const mutations = [];
-  async function fixture(role = "owner", viewport = { width: 1280, height: 900 }) {
+  const githubSubmissions = [];
+  async function fixture(role = "owner", viewport = { width: 1280, height: 900 }, github = {}) {
     const context = await browser.newContext({ viewport });
+    const connection = organizationId => {
+      const status = github[organizationId] ?? "not_configured";
+      return { organizationId, status, ...(status === "not_configured" ? {} : {
+        connectionId: `${organizationId}-connection`, ownerLogin: "fixture-owner", ownerType: "User",
+        ...(status === "connected" ? { installationId: 123 } : {}),
+      }) };
+    };
     await context.route("**/*", async route => {
       const request = route.request();
       const url = new URL(request.url());
+      if (url.origin === "https://github.com" && request.method() === "POST" && url.pathname === "/settings/apps/new") {
+        githubSubmissions.push({ state: url.searchParams.get("state"), body: request.postData() });
+        await route.fulfill({ contentType: "text/html", body: "<title>Fixture GitHub</title><p>Fixture GitHub manifest form received.</p>" });
+        return;
+      }
       if (url.origin !== origin) {
         failures.push(`External request blocked: ${url.origin}`);
         await route.abort();
@@ -75,8 +88,22 @@ try {
       let body;
       if (request.method() !== "GET") {
         mutations.push({ path: url.pathname, body: request.postDataJSON() });
+        const connectionAction = url.pathname.match(/^\/api\/github-apps\/(org-[a-z]+)-connection(?:\/(disconnect))?$/);
         if (url.pathname === "/api/github-apps/complete" || url.pathname === "/api/github-apps/installation") {
-          body = { organizationId: "org-callback", status: url.pathname.endsWith("/complete") ? "app_created" : "connected" };
+          github["org-callback"] = url.pathname.endsWith("/complete") ? "app_created" : "connected";
+          body = connection("org-callback");
+        } else if (url.pathname === "/api/github-apps/setup") {
+          const { organizationId } = request.postDataJSON();
+          github[organizationId] = "setup_pending";
+          body = { connectionId: `${organizationId}-connection`, postUrl: "https://github.com/settings/apps/new?state=fresh-fixture-state",
+            manifest: { name: "Fixture App", default_permissions: { contents: "write", pull_requests: "write", metadata: "read" } } };
+        } else if (connectionAction?.[2] === "disconnect" && request.method() === "POST") {
+          github[connectionAction[1]] = "disconnected";
+          body = connection(connectionAction[1]);
+        } else if (connectionAction && !connectionAction[2] && request.method() === "DELETE") {
+          delete github[connectionAction[1]];
+          await route.fulfill({ status: 204 });
+          return;
         } else {
           failures.push(`Unexpected mutation: ${url.pathname}`);
           await route.abort();
@@ -93,7 +120,9 @@ try {
       } else if (url.pathname.startsWith("/api/account/flows/settings")) {
         body = { flow: settingsFlow, session: null };
       } else if (url.pathname === "/api/github-apps") {
-        body = { organizationId: url.searchParams.get("organizationId"), status: "not_configured" };
+        body = connection(url.searchParams.get("organizationId"));
+      } else if (/^\/api\/github-apps\/org-[a-z]+-connection\/repositories$/.test(url.pathname)) {
+        body = [{ id: 1, fullName: "fixture-owner/test-repo", private: true }];
       } else if (["/api/development-workspaces", "/api/providers", "/api/provider-types", "/api/plans", "/api/api-keys"].includes(url.pathname)) {
         body = [];
       } else {
@@ -160,12 +189,23 @@ try {
   for (const callback of ["callback", "installed"]) {
     const query = callback === "callback" ? "code=synthetic-code" : "installation_id=123";
     await page.goto(`${origin}/settings/github/${callback}?connectionId=fixture-connection&state=synthetic-state&${query}`);
-    await expect(page.getByRole("status")).toContainText("GitHub status:");
+    const main = page.locator("main");
+    await expect(page.locator("aside").getByRole("link", { name: "Workspaces", exact: true })).toBeVisible();
     assert.equal(new URL(page.url()).search, "");
-    await page.getByRole("link", { name: "Return to GitHub settings" }).click();
+    if (callback === "callback") {
+      await expect(main.getByText("GitHub App registered", { exact: true })).toBeVisible();
+      await expect(main.getByRole("button", { name: "Install App / select repositories", exact: true })).toBeVisible();
+      await expect(main.getByText("GitHub connected", { exact: true })).toHaveCount(0);
+    } else {
+      await expect(main.getByText("GitHub connected", { exact: true })).toBeVisible();
+      await expect(main.getByRole("status")).toContainText("fixture-owner");
+      await expect(main.getByText("fixture-owner/test-repo (private)", { exact: true })).toBeVisible();
+      await page.screenshot({ path: join(artifacts, "github-connected-callback.png") });
+    }
+    await main.getByRole("link", { name: callback === "callback" ? "Open GitHub settings" : "View or manage connection", exact: true }).click();
     await expect(dialog.getByRole("button", { name: "GitHub", exact: true })).toBeFocused();
-    await expect(dialog.getByRole("button", { name: "Set up GitHub", exact: true })).toBeVisible();
-    await expect(page.getByRole("status")).toContainText("not_configured");
+    await expect(dialog.getByRole("status")).toContainText(callback === "callback" ? "app_created" : "connected");
+    if (callback === "installed") await expect(dialog.getByText("fixture-owner/test-repo (private)", { exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("button", { name: /Municode Workspaces Callback workspace/ })).toBeVisible();
     assert.equal(new URL(page.url()).search, "");
@@ -173,7 +213,33 @@ try {
   assert.deepEqual(mutations.map(mutation => mutation.path), ["/api/github-apps/complete", "/api/github-apps/installation"]);
   assert.equal(await page.evaluate(() => Object.values(localStorage).concat(Object.values(sessionStorage))
     .some(value => /synthetic-(?:code|state|csrf)|fixture-connection/.test(value))), false);
+  await page.goto(`${origin}/settings/github/installed?connectionId=org-callback-connection&installation_id=123&setup_action=update`);
+  await expect(page.locator("main").getByText("GitHub installation updated", { exact: true })).toBeVisible();
+  await expect(page.locator("main").getByText("fixture-owner/test-repo (private)", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Missing callback context|start again/)).toHaveCount(0);
+  assert.equal(mutations.length, 2);
   await context.close();
+  {
+    const { context, page } = await fixture("owner", undefined, { "org-fixture": "setup_pending" });
+    page.on("dialog", dialog => dialog.accept());
+    await page.goto(`${origin}/workspaces?settings=github`);
+    const dialog = page.getByRole("dialog", { name: "Settings", exact: true });
+    await expect(dialog.getByRole("status")).toContainText("setup_pending");
+    await expect(dialog.getByText(/We didn’t find an App Manifest for your request/).first()).toBeVisible();
+    await expect(dialog.getByRole("link", { name: "Check GitHub App settings", exact: true })).toHaveAttribute("href", "https://github.com/settings/apps");
+    await expect(dialog.getByText("GitHub connected", { exact: true })).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Discard pending attempt", exact: true }).click();
+    await expect(dialog.getByRole("status")).toContainText("not_configured");
+    await dialog.getByLabel("GitHub owner login").fill("fixture-owner");
+    await dialog.getByRole("button", { name: "Set up GitHub", exact: true }).click();
+    await expect(page).toHaveTitle("Fixture GitHub");
+    assert.deepEqual(mutations.slice(2).map(mutation => mutation.path),
+      ["/api/github-apps/org-fixture-connection/disconnect", "/api/github-apps/org-fixture-connection", "/api/github-apps/setup"]);
+    assert.equal(githubSubmissions.length, 1);
+    assert.equal(githubSubmissions[0].state, "fresh-fixture-state");
+    assert.match(decodeURIComponent(githubSubmissions[0].body), /"metadata":"read"/);
+    await context.close();
+  }
   for (const role of ["admin", "developer", "viewer"]) {
     const { context, page } = await fixture(role);
     await page.goto(`${origin}/workspaces?settings=plans`);
@@ -213,7 +279,7 @@ try {
     await context.close();
   }
   assert.deepEqual(failures, []);
-  console.log("Settings browser acceptance passed: desktop/narrow entry points, keyboard/focus, preserved view, callback and permissions; only fixture APIs contacted.");
+  console.log("Settings browser acceptance passed: desktop/narrow entry points, keyboard/focus, preserved view, GitHub callbacks in the dashboard layout, pending-attempt retry and permissions; only fixture APIs contacted.");
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));
