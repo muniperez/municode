@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MPL-2.0
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tarfile
@@ -109,6 +110,53 @@ class PackageTests(unittest.TestCase):
         for service in ("api:", "worker:", "workspace-gateway:", "caddy:", "postgres:",
                         "openbao:", "kratos:", "dashboard"):
             self.assertIn(service, compose + caddy)
+
+    def test_packaged_caddy_pins_gateway_routes_to_dedicated_proxy_network(self):
+        subprocess.run(self.command(), check=True, capture_output=True, text=True)
+        archive = next(self.output.glob("*.tar.gz"))
+        with tarfile.open(archive, "r:gz") as bundle:
+            prefix = "municode-workspaces-0.0.0-test/"
+            caddy = bundle.extractfile(prefix + "Caddyfile").read().decode()
+            compose = bundle.extractfile(prefix + "compose.yml").read().decode()
+
+        self.assertEqual(
+            re.findall(r"(?m)^\s*ask\s+(\S+)\s*$", caddy),
+            ["http://172.31.20.3:8080/internal/certificate"],
+        )
+        workspace_route = caddy.split("https:// {", 1)[1]
+        self.assertEqual(
+            re.findall(r"(?m)^\s*reverse_proxy\s+(\S+)", workspace_route),
+            ["172.31.20.3:8080"],
+        )
+        self.assertNotIn("workspace-gateway:8080", caddy)
+        self.assertIn("on_demand_tls {", caddy)
+        self.assertIn("\ttls {\n\t\ton_demand\n\t}", workspace_route)
+
+        gateway = compose.split("\n  workspace-gateway:\n", 1)[1].split("\n  caddy:\n", 1)[0]
+        proxy = compose.split("\n  caddy:\n", 1)[1].split("\nsecrets:\n", 1)[0]
+        for service, address in ((gateway, "172.31.20.3"), (proxy, "172.31.20.2")):
+            with self.subTest(address=address):
+                self.assertIn(
+                    "    networks:\n"
+                    "      private: {}\n"
+                    "      workspace-gateway-proxy:\n"
+                    f"        ipv4_address: {address}\n",
+                    service,
+                )
+        self.assertIn(
+            "      DevelopmentWorkspaceGateway__TrustedProxyAddress: 172.31.20.2\n",
+            gateway,
+        )
+        networks = compose.split("\nnetworks:\n", 1)[1]
+        self.assertIn(
+            "  workspace-gateway-proxy:\n"
+            "    labels: *installation-labels\n"
+            "    driver: bridge\n"
+            "    ipam:\n"
+            "      config:\n"
+            "        - subnet: 172.31.20.0/24\n",
+            networks,
+        )
 
     def test_archive_checksum_is_present(self):
         subprocess.run(self.command(), check=True, capture_output=True, text=True)
