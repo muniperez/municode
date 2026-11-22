@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -12,7 +13,7 @@ import sys
 import unittest
 import zipfile
 from contextlib import ExitStack, contextmanager
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 
 HERE = Path(__file__).resolve().parents[1]
@@ -596,6 +597,137 @@ class NativeRestoreTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="native-restore-", dir=ARTIFACTS)
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+
+    def codex_fixture(self, targets=None, *, running=True):
+        home = self.root / "home"
+        (home / ".codex").mkdir(parents=True)
+        (self.root / "artifacts").mkdir()
+        (self.root / "config").mkdir()
+        run_id = "native-" + "a" * 32
+        original = home / ".codex/tmp/arg0-linux/codex-observed"
+        outside = self.root / "outside"
+        outside.write_bytes(b"never copy or chown target contents")
+        targets = targets or {name: str(outside) for name in
+                              ("apply_patch", "applypatch", "codex-linux-sandbox")}
+
+        def initialize(workspace, coding_home, *, observe):
+            self.assertEqual((workspace, coding_home), (self.root, home))
+            original.mkdir(parents=True)
+            for name, target in targets.items():
+                (original / name).symlink_to(target)
+            observe(Mock(poll=Mock(return_value=None if running else 0)))
+            shutil.rmtree(original)
+
+        lstat = Path.lstat
+
+        def coding_lstat(path, *args, **kwargs):
+            info = lstat(path, *args, **kwargs)
+            if stat.S_ISLNK(info.st_mode):
+                values = list(info)
+                values[4:6] = [2000, 2000]
+                return os.stat_result(values)
+            return info
+
+        return home, run_id, original, outside, initialize, coding_lstat
+
+    def test_codex_fixture_retains_documented_live_links_after_guard_cleanup_without_traversal(self):
+        home, run_id, original, outside, initialize, coding_lstat = self.codex_fixture()
+        with patch.object(native, "initialize_codex_without_credentials", side_effect=initialize), \
+                patch.object(native.Path, "lstat", autospec=True, side_effect=coding_lstat), \
+                patch.object(native.os, "chown") as chown:
+            evidence = native.retain_codex_arg0_links(self.root, home, run_id)
+        self.assertFalse(original.exists())
+        self.assertEqual(outside.read_bytes(), b"never copy or chown target contents")
+        self.assertEqual(json.loads((self.root / "config/native-codex-arg0-links.json").read_text()),
+                         evidence)
+        self.assertEqual(len(evidence["links"]), 3)
+        for link in evidence["links"]:
+            retained = self.root / link["relativePath"]
+            self.assertTrue(retained.is_symlink())
+            self.assertEqual(os.readlink(retained), str(outside))
+            self.assertEqual(link["observedRelativePath"],
+                             str((original / retained.name).relative_to(self.root)))
+            self.assertEqual((link["uid"], link["gid"], link["mode"]), (2000, 2000, 0o777))
+            chown.assert_any_call(retained, 2000, 2000, follow_symlinks=False)
+        self.assertFalse(any(call.args[0] == outside for call in chown.call_args_list))
+
+    def test_codex_fixture_rejects_missing_relative_or_exited_observations(self):
+        cases = [
+            ({"apply_patch": "/outside"}, True, "ACTUAL_CODEX_ABSOLUTE_SYMLINK_FIXTURE_MISSING"),
+            ({"apply_patch": "../outside"}, True, "ACTUAL_CODEX_SYMLINK_METADATA_INVALID"),
+            (None, False, "CODEX_NATIVE_EXITED_DURING_OBSERVATION"),
+        ]
+        for targets, running, code in cases:
+            with self.subTest(code=code), tempfile.TemporaryDirectory(dir=ARTIFACTS) as directory:
+                self.root = Path(directory)
+                home, run_id, _, _, initialize, coding_lstat = self.codex_fixture(
+                    targets, running=running)
+                with patch.object(native, "initialize_codex_without_credentials", side_effect=initialize), \
+                        patch.object(native.Path, "lstat", autospec=True, side_effect=coding_lstat), \
+                        patch.object(native.os, "chown"), self.assertRaisesRegex(native.ProbeError, code):
+                    native.retain_codex_arg0_links(self.root, home, run_id)
+                self.assertEqual(list((self.root / "artifacts").iterdir()), [])
+
+    def test_codex_fixture_refuses_credentials_before_launch(self):
+        home, run_id, _, _, _, _ = self.codex_fixture()
+        (home / ".codex/auth.json").write_text('{"synthetic":true}')
+        with patch.object(native, "initialize_codex_without_credentials") as initialize, \
+                self.assertRaisesRegex(native.ProbeError, "CODEX_FIXTURE_CREDENTIALS_PRESENT"):
+            native.retain_codex_arg0_links(self.root, home, run_id)
+        initialize.assert_not_called()
+
+    def test_codex_stdio_observation_precedes_eof_and_uses_only_coding_environment(self):
+        binary = MagicMock(spec=Path)
+        binary.__str__.return_value = "/synthetic-pinned/vendor/bin/codex"
+        binary.is_file.return_value = True
+        binary.is_symlink.return_value = False
+        binary.stat.return_value = Mock(st_uid=0, st_mode=0o755)
+        process = Mock()
+        process.stdin = io.StringIO()
+        process.stdout = io.StringIO('{"id":1,"result":{}}\n')
+        process.poll.side_effect = [None, None, 0]
+        process.returncode = 0
+
+        def observe(child):
+            self.assertIs(child, process)
+            self.assertFalse(child.stdin.closed)
+            self.assertEqual(json.loads(child.stdin.getvalue())["method"], "initialize")
+
+        with patch.object(native.Path, "glob", return_value=[binary]), \
+                patch.object(native.subprocess, "Popen", return_value=process) as launch, \
+                patch.object(native.select, "select", return_value=([process.stdout], [], [])):
+            native.initialize_codex_without_credentials(self.root, self.root / "home", observe=observe)
+        argv = launch.call_args.args[0]
+        self.assertEqual(argv, ["setpriv", "--reuid=2000", "--regid=2000", "--clear-groups",
+                               str(binary), "app-server", "--listen", "stdio://"])
+        self.assertEqual(launch.call_args.kwargs["env"], {
+            "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            "HOME": str(self.root / "home"), "CODEX_HOME": str(self.root / "home/.codex")})
+        self.assertEqual(launch.call_args.kwargs["cwd"], self.root)
+        self.assertTrue(process.stdin.closed)
+        process.wait.assert_any_call(timeout=15)
+        process.terminate.assert_not_called()
+
+    def test_codex_observation_failure_stops_only_its_child_and_escalates_timeout(self):
+        binary = MagicMock(spec=Path)
+        binary.is_file.return_value = True
+        binary.is_symlink.return_value = False
+        binary.stat.return_value = Mock(st_uid=0, st_mode=0o755)
+        process = Mock()
+        process.stdin = io.StringIO()
+        process.stdout = io.StringIO('{"id":1,"result":{}}\n')
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired("codex", 5), 0]
+        with patch.object(native.Path, "glob", return_value=[binary]), \
+                patch.object(native.subprocess, "Popen", return_value=process), \
+                patch.object(native.select, "select", return_value=([process.stdout], [], [])), \
+                self.assertRaisesRegex(native.ProbeError, "OBSERVATION_FAILED"):
+            native.initialize_codex_without_credentials(
+                self.root, self.root / "home",
+                observe=Mock(side_effect=native.ProbeError("OBSERVATION_FAILED")))
+        process.terminate.assert_called_once()
+        process.kill.assert_called_once()
+        self.assertTrue(process.stdin.closed and process.stdout.closed)
 
     def archive(self, files, link=False):
         output = io.BytesIO()
