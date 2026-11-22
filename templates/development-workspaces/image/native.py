@@ -1287,6 +1287,7 @@ class Native:
 
         frozen = {}
         for stop_at in ("before-freeze", "auto-restart", "start-pre"):
+            command(["systemctl", "reset-failed", unit])
             adapter.start_services()
             frozen[stop_at] = self.t3_frozen_stop(adapter, stop_at)
         evidence.update(frozenCrashThenRuntimeStopStaysStopped=True, frozenStopStages=frozen)

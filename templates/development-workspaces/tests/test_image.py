@@ -30,6 +30,64 @@ native = load("generic_native_qualification", "native.py")
 
 
 class ImageTests(unittest.TestCase):
+    def test_t3_recovery_resets_independent_frozen_fixtures_not_budget_retries(self):
+        probe = native.Native.__new__(native.Native)
+        adapter = Mock()
+        probe.rt = Mock()
+        probe.rt.Linux.return_value = adapter
+        probe.config = {}
+        events = []
+        adapter.start_services.side_effect = lambda: events.append("start")
+        probe.t3_ready = Mock(return_value={"MainPID": 123, "NRestarts": 0})
+        probe.signal_t3_main = Mock(side_effect=lambda sig: events.append(sig.name) or 123)
+        probe.t3_recovered = Mock()
+        probe.check_t3_freezer = Mock()
+        probe.t3_unit = Mock(return_value={"NRestarts": 1})
+        probe.t3_restart_delay = Mock(side_effect=[
+            {}, {}, {}, *({"NRestarts": count} for count in range(5))])
+        probe.t3_frozen_stop = Mock(side_effect=lambda _, stage: events.append(stage) or {})
+        probe.t3_stays_stopped = Mock(return_value={"NRestarts": 5, "Result": "signal"})
+        probe.wait_t3 = Mock(side_effect=[
+            {"ExecMainCode": 1, "ExecMainStatus": 130},
+            *({"ActiveState": "active", "NRestarts": count} for count in range(1, 5)),
+            {"ActiveState": "failed", "NRestarts": 5},
+        ])
+        policy = dict(Restart="on-failure", RestartUSec="5s", OOMPolicy="stop",
+                      StartLimitBurst="5", StartLimitIntervalUSec="5min",
+                      KillMode="process", SendSIGKILL="no")
+
+        def command(argv):
+            self.assertEqual(argv[0], "systemctl")
+            self.assertEqual(argv[2], native.T3_UNIT)
+            if argv[1] == "show":
+                return policy[argv[4]]
+            self.assertIn(argv[1], ("reset-failed", "restart", "stop"))
+            events.append(argv[1])
+            return ""
+
+        with tempfile.TemporaryDirectory(dir=ARTIFACTS) as directory:
+            cgroup = Path(directory)
+            (cgroup / "memory.max").write_text("max")
+            with patch.object(native, "T3_CGROUP", cgroup), \
+                    patch.object(native, "command", side_effect=command), \
+                    patch.object(native.time, "monotonic", return_value=0):
+                evidence = probe.t3_recovery()
+
+        self.assertEqual(events, [
+            "reset-failed", "SIGKILL", "SIGKILL", "stop",
+            "reset-failed", "start", "before-freeze",
+            "reset-failed", "start", "auto-restart",
+            "reset-failed", "start", "start-pre",
+            "start", "SIGINT",
+            "start", "reset-failed", "restart",
+            "SIGKILL", "SIGKILL", "SIGKILL", "SIGKILL", "SIGKILL",
+            "reset-failed", "start",
+        ])
+        self.assertEqual(list(evidence["frozenStopStages"]),
+                         ["before-freeze", "auto-restart", "start-pre"])
+        self.assertEqual(evidence["crashesUntilBudgetExhausted"], 5)
+        probe.t3_stays_stopped.assert_any_call(failed=True)
+
     def recovery_probe(self, inventories, status_changes=None):
         probe = native.Native.__new__(native.Native)
         probe.client = Mock()
