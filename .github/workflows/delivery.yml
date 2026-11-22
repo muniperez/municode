@@ -90,10 +90,25 @@ jobs:
             --install-root "$PWD/.local/artifacts/install/release" \
             --secrets-dir "$PWD/.local/artifacts/install/secrets"
           grep -F 'workspaces' .local/artifacts/package/release-manifest.json
+          dashboard_probe="$PWD/scripts/delivery/probe_dashboard.py"
           cd .local/artifacts/install/release
           project="runtime-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cat > dashboard-probe.yml <<'YAML'
+          services:
+            caddy:
+              environment:
+                CONSOLE_HOSTNAME: http://localhost
+                API_HOSTNAME: http://api.localhost
+                API_URL: https://api.localhost
+                WORKSPACES_SOURCE_URL: https://github.com/muniperez/municode
+              ports: !override
+                - "127.0.0.1::80"
+              networks: !override
+                - private
+          YAML
           compose() {
-            docker compose --project-name "$project" --env-file .env -f compose.yml "$@"
+            docker compose --project-name "$project" --env-file .env \
+              -f compose.yml -f dashboard-probe.yml "$@"
           }
           trap 'compose down --volumes --remove-orphans' EXIT
           for service in api-migrate api worker workspace-gateway; do
@@ -101,6 +116,18 @@ jobs:
             printf '%s\n' "$output"
             printf '%s\n' "$output" | grep -F 'Microsoft.NETCore.App '
           done
+          compose up -d --no-deps caddy
+          address=$(compose port caddy 80)
+          console_url="http://localhost:${address##*:}"
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail "$console_url/" -o /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          python3 -B "$dashboard_probe" --console-url "$console_url" \
+            --api-origin https://api.localhost \
+            --source-url https://github.com/muniperez/municode
 
   images:
     runs-on: ubuntu-24.04
