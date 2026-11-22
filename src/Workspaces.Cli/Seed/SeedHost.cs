@@ -158,13 +158,17 @@ install -d -m 0700 __REMOTE__
             + " && [ \"$(find " + Quote(archiveRoot + ".pending")
             + " -mindepth 1 -maxdepth 1 -type d | wc -l)\" -eq 1 ]"
             + " && python3 -B \"$pending_root/verify_bundle.py\""
-            + " && touch \"$pending_root/../.verified\""
+            + " && printf '%s' " + Quote(state.Plan.Release.BundleSha256)
+            + " > \"$pending_root/../.verified\""
             + " && mv " + Quote(archiveRoot + ".pending") + " " + Quote(archiveRoot)
             + "; fi"
             + " && bundle_root=$(find " + Quote(archiveRoot) + " -mindepth 1 -maxdepth 1 -type d -print -quit)"
             + " && [ -n \"$bundle_root\" ] && [ \"$(find " + Quote(archiveRoot)
             + " -mindepth 1 -maxdepth 1 -type d | wc -l)\" -eq 1 ]"
             + " && [ -f " + Quote(archiveRoot + "/.verified") + " ]"
+            + " && [ \"$(cat " + Quote(archiveRoot + "/.verified") + ")\" = "
+            + Quote(state.Plan.Release.BundleSha256) + " ]"
+            + " && python3 -B \"$bundle_root/verify_bundle.py\""
             + " && \"$bundle_root/seed-start.sh\" " + config
             + " --release-root \"$bundle_root\""
             + " --install-root /opt/municode/workspaces"
@@ -276,6 +280,12 @@ install -d -m 0700 __REMOTE__
         string local,
         CancellationToken cancellationToken)
     {
+        var expectedResult = await SshAsync(state, directory,
+            "sha256sum " + Quote(remote) + " | cut -d ' ' -f 1", cancellationToken);
+        SeedGuard.Require(expectedResult.ExitCode == 0
+            && Regex.IsMatch(expectedResult.Output.Trim(), "^[0-9a-f]{64}$"),
+            "The remote first-owner token hash could not be established over pinned SSH.");
+        var expectedHash = expectedResult.Output.Trim();
         var args = StrictOptions(directory).Where(option => option != "-T")
             .Concat(["-i", Path.Combine(directory, "id_ed25519"),
                 "root@" + state.Server!.Address + ":" + remote, local + ".pending"])
@@ -289,13 +299,17 @@ install -d -m 0700 __REMOTE__
             File.SetUnixFileMode(local + ".pending",
                 UnixFileMode.UserRead | UnixFileMode.UserWrite);
         SeedFiles.Check(local + ".pending");
-        var pending = File.ReadAllText(local + ".pending").Trim();
-        SeedGuard.Require(Regex.IsMatch(pending, "^[0-9a-f]{64}$"),
-            "The downloaded first-owner setup token is incomplete or malformed.");
+        var pendingBytes = File.ReadAllBytes(local + ".pending");
+        ValidateSetupTokenBytes(pendingBytes);
+        SeedGuard.Require(Convert.ToHexStringLower(SHA256.HashData(
+                pendingBytes)) == expectedHash,
+            "The downloaded first-owner setup token hash differs from the pinned remote value.");
         if (File.Exists(local))
         {
             SeedFiles.Check(local);
-            SeedGuard.Require(File.ReadAllText(local).Trim() == pending,
+            var existingBytes = File.ReadAllBytes(local);
+            ValidateSetupTokenBytes(existingBytes);
+            SeedGuard.Require(CryptographicOperations.FixedTimeEquals(existingBytes, pendingBytes),
                 "The first-owner setup token changed across resume. Reconcile setup state; no token replacement was accepted.");
             File.Delete(local + ".pending");
             return;
@@ -303,6 +317,15 @@ install -d -m 0700 __REMOTE__
         File.Move(local + ".pending", local);
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(local, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+    }
+
+    private static void ValidateSetupTokenBytes(byte[] value)
+    {
+        SeedGuard.Require(value.Length == 65 && value[^1] == (byte)'\n'
+            && value.AsSpan(0, 64).ToArray().All(character =>
+                character is >= (byte)'0' and <= (byte)'9'
+                    or >= (byte)'a' and <= (byte)'f'),
+            "The downloaded first-owner setup token is not exactly 64 lowercase hexadecimal bytes followed by one LF.");
     }
 
     private async Task<SeedProcessResult> RequireAsync(

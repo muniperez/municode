@@ -80,6 +80,7 @@ services:
 
   openbao:
     image: ${WORKSPACES_OPENBAO_IMAGE:?set WORKSPACES_OPENBAO_IMAGE}
+    labels: *installation-labels
     restart: unless-stopped
     command: ["server", "-config=/etc/openbao/server.hcl"]
     environment:
@@ -140,6 +141,7 @@ services:
 
   openbao-agent:
     image: ${WORKSPACES_OPENBAO_IMAGE:?set WORKSPACES_OPENBAO_IMAGE}
+    labels: *installation-labels
     restart: unless-stopped
     command: ["agent", "-config=/etc/openbao/agent.hcl"]
     environment:
