@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Workspaces.Api/Workspaces.Api.csproj" />
+    <Project Path="src/Workspaces.Cli/Workspaces.Cli.csproj" />
+    <Project Path="src/Workspaces.Common/Workspaces.Common.csproj" />
+    <Project Path="src/Workspaces.Gateway/Workspaces.Gateway.csproj" />
+    <Project Path="src/Workspaces.Worker/Workspaces.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Workspaces.Cli.Tests/Workspaces.Cli.Tests.csproj" />
+    <Project Path="tests/Workspaces.Gateway.Tests/Workspaces.Gateway.Tests.csproj" />
+    <Project Path="tests/Workspaces.Tests/Workspaces.Tests.csproj" />
+    <Project Path="tests/Workspaces.Worker.Tests/Workspaces.Worker.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/workspace-gateway-benchmark/WorkspaceGatewayBenchmark.csproj" />
+  </Folder>
+</Solution>

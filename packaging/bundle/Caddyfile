@@ -1,0 +1,57 @@
+{
+	log {
+		exclude http.log.error
+	}
+	on_demand_tls {
+		ask http://172.31.20.3:8080/internal/certificate
+	}
+}
+
+{$API_HOSTNAME} {
+	encode zstd gzip
+	@internal path /internal/workspace-gateway /internal/workspace-gateway/*
+	respond @internal 404
+	reverse_proxy api:8080
+}
+
+{$CONSOLE_HOSTNAME} {
+	encode zstd gzip
+	root * /srv/workspaces-dashboard
+	handle /runtime-config.json {
+		header {
+			Content-Type application/json
+			Cache-Control no-store
+		}
+		respond ` {
+			"apiBaseUrl": "{$API_URL}",
+			"sourceUrl": "{$WORKSPACES_SOURCE_URL}",
+			"auth": {
+				"origin": "{$API_URL}",
+				"capabilitiesUrl": "{$API_URL}/api/account/capabilities"
+			}
+		}	`
+	}
+	handle {
+		header /settings/github/* {
+			Referrer-Policy no-referrer
+			Cache-Control no-store
+		}
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+https:// {
+	tls {
+		on_demand
+	}
+	@workspace host *.{$WORKSPACES_GATEWAY_DOMAIN}
+	handle @workspace {
+		reverse_proxy 172.31.20.3:8080 {
+			header_up X-Forwarded-Proto https
+		}
+	}
+	handle {
+		respond 404
+	}
+}

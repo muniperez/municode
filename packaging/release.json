@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "product": "municode-workspaces",
+  "images": {
+    "caddy": "caddy@sha256:25a0097607868fb05a89a5ab9fea2f2ea4cecdc89d887d7dcee8c778a21b9e1f",
+    "kratos": "oryd/kratos@sha256:fe2428f103a6240c064b6ea77d3088610865c55fcebccb30355857eccdc25b4b",
+    "openbao": "openbao/openbao@sha256:62f582f85e405ef00d48f678c19863d096a2bc0c05e0e5a9bbccd676a1c7316c",
+    "postgres": "postgres@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139",
+    "dotnet": "mcr.microsoft.com/dotnet/aspnet@sha256:12b1135f5f8b3c0a214f2a680ff2033dff4f684f445d6c697d9524ceeb303586"
+  }
+}

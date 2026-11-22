@@ -1,0 +1,142 @@
+name: Workspaces delivery
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - t3/extract-coding-workspace-module
+
+permissions:
+  contents: read
+
+concurrency:
+  group: delivery-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: |
+            **/*.csproj
+            **/packages.lock.json
+      - name: Verify ignored release output and package contracts
+        run: |
+          git check-ignore .local/artifacts/probe
+          python3 -B -m unittest discover -s scripts/delivery -p 'test_*.py' -v
+      - name: Build and test the runtime
+        run: |
+          dotnet clean Workspaces.slnx -c Release
+          dotnet build Workspaces.slnx -c Release
+          dotnet test Workspaces.slnx -c Release --no-build \
+            --results-directory .local/artifacts/test-results
+      - name: Verify guest runtime tests
+        run: |
+          templates/development-workspaces/test.sh
+          python3 -B templates/development-workspaces/image/test-t3-candidate.py
+      - name: Validate the Compose interface
+        run: |
+          secrets="$PWD/.local/artifacts/compose-smoke/secrets"
+          mkdir -p "$secrets/ssh" "$secrets/bootstrap" "$secrets/openbao-approle"
+          for file in postgres-admin-password app-db-password kratos-db-password \
+              workspace-gateway-credential ssh/worker-key openbao-server.crt \
+              openbao-server.key openbao-ca.crt \
+              openbao-approle/role-id openbao-approle/secret-id; do
+            printf '%s\n' synthetic > "$secrets/$file"
+          done
+          printf '%s\n' \
+            'DSN=postgres://kratos:synthetic@postgres:5432/kratos?sslmode=disable' \
+            'SECRETS_COOKIE=synthetic' \
+            'SECRETS_CIPHER=synthetic' > "$secrets/kratos.env"
+          WORKSPACES_SECRETS_DIR="$secrets" docker compose \
+            -f packaging/bundle/compose.yml \
+            --env-file packaging/bundle/.env.example config --quiet
+      - name: Smoke-test the packaged dashboard and CLI handoff
+        run: |
+          set -eu
+          root=.local/artifacts/package-smoke
+          mkdir -p "$root/api" "$root/worker" "$root/gateway" "$root/dashboard" "$root/cli"
+          dotnet publish src/Workspaces.Api -c Release --no-build \
+            -o "$root/api"
+          dotnet publish src/Workspaces.Worker -c Release --no-build \
+            -o "$root/worker"
+          dotnet publish src/Workspaces.Gateway -c Release --no-build \
+            -o "$root/gateway"
+          npm ci --prefix modules/dashboard
+          npm test --prefix modules/dashboard -- --run
+          npm run build --prefix modules/dashboard
+          cp -R .local/artifacts/dashboard-dist/. "$root/dashboard/"
+          dotnet publish src/Workspaces.Cli/Workspaces.Cli.csproj -c Release \
+            --runtime linux-x64 --self-contained true \
+            -o "$root/cli/linux-x64"
+          python3 -B scripts/delivery/package.py \
+            --version 0.0.0-ci --source "$GITHUB_SHA" --rid linux-x64 \
+            --api "$root/api" --worker "$root/worker" --gateway "$root/gateway" \
+            --dashboard "$root/dashboard" --cli "$root/cli" \
+            --output .local/artifacts/package
+          tar -xzf .local/artifacts/package/municode-workspaces-0.0.0-ci-linux-x64.tar.gz \
+            -C .local/artifacts/package
+          .local/artifacts/package/municode-workspaces-0.0.0-ci/cli/linux-x64/workspaces \
+            help seed | grep -F 'workspaces seed plan'
+          mkdir -p .local/artifacts/install
+          .local/artifacts/package/municode-workspaces-0.0.0-ci/install.sh \
+            --install-root "$PWD/.local/artifacts/install/release" \
+            --secrets-dir "$PWD/.local/artifacts/install/secrets"
+          grep -F 'workspaces' .local/artifacts/package/release-manifest.json
+          dashboard_probe="$PWD/scripts/delivery/probe_dashboard.py"
+          cd .local/artifacts/install/release
+          project="runtime-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cat > dashboard-probe.yml <<'YAML'
+          services:
+            caddy:
+              environment:
+                CONSOLE_HOSTNAME: http://localhost
+                API_HOSTNAME: http://api.localhost
+                API_URL: https://api.localhost
+                WORKSPACES_SOURCE_URL: https://github.com/muniperez/municode
+              ports: !override
+                - "127.0.0.1::80"
+              networks: !override
+                - private
+          YAML
+          compose() {
+            docker compose --project-name "$project" --env-file .env \
+              -f compose.yml -f dashboard-probe.yml "$@"
+          }
+          trap 'compose down --volumes --remove-orphans' EXIT
+          for service in api-migrate api worker workspace-gateway; do
+            output=$(compose run --rm --no-deps -T "$service" --info)
+            printf '%s\n' "$output"
+            printf '%s\n' "$output" | grep -F 'Microsoft.NETCore.App '
+          done
+          compose up -d --no-deps caddy
+          address=$(compose port caddy 80)
+          console_url="http://localhost:${address##*:}"
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail "$console_url/" -o /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          python3 -B "$dashboard_probe" --console-url "$console_url" \
+            --api-origin https://api.localhost \
+            --source-url https://github.com/muniperez/municode
+
+  images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build current runtime image targets
+        run: |
+          docker build --file src/Workspaces.Api/Dockerfile --tag municode-api:ci .
+          docker build --file src/Workspaces.Worker/Dockerfile --tag municode-workspaces-worker:ci .
+          docker build --file src/Workspaces.Gateway/Dockerfile --tag municode-workspaces-gateway:ci .

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "components": {
+    "api": {
+      "project": "src/Workspaces.Api/Workspaces.Api.csproj",
+      "artifact": "Workspaces.Api.dll",
+      "image": "ghcr.io/muniperez/municode-api"
+    },
+    "worker": {
+      "project": "src/Workspaces.Worker/Workspaces.Worker.csproj",
+      "artifact": "Workspaces.Worker.dll",
+      "image": "ghcr.io/muniperez/municode-workspaces-worker"
+    },
+    "gateway": {
+      "project": "src/Workspaces.Gateway/Workspaces.Gateway.csproj",
+      "artifact": "Workspaces.Gateway.dll",
+      "image": "ghcr.io/muniperez/municode-workspaces-gateway"
+    },
+    "dashboard": {
+      "project": "modules/dashboard/package.json",
+      "artifactDirectory": ".local/artifacts/dashboard-dist",
+      "integration": "Merged dashboard static build consumed by delivery package targets."
+    },
+    "cli": {
+      "project": "src/Workspaces.Cli/Workspaces.Cli.csproj",
+      "artifact": "municode",
+      "rids": ["linux-x64", "linux-arm64", "osx-arm64", "win-x64"],
+      "integration": "Merged self-contained executable project consumed by delivery release targets; package adds the workspaces command alias."
+    }
+  }
+}
