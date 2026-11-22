@@ -179,6 +179,149 @@ class ManagedT3StopTests(unittest.TestCase):
         self.assertEqual(self.events[2:5], [["stop", self.unit], ["wait"], ["freeze"]])
 
 
+class ManagedStopThawTests(unittest.TestCase):
+    unit = "workspaces-t3.service"
+    slice = "workspaceswork.slice"
+
+    def setUp(self):
+        self.adapter = rt.Linux(dict(workspace="/workspace"))
+        self.commands = []
+        self.observations = 0
+        self.clock = 0
+        self.thaw_error = subprocess.CalledProcessError(
+            1, ["systemctl", "thaw", self.slice], stderr="private systemctl reason")
+
+    def stop(self, proofs=(("frozen 0", "running"),), thaw_error=True,
+             evidence_error=None, stop_error=None, stopped=True, query_delay=0):
+        def systemctl(argv, **kwargs):
+            self.commands.append(argv[1:])
+            if argv[1] == "thaw" and thaw_error:
+                raise self.thaw_error
+            if argv[1] == "stop" and stop_error and ("--no-block" in argv) == (stop_error == "queue"):
+                raise subprocess.CalledProcessError(1, argv)
+            if "FreezerState" in argv:
+                self.assertGreater(kwargs["timeout"], 0)
+                self.assertLessEqual(kwargs["timeout"], 1)
+                if evidence_error == "systemctl":
+                    raise subprocess.CalledProcessError(1, argv)
+                if evidence_error == "timeout":
+                    raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+                state = proofs[min(self.observations, len(proofs) - 1)][1]
+                self.observations += 1
+                self.clock += query_delay
+                return SimpleNamespace(stdout=state)
+            if argv[1] == "show":
+                state = ManagedT3StopTests.stopped | ({} if stopped else dict(Job="42"))
+                return SimpleNamespace(stdout="\n".join(f"{key}={value}" for key, value in state.items()))
+            return SimpleNamespace(stdout="")
+
+        def events(path, *args, **kwargs):
+            self.assertEqual(str(path), "/sys/fs/cgroup/workspaceswork.slice/cgroup.events")
+            if evidence_error == "missing":
+                raise FileNotFoundError(str(path))
+            if evidence_error == "permission":
+                raise PermissionError(str(path))
+            return proofs[min(self.observations, len(proofs) - 1)][0] + "\n"
+
+        def sleep(seconds):
+            self.clock += seconds
+
+        with patch.object(rt.subprocess, "run", side_effect=systemctl), \
+                patch.object(Path, "read_text", autospec=True, side_effect=events) as read, \
+                patch.object(rt.time, "monotonic", side_effect=lambda: self.clock), \
+                patch.object(rt.time, "sleep", side_effect=sleep), \
+                patch.object(self.adapter, "t3_cgroup_empty", return_value=True), \
+                patch.object(self.adapter, "freeze", side_effect=lambda: self.commands.append(["freeze"])):
+            self.adapter.stop_services()
+            return read.call_count
+
+    def assert_original_thaw_refusal(self, **kwargs):
+        with self.assertRaises(rt.Blocked) as caught:
+            self.stop(**kwargs)
+        self.assertIs(caught.exception.__cause__, self.thaw_error)
+        self.assertNotIn(["stop", self.unit], self.commands)
+        self.assertEqual(self.commands[-1], ["freeze"])
+        return caught.exception
+
+    def test_normal_thaw_needs_no_reconciliation(self):
+        self.assertEqual(self.stop(thaw_error=False), 0)
+        self.assertEqual(self.commands[:4], [["stop", "--no-block", self.unit],
+                                          ["thaw", self.slice], ["stop", self.unit], ["freeze"]])
+        self.assertEqual(self.observations, 0)
+
+    def test_pending_stop_already_thawed_by_systemd_continues_and_refreezes(self):
+        self.assertEqual(self.stop(), 1)
+        self.assertEqual(self.commands[:5], [["stop", "--no-block", self.unit],
+                                          ["thaw", self.slice],
+                                          ["show", self.slice, "-p", "FreezerState", "--value"],
+                                          ["stop", self.unit], ["freeze"]])
+
+    def test_transient_freezer_states_wait_for_both_proofs(self):
+        self.assertEqual(self.stop(proofs=(("frozen 1", "thawing"),
+                                         ("frozen 0", "thawing"), ("frozen 0", "running"))), 3)
+        self.assertEqual(self.clock, 0.1)
+        self.assertIn(["stop", self.unit], self.commands)
+
+    def test_unproven_or_disagreeing_states_preserve_original_failure_within_bound(self):
+        for proof in (("frozen 1", "running"), ("frozen 0", "frozen"),
+                      ("populated 0", "running"), ("frozen 0", "")):
+            with self.subTest(proof=proof):
+                self.setUp()
+                self.assert_original_thaw_refusal(proofs=(proof,))
+                self.assertLessEqual(self.clock, 5)
+                self.assertLessEqual(self.observations, 101)
+
+    def test_unavailable_evidence_preserves_original_failure(self):
+        for failure in ("missing", "permission", "systemctl", "timeout"):
+            with self.subTest(failure=failure):
+                self.setUp()
+                error = self.assert_original_thaw_refusal(evidence_error=failure)
+                self.assertEqual(rt.failure_response(error, "stop-services")["diagnostic"],
+                                 dict(stage="stop-services", failureType="tool_exit", exitCode=1,
+                                      tool="systemctl", toolAction="thaw"))
+
+    def test_late_proof_does_not_extend_deadline(self):
+        self.assert_original_thaw_refusal(query_delay=5)
+        self.assertEqual(self.observations, 1)
+
+    def test_thaw_timeout_and_launch_failure_are_not_reconciled(self):
+        for error in (subprocess.TimeoutExpired(["systemctl", "thaw", self.slice], 120),
+                      FileNotFoundError("systemctl"),
+                      subprocess.CalledProcessError(-15, ["systemctl", "thaw", self.slice]),
+                      subprocess.CalledProcessError(1, ["systemctl", "thaw", "unmanaged.slice"])):
+            with self.subTest(error=type(error).__name__):
+                self.setUp()
+                self.thaw_error = error
+                self.assert_original_thaw_refusal()
+                self.assertEqual(self.observations, 0)
+
+    def test_queue_failure_never_thaws_and_synchronous_stop_failure_still_refreezes(self):
+        for failure in ("queue", "sync"):
+            with self.subTest(failure=failure):
+                self.setUp()
+                with self.assertRaises(rt.Blocked) as caught:
+                    self.stop(stop_error=failure)
+                self.assertEqual(caught.exception.__cause__.cmd[1], "stop")
+                self.assertEqual(self.commands[-1], ["freeze"])
+                if failure == "queue":
+                    self.assertNotIn(["thaw", self.slice], self.commands)
+                    self.assertEqual(self.observations, 0)
+
+    def test_reconciliation_does_not_bypass_stopped_unit_verification(self):
+        with self.assertRaisesRegex(rt.Blocked, "still has a job or processes"):
+            self.stop(stopped=False)
+        self.assertIn(["stop", self.unit], self.commands)
+        self.assertIn(["freeze"], self.commands)
+
+    def test_unmanaged_thaw_still_propagates_explicit_failure(self):
+        with patch.object(rt.subprocess, "run", side_effect=self.thaw_error), \
+                patch.object(Path, "read_text") as read:
+            with self.assertRaises(rt.Blocked) as caught:
+                self.adapter.thaw()
+        self.assertIs(caught.exception.__cause__, self.thaw_error)
+        read.assert_not_called()
+
+
 class LayoutTests(unittest.TestCase):
     def test_layout_prepares_only_tooling_and_preserves_user_application_data(self):
         for existing_home in (False, True):
