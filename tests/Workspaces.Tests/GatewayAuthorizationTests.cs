@@ -17,6 +17,51 @@ namespace Workspaces.Tests;
 public sealed class GatewayAuthorizationTests
 {
     [Theory]
+    [InlineData(OrganizationRole.Owner, true)]
+    [InlineData(OrganizationRole.Admin, true)]
+    [InlineData(OrganizationRole.Developer, true)]
+    [InlineData(OrganizationRole.Viewer, false)]
+    public async Task T3LaunchAndExistingSessionsRequireWorkspaceWriteRole(OrganizationRole role, bool accepted)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var membership = new OrganizationMember
+        { Id = "member", OrganizationId = "org", UserId = "user", Role = role };
+        fixture.Db.OrganizationMembers.Add(membership);
+        await fixture.Db.SaveChangesAsync();
+        var principal = new ControlPlanePrincipal("browser_session", "user", null, null, new HashSet<string>());
+        var launch = await fixture.Service.LaunchAsync(principal, "ws", "vm", new(1), default);
+        Assert.Equal(accepted, launch is not null);
+        if (launch is null)
+        {
+            Assert.Empty(await fixture.Db.DevelopmentWorkspaceGatewaySessions.ToListAsync());
+            return;
+        }
+        var code = new DevelopmentWorkspaceGatewayReceiptRequest(fixture.Host, launch.Url.Split("code=")[1]);
+        membership.Role = OrganizationRole.Viewer;
+        await fixture.Db.SaveChangesAsync();
+        Assert.Null(await fixture.Service.RedeemAsync(code, default));
+        membership.Role = role;
+        await fixture.Db.SaveChangesAsync();
+        var redeemed = (await fixture.Service.RedeemAsync(code, default))!;
+        var session = new DevelopmentWorkspaceGatewayReceiptRequest(fixture.Host, redeemed.Session);
+        Assert.NotNull(await fixture.Service.ResolveAsync(session, default));
+        membership.Role = OrganizationRole.Viewer;
+        await fixture.Db.SaveChangesAsync();
+        Assert.Null(await fixture.Service.ResolveAsync(session, default));
+    }
+
+    [Fact]
+    public async Task ReadOnlyWorkspaceApiKeyCannotLaunchT3()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var principal = fixture.Principal with { Scopes = new HashSet<string> { ApiKeyScopes.WorkspacesRead } };
+        (await fixture.Db.ApiKeys.SingleAsync()).ScopesJson = JsonSerializer.Serialize(principal.Scopes);
+        await fixture.Db.SaveChangesAsync();
+        Assert.Null(await fixture.Service.LaunchAsync(principal, "ws", "vm", new(1), default));
+        Assert.Empty(await fixture.Db.DevelopmentWorkspaceGatewaySessions.ToListAsync());
+    }
+
+    [Theory]
     [InlineData("creator", true)]
     [InlineData("owner", true)]
     [InlineData("admin", false)]
