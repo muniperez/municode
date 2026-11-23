@@ -4,8 +4,10 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -151,16 +153,180 @@ class ConnectTests(unittest.TestCase):
         argv = connect.command("link")
         self.assertEqual(argv[-6:], ["t3", "connect", "link", "--base-dir", "/workspace/t3", "--headless"])
         self.assertIn("HOME=/workspace/home", argv)
+        self.assertIn("T3CODE_CLOUDFLARED_PATH=/usr/local/bin/cloudflared", argv)
         self.assertNotIn("up", argv)
+        self.queue_activation()
         with patch.object(connect, "run", side_effect=[
-                "active", '{"desired":true,"authenticated":true}', ""]) as run:
+                "active", json.dumps(self.approved_status()), "",
+                json.dumps(self.approved_status(linked=True, reachability=dict(status="reachable")))]) as run, \
+                patch.object(connect, "relay_start_diagnostics", return_value={}):
             connect.activate(self.config, self.root)
-        self.assertEqual(run.call_args_list[-1].args[0],
+        self.assertEqual(run.call_args_list[-2].args[0],
                          ["systemctl", "restart", "workspaces-t3.service"])
+        self.assertEqual(self.activation()["state"], "linked")
+        self.queue_activation()
         with patch.object(connect, "run", return_value="inactive") as run:
-            with self.assertRaises(rt.Blocked):
+            with patch.object(connect, "relay_start_diagnostics", return_value={}):
                 connect.activate(self.config, self.root)
             self.assertEqual(run.call_count, 1)
+        self.assertEqual(self.activation()["reason"], "t3_inactive")
+
+    def approved_status(self, **overrides):
+        return dict(dict(desired=True, authenticated=True, linked=False,
+                         relayClient=dict(status="available", source="override",
+                                          executablePath=rt.T3_RELAY_CLIENT)), **overrides)
+
+    def activation(self):
+        return connect.activation_status(self.config, self.root)
+
+    def queue_activation(self):
+        with patch.object(connect, "run"):
+            return connect.Enrollment(self.config, self.root).request_activation()["activation"]
+
+    def test_activation_survives_manager_restart_and_deduplicates_clicks(self):
+        with patch.object(connect, "run") as run:
+            first = connect.Enrollment(self.config, self.root).request_activation()
+            manager = connect.Enrollment(self.config, self.root)
+            manager.clear_pending()
+            self.assertEqual(manager.request_activation(), first)
+            self.assertEqual(manager.status()["activation"], first["activation"])
+            with self.assertRaisesRegex(rt.Blocked, "Activation"):
+                manager.start()
+            with self.assertRaisesRegex(rt.Blocked, "Activation"):
+                manager.unlink()
+            run.assert_called_once()
+        self.assertEqual((self.root / connect.ACTIVATION_FILE).stat().st_mode & 0o777, 0o600)
+
+    def test_activation_queue_failure_is_durable_and_retryable(self):
+        manager = connect.Enrollment(self.config, self.root)
+        with patch.object(connect, "run", side_effect=rt.Blocked("synthetic private output")):
+            result = manager.request_activation()["activation"]
+        self.assertEqual((result["state"], result["reason"]), ("failed", "queue_failed"))
+        with patch.object(connect, "run"):
+            retry = manager.request_activation()["activation"]
+        self.assertNotEqual(retry["id"], result["id"])
+        self.assertEqual(retry["state"], "pending")
+        self.assertNotIn("synthetic private output", json.dumps(self.activation()))
+
+    def test_activation_fences_shutdown_without_fencing_status_and_expires_after_interruption(self):
+        self.queue_activation()
+        request = dict(vmId="primary", generation=3, operationId="stop",
+                       action="quiesce", gatewayAdmissionsFenced=True, unobservableToolsAbsent=True)
+        with self.assertRaisesRegex(rt.Blocked, "activation is pending"):
+            self.runtime.handle(request)
+        self.assertEqual(connect.Enrollment(self.config, self.root).status()["activation"]["state"], "pending")
+        self.assertEqual(self.runtime.s["phase"], "Ready")
+        with patch.object(connect.time, "time", return_value=time.time() + connect.ACTIVATION_TIMEOUT + 1):
+            self.assertEqual(self.activation()["reason"], "interrupted")
+        self.assertIsNone(connect.activation_status(dict(self.config, generation=4), self.root))
+
+    def test_activation_failure_keeps_approval_and_never_restarts_again_when_worker_is_reentered(self):
+        self.queue_activation()
+        approval = self.root / "saved-approval"
+        approval.write_text("synthetic-private-value")
+        with patch.object(connect, "run", side_effect=[
+                "active", json.dumps(self.approved_status()),
+                rt.Blocked("synthetic private error")]) as run, \
+                patch.object(connect, "relay_start_diagnostics", return_value=dict(ExecMainStatus=1)):
+            connect.activate(self.config, self.root)
+            connect.activate(self.config, self.root)
+            self.assertEqual(run.call_count, 3)
+        self.assertEqual(self.activation()["reason"], "restart_failed")
+        self.assertEqual(approval.read_text(), "synthetic-private-value")
+        self.assertNotIn("synthetic private", json.dumps(self.activation()))
+        manager = connect.Enrollment(self.config, self.root)
+        with patch.object(connect.subprocess, "run", side_effect=OSError("private")):
+            result = manager.status()
+        self.assertEqual(result["activation"]["state"], "failed")
+        self.assertFalse(result["statusAvailable"])
+
+    def test_fenced_workspace_records_failure_without_restarting_t3(self):
+        self.queue_activation()
+        self.runtime.s["phase"] = "Frozen"
+        self.runtime.save()
+        with patch.object(connect, "run") as run:
+            connect.activate(self.config, self.root)
+        run.assert_not_called()
+        self.assertEqual(self.activation()["reason"], "workspace_fenced")
+
+    def test_unprovisioned_link_times_out_with_allowlisted_diagnostics_not_raw_status(self):
+        self.queue_activation()
+        now = [time.time()]
+        status = self.approved_status(cloudUserId="private-account",
+                                      relayUrl="https://example.invalid/private")
+        def run(argv, **kwargs):
+            return json.dumps(status) if argv == connect.command("status") else "active"
+        with patch.object(connect, "run", side_effect=run), \
+                patch.object(connect.time, "time", side_effect=lambda: now[0]), \
+                patch.object(connect.time, "sleep", side_effect=lambda _: now.__setitem__(0, now[0] + 30)), \
+                patch.object(connect, "relay_start_diagnostics", return_value=dict(events=["link_reconcile_failed"])):
+            connect.activate(self.config, self.root)
+        result = self.activation()
+        self.assertEqual((result["state"], result["reason"]), ("failed", "link_not_provisioned"))
+        self.assertTrue(result["diagnostics"]["relayClientPinned"])
+        self.assertNotIn("private", json.dumps(result))
+
+    def test_non_pinned_relay_resolution_blocks_restart(self):
+        self.queue_activation()
+        with patch.object(connect, "run", side_effect=["active", json.dumps(self.approved_status(
+                relayClient=dict(status="available", source="managed", executablePath="/private/path")))]) as run, \
+                patch.object(connect, "relay_start_diagnostics", return_value={}):
+            connect.activate(self.config, self.root)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(self.activation()["reason"], "relay_not_pinned")
+        self.assertNotIn("/private/path", json.dumps(self.activation()))
+
+    def test_restart_exit_status_is_preserved_without_subprocess_output(self):
+        self.queue_activation()
+        failure = rt.Blocked("Tool unavailable or failed: systemctl")
+        failure.__cause__ = subprocess.CalledProcessError(
+            5, ["systemctl"], output="private-output", stderr="private-error")
+        with patch.object(connect, "run", side_effect=[
+                "active", json.dumps(self.approved_status()), failure]), \
+                patch.object(connect, "relay_start_diagnostics", return_value={}):
+            connect.activate(self.config, self.root)
+        self.assertEqual(self.activation()["diagnostics"]["commandExitCode"], 5)
+        self.assertNotIn("private", json.dumps(self.activation()))
+
+    def test_relay_diagnostics_only_include_new_allowlisted_events_and_exit_codes(self):
+        trace = self.root / "trace.ndjson"
+        trace.write_text('{"message":"Failed to start relay client","private":"old-output"}\n')
+        with patch.object(connect, "TRACE_FILE", trace):
+            position = connect.trace_position()
+            with trace.open("a") as stream:
+                stream.write('{"message":"Relay client exited; restarting","exitCode":7,"private":"new-output"}\n')
+                stream.write('{"message":"T3 Connect relay returned HTTP 403","private":"authenticated-url"}\n')
+            with patch.object(connect, "run", return_value="ExecMainStatus=0\nExecMainCode=1\nPrivate=value"):
+                result = connect.relay_start_diagnostics(0, position)
+        self.assertEqual(result["events"], ["relay_exited"])
+        self.assertEqual(result["relayExitCodes"], [7])
+        self.assertEqual(result["relayHttpStatuses"], [403])
+        self.assertEqual(result["ExecMainStatus"], 0)
+        self.assertNotIn("private", json.dumps(result).lower())
+
+    def test_missing_trace_still_collects_service_exit_status(self):
+        with patch.object(connect, "TRACE_FILE", self.root / "missing-trace"), \
+                patch.object(connect, "run", return_value="ExecMainStatus=3\nExecMainCode=1"):
+            result = connect.relay_start_diagnostics(0, None)
+        self.assertEqual(result["trace"], "unavailable")
+        self.assertEqual(result["ExecMainStatus"], 3)
+
+    def test_late_relay_recovery_replaces_failure_with_durable_linked_result(self):
+        queued = self.queue_activation()
+        connect.save_activation(self.config, self.root, queued["id"], "failed", "relay_unavailable",
+                                dict(events=["relay_retrying"]))
+        descriptor = json.dumps(dict(serverVersion="1.2.3", orchestrationProtocolVersion=2,
+                                     environmentId="test-env")).encode()
+        with patch.object(connect, "installed_t3", return_value=dict(version="1.2.3", environmentProtocol=2)), \
+                patch.object(connect.subprocess, "run", return_value=SimpleNamespace(
+                    returncode=0, stdout=json.dumps(self.approved_status(
+                        linked=True, reachability=dict(status="reachable"))))), \
+                patch.object(connect.urllib.request, "urlopen", side_effect=lambda *a, **k: io.BytesIO(descriptor)):
+            for _ in range(2):
+                result = connect.Enrollment(self.config, self.root).status()
+                self.assertEqual(result["activation"]["state"], "linked")
+                self.assertTrue(result["reachable"])
+        self.assertEqual(self.activation()["diagnostics"]["events"], ["relay_retrying"])
 
     def test_public_status_drops_identity_tokens_and_raw_errors(self):
         status = connect.public_status(dict(linked=True, desired=True, revoked=False,

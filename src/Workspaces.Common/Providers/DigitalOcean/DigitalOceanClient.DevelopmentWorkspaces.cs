@@ -214,6 +214,8 @@ public sealed partial class DigitalOceanClient : IDevelopmentWorkspaceProvider
             {
                 new { protocol = "tcp", ports = "80", destinations = new { addresses = AnyAddress } },
                 new { protocol = "tcp", ports = "443", destinations = new { addresses = AnyAddress } },
+                new { protocol = "tcp", ports = "7844", destinations = new { addresses = AnyAddress } },
+                new { protocol = "udp", ports = "7844", destinations = new { addresses = AnyAddress } },
                 new { protocol = "tcp", ports = "53", destinations = new { addresses = AnyAddress } },
                 new { protocol = "udp", ports = "53", destinations = new { addresses = AnyAddress } },
                 new { protocol = "udp", ports = "123", destinations = new { addresses = AnyAddress } }

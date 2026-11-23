@@ -13,6 +13,6 @@ ProtectSystem=strict
 ReadWritePaths=/workspace /var/lib/workspaces-workspace
 PrivateTmp=yes
 ProtectHome=yes
-TimeoutStartSec=150
+TimeoutStartSec=270
 StandardOutput=null
 StandardError=null

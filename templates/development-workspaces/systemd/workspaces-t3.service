@@ -17,6 +17,7 @@ WorkingDirectory=/workspace
 Environment=HOME=/workspace/home
 Environment=CODEX_HOME=/workspace/home/.codex
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=T3CODE_CLOUDFLARED_PATH=/usr/local/bin/cloudflared
 EnvironmentFile=-/opt/workspaces-workspace/scratch.env
 ExecStartPre=-+/usr/bin/python3 -B /opt/workspaces-workspace/storage_tiers.py prepare
 ExecStartPre=-/usr/bin/python3 -B /opt/workspaces-workspace/t3_project_defaults.py

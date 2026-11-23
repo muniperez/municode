@@ -53,7 +53,10 @@ qualification before capturing an image.
 Optional [T3 Connect enrollment](../../docs/setup/runtime.md#runtime-interfaces) uses the existing
 primary VM and managed T3 unit, a private memory-only approval page on loopback
 774, and a distinct root-only management credential. Connect adds no relay scopes
-to normal gateway sessions. Pending approval fences shutdown. Its updated native probe and
+to normal gateway sessions. Pending approval and activation fence shutdown. Activation results
+are generation-bound root-owned state, survive the managed restart and page refresh,
+and report only allowlisted diagnostics. Both T3 and the enrollment CLI explicitly
+resolve the image's pinned cloudflared executable. Its updated native probe and
 hosted cross-device/lifecycle acceptance remain unqualified; never run the
 upstream service installer or show device approval in T3 terminal history.
 
@@ -183,7 +186,11 @@ Provider differences that affect isolation and operations:
   formatted. Stable devices are `scsi-0HC_Volume_<id>` (Hetzner), `scsi-0DO_Volume_<name>`
   (DigitalOcean) and `virtio-<first 20 characters of the mount ID>` (Vultr).
 * **Firewalls.** Hetzner and DigitalOcean firewalls allow inbound SSH only from the
-  management addresses and restrict egress to HTTP(S), DNS and NTP. Vultr firewall
+  management addresses and restrict egress to HTTP(S), DNS, NTP and Cloudflare
+  Tunnel's TCP/UDP port 7844 (HTTP/2/QUIC). Port 443 alone cannot carry the
+  relay tunnel. Existing firewalls are not automatically migrated: rollout needs
+  an explicitly authorized firewall update or a newly provisioned disposable VM.
+  Vultr firewall
   groups are **inbound only**: the same SSH restriction applies, but egress is not
   provider-filtered. Treat Vultr workspaces as having weaker network isolation.
 * **Root password e-mail.** DigitalOcean e-mails a root password when no provider SSH

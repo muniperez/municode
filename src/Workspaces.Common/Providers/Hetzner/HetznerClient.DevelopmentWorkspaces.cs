@@ -180,6 +180,8 @@ public sealed partial class HetznerClient : IDevelopmentWorkspaceProvider
             new { direction = "in", protocol = "tcp", port = "22", source_ips = managementAddresses },
             new { direction = "out", protocol = "tcp", port = "80", destination_ips = new[] { "0.0.0.0/0", "::/0" } },
             new { direction = "out", protocol = "tcp", port = "443", destination_ips = new[] { "0.0.0.0/0", "::/0" } },
+            new { direction = "out", protocol = "tcp", port = "7844", destination_ips = new[] { "0.0.0.0/0", "::/0" } },
+            new { direction = "out", protocol = "udp", port = "7844", destination_ips = new[] { "0.0.0.0/0", "::/0" } },
             new { direction = "out", protocol = "tcp", port = "53", destination_ips = new[] { "0.0.0.0/0", "::/0" } },
             new { direction = "out", protocol = "udp", port = "53", destination_ips = new[] { "0.0.0.0/0", "::/0" } },
             new { direction = "out", protocol = "udp", port = "123", destination_ips = new[] { "0.0.0.0/0", "::/0" } }
