@@ -211,6 +211,11 @@ public sealed class DevelopmentWorkspaceProviderTests
         var inbound = Assert.Single(rules, rule => rule.GetProperty("direction").GetString() == "in");
         Assert.Equal("22", inbound.GetProperty("port").GetString());
         Assert.Equal("198.51.100.20/32", inbound.GetProperty("source_ips")[0].GetString());
+        var relay = rules.Where(rule => rule.GetProperty("direction").GetString() == "out" &&
+            rule.GetProperty("port").GetString() == "7844").ToArray();
+        Assert.Equal(["tcp", "udp"], relay.Select(rule => rule.GetProperty("protocol").GetString()));
+        Assert.All(relay, rule => Assert.Equal(["0.0.0.0/0", "::/0"],
+            rule.GetProperty("destination_ips").EnumerateArray().Select(ip => ip.GetString())));
         Assert.DoesNotContain(rules, rule => rule.GetProperty("direction").GetString() == "out" && rule.GetProperty("port").GetString() == "22");
     }
 

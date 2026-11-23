@@ -46,8 +46,12 @@ const stages = {
     message: "Finish active turns and save your work before restarting T3. T3 terminals will close. The VM stays running, and your projects, threads, and sign-ins are kept.",
   },
   restarting: {
-    step: 1, title: "Restarting T3…",
+    step: 1, title: "Restarting T3…", poll: true,
     message: "This page checks the link automatically. A brief loss of connection is expected.",
+  },
+  activationFailed: {
+    step: 1, title: "T3 Connect activation failed", action: "activate", actionLabel: "Retry activation", manage: true,
+    message: "Activation did not finish. Retry activation after checking T3 and relay connectivity.",
   },
   restartUnconfirmed: {
     step: 1, title: "Restart not confirmed", action: "status",
@@ -100,6 +104,19 @@ const stages = {
 let stage;
 let busy = false;
 let restartDeadline = 0;
+const activationFailures = {
+  interrupted: "Activation was interrupted or timed out. Check that T3 is running, then retry activation.",
+  approval_required: "T3 could not read a saved approval. Check link status and approve the account again if needed.",
+  t3_inactive: "T3 is not running. Start the workspace from Workspaces, then retry activation.",
+  restart_failed: "The managed T3 restart failed. Check the T3 service, then retry activation.",
+  status_unavailable: "T3 restarted but did not answer the status check. Check the T3 service, then retry activation.",
+  relay_unavailable: "The link was saved but the relay is not reachable. Check outbound network access, then retry activation.",
+  relay_not_pinned: "T3 could not resolve the pinned relay client. The workspace image needs repair before retrying activation.",
+  link_not_provisioned: "T3 did not provision the account link. Check relay connectivity and the secret-free activation diagnostics, then retry activation.",
+  link_revoked: "T3 revoked the link. Unlink here and approve the account again.",
+  queue_failed: "The activation service could not be queued. Check the managed activation service, then retry activation.",
+  workspace_fenced: "Workspace management admissions are fenced. Wait until the workspace is Ready, then retry activation.",
+};
 
 function render(next, prompt) {
   const focused = document.activeElement;
@@ -130,6 +147,14 @@ function render(next, prompt) {
 }
 
 function readStatus(value) {
+  if (value.activation?.state === "pending" || value.activation?.state === "restarting") return [stages.restarting];
+  if (value.activation?.state === "failed") {
+    return [{
+      ...stages.activationFailed,
+      message: `${activationFailures[value.activation.reason] ?? stages.activationFailed.message} Your saved approval is kept and the VM stays running.`,
+    }];
+  }
+  if (value.statusAvailable === false) return [stages.offline];
   switch (value.operation) {
     case "awaiting_approval": {
       const { url, code } = value.approval ?? {};
@@ -189,8 +214,14 @@ async function request(action) {
       render(stages.activationRejected);
     } else {
       if (!response.ok) throw new Error("Connect request was not accepted");
-      // The restart can take down this service before the response reaches the browser.
-      if (action !== "activate") updateStatus(...readStatus(await response.json()));
+      const value = await response.json();
+      if (value.activation) {
+        restartDeadline = 0;
+        render(...readStatus(value));
+        if (stage.poll) restartDeadline = Date.now() + 120_000;
+      } else {
+        updateStatus(...readStatus(value));
+      }
     }
   } catch {
     updateStatus(action === "unlink" ? stages.unlinkUnknown
@@ -206,5 +237,5 @@ primary.addEventListener("click", () => { if (!primary.hidden) void request(stag
 unlink.addEventListener("click", () => { if (management.open && !management.hidden) void request("unlink"); });
 void request("status");
 setInterval(() => {
-  if (!document.hidden && (stage?.pending || restartDeadline)) void request("status");
+  if (!document.hidden && (stage?.pending || stage?.poll || restartDeadline)) void request("status");
 }, 3000);

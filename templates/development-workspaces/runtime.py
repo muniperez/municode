@@ -1511,6 +1511,17 @@ class Runtime:
         except Exception as error:
             return failure_response(error, self.diagnostic_stage)
 
+    def require_no_connect_operation(self):
+        require(not (self.root / "connect-operation.json").exists(), "T3 account approval is pending")
+        path = self.root / "connect-activation.json"
+        if path.exists():
+            value = json.loads(path.read_text())
+            require(not (value.get("vmId") == self.c["vmId"] and
+                         value.get("generation") == self.c["generation"] and
+                         value.get("state") in ("pending", "restarting") and
+                         value.get("deadline", 0) > time.time()),
+                    "T3 Connect activation is pending")
+
     def handle(self, request):
         self.validate_request(request)
         action, operation = request["action"], request["operationId"]
@@ -1527,8 +1538,7 @@ class Runtime:
                     return dict(result, phase=error.state, storageError=str(error))
             if request.get("includeWorkInventory") is True:
                 try:
-                    require(not (self.root / "connect-operation.json").exists(),
-                            "T3 account approval is pending")
+                    self.require_no_connect_operation()
                     self.adapter.idle(self.s["tasks"])
                     result["workInventory"] = dict(state="IdleCandidate", authoritative=False)
                 except Blocked as error:
@@ -1649,8 +1659,7 @@ class Runtime:
             return self.receipt("RuntimeResumed", operation)
         if action in ("quiesce", "git-save", "discard"):
             self.diagnostic_stage = "freeze-guard"
-            require(not (self.root / "connect-operation.json").exists(),
-                    "T3 account approval is pending")
+            self.require_no_connect_operation()
             require(request.get("gatewayAdmissionsFenced") is True and
                     request.get("unobservableToolsAbsent") is True,
                     "Fence gateway/in-flight mutations and verify no unobservable tools before shutdown")

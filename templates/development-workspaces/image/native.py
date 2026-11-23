@@ -44,12 +44,12 @@ SCRATCH_HELPER = Path("/opt/workspaces-workspace/scratch_mounts.py")
 SCRATCH_FIXTURE = Path("/workspace/repos/native-scratch")
 SCRATCH_OUTPUTS = ("node_modules", "bin", "obj", "dist")
 UNIT_HASHES = {
-    "workspaces-t3.service": "1558acb36028dcbea3290772c735c7172c7ebc44f656da2c5a7a1a9a79fc8c04",
+    "workspaces-t3.service": "e95ea598bd9f0be88441dabdfd10ee026dd0c623c805611825a81a73688ef6a2",
     "workspaces-workspace.service": "72b4ad78746e1ece5aaf2b9d7099d871eabb46c756e4115ca4cc96791e941cec",
     MOUNT_UNIT: "63df74733de304f2e1cbf2fcf1c54a8b139de6cfa209e2e24e1301c16071e6b9",
     "workspaceswork.slice": "e1de2748256aed52d74784f73c1c640eb25ec50ac7a3788b09c84599b5e66618",
     "workspaces-t3-connect.service": "39116af295f7f3b91a3b22048211396ccc36d34431ea1fb625df9d3b1432a24b",
-    "workspaces-t3-connect-activate.service": "d4a1fc05b8591427b34154aae44ab21ac84a7da77502d5db0c15a7b809ff06d8",
+    "workspaces-t3-connect-activate.service": "fd2a967a1b575513d589312a2d8b973f9ee105f9ab44708b8c5757bd5930b2d2",
     "workspaces-scratch-mounts.service": "47a5e929f926630374c23349c2d37cbe39e287dea9da72660bc810ba84cd7803",
     "workspaces-scratch-watch.service": "d0edd0d14b17880b6e86b331750e0b324a6ecf597058923581bcd2abda563ac6",
 }

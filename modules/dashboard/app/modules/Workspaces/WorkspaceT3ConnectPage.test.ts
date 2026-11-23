@@ -135,7 +135,7 @@ it("confirms activation, prevents duplicate requests, and reconnects after trans
 });
 
 it("bounds restart polling and asks for a status check rather than retrying activation", async () => {
-  const state = page([approved, { operation: "restart_requested_check_status" }, new Error("Offline")]);
+  const state = page([approved, { operation: "idle", activation: { state: "pending" } }, new Error("Offline")]);
   await settled();
   button("Activate and restart T3").click();
   await settled();
@@ -146,6 +146,46 @@ it("bounds restart polling and asks for a status check rather than retrying acti
   expect(button("Check link status")).toBeVisible();
   state.poll();
   expect(state.fetch).toHaveBeenCalledTimes(3);
+});
+
+it.each(["pending", "restarting"])("restores durable %s activation after refresh without offering another restart", async (activationState) => {
+  const state = page([
+    { operation: "idle", activation: { state: activationState } },
+    { ...linked, reachable: true, activation: { state: "linked" } },
+  ]);
+  await settled();
+  expect(status()).toHaveTextContent("Restarting T3");
+  expect(queryByRole(document.body, "button", { name: "Activate and restart T3" })).toBeNull();
+  expect(element("management")).not.toBeVisible();
+  state.poll();
+  await settled();
+  expect(status()).toHaveTextContent("Ready to connect");
+  expect(state.fetch.mock.calls.every(([, options]) => options.method === "GET")).toBe(true);
+});
+
+it("restores a durable actionable failure, ignores raw diagnostics and allows one explicit retry", async () => {
+  const state = page([
+    { operation: "idle", statusAvailable: false, activation: {
+      state: "failed", reason: "link_not_provisioned", diagnostics: { error: "private-server-error" },
+    } },
+    { operation: "idle", activation: { state: "pending" } },
+    { operation: "idle", activation: { state: "failed", reason: "relay_unavailable" } },
+  ]);
+  await settled();
+  expect(status()).toHaveTextContent("T3 Connect activation failed");
+  expect(element("message")).toHaveTextContent("did not provision the account link");
+  expect(element("message")).toHaveTextContent("saved approval is kept and the VM stays running");
+  expect(document.body).not.toHaveTextContent("private-server-error");
+  state.poll();
+  expect(state.fetch).toHaveBeenCalledTimes(1);
+  button("Retry activation").click();
+  await settled();
+  expect(status()).toHaveTextContent("Restarting T3");
+  state.poll();
+  await settled();
+  expect(status()).toHaveTextContent("T3 Connect activation failed");
+  expect(element("message")).toHaveTextContent("Check outbound network access");
+  expect(state.fetch).toHaveBeenNthCalledWith(2, "/activate", expect.objectContaining({ method: "POST" }));
 });
 
 it("distinguishes unreachable, revoked, and failed states without rendering raw data", async () => {

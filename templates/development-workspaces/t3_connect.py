@@ -12,11 +12,13 @@ from pathlib import Path
 import re
 import signal
 import secrets
+import stat
 import subprocess
 import threading
+import time
 import urllib.request
 
-from runtime import (Git, Linux, Runtime, T3_RELAY_CLIENT, atomic_json, installed_t3, load_config,
+from runtime import (Blocked, Git, Linux, Runtime, T3_RELAY_CLIENT, atomic_json, installed_t3, load_config,
                      require, run, t3_descriptor_matches)
 
 CONFIG = "/etc/workspaces-workspace/runtime.json"
@@ -24,12 +26,17 @@ STATE = "/var/lib/workspaces-workspace"
 BASE = "/workspace/t3"
 MANAGEMENT_UNIT = "workspaces-t3-connect.service"
 MANAGEMENT_SCRIPT = "/opt/workspaces-workspace/t3_connect.py"
+ACTIVATION_TIMEOUT = 240
+ACTIVATION_FILE = "connect-activation.json"
+IN_FLIGHT = ("pending", "restarting")
+TRACE_FILE = Path(BASE) / "userdata/logs/server.trace.ndjson"
 
 
 def command(action):
     require(action in ("link", "status", "logout"), "Unsupported Connect operation")
     return ["runuser", "-u", "coding", "--", "env", "-i", "HOME=/workspace/home",
             "CODEX_HOME=/workspace/home/.codex", "PATH=/usr/local/bin:/usr/bin:/bin",
+            "T3CODE_CLOUDFLARED_PATH=" + T3_RELAY_CLIENT,
             "t3", "connect", action, "--base-dir", BASE,
             *(["--headless"] if action == "link" else ["--json"] if action == "status" else [])]
 
@@ -112,17 +119,195 @@ def admission_proof(config, state_dir=STATE):
                     vmId=config["vmId"], generation=config["generation"])
 
 
+def activation_status(config, state_dir=STATE):
+    path = Path(state_dir) / ACTIVATION_FILE
+    if not path.exists():
+        return None
+    value = json.loads(path.read_text())
+    if any(value.get(key) != config[key] for key in ("vmId", "generation")):
+        return None
+    if value["state"] in IN_FLIGHT and time.time() >= value["deadline"]:
+        value.update(state="failed", reason="interrupted")
+        atomic_json(path, value)
+    return value
+
+
+def save_activation(config, state_dir, operation, state, reason=None, diagnostics=None):
+    value = activation_status(config, state_dir)
+    require(value is not None and value["id"] == operation, "Activation operation changed")
+    value.update(state=state, reason=reason, diagnostics=diagnostics or {})
+    atomic_json(Path(state_dir) / ACTIVATION_FILE, value)
+    return value
+
+
+def activation_diagnostics(value):
+    require(isinstance(value, dict), "Invalid Connect status")
+    relay = value.get("relayClient")
+    relay = relay if isinstance(relay, dict) else {}
+    reachability = value.get("reachability")
+    reachability = reachability if isinstance(reachability, dict) else {}
+    return {
+        **public_status(value),
+        "authenticated": value.get("authenticated") is True,
+        "relayClientStatus": relay.get("status") if relay.get("status") in
+            ("available", "missing", "unsupported") else "unknown",
+        "relayClientSource": relay.get("source") if relay.get("source") in
+            ("override", "managed", "path") else "unknown",
+        "relayClientPinned": relay.get("executablePath") == T3_RELAY_CLIENT,
+        "relayClientExpectedPath": T3_RELAY_CLIENT,
+        "reachability": reachability.get("status") if reachability.get("status") in
+            ("reachable", "unreachable", "checking") else "unknown",
+        "reachabilityCause": reachability.get("cause") if reachability.get("cause") in
+            ("not_linked", "connector_not_running", "connector_not_ready", "edge_unreachable",
+             "origin_unreachable", "no_connector", "unexpected_response", "dns_failed",
+             "network_error", "timeout") else "unknown",
+    }
+
+
+def trace_position():
+    try:
+        info = TRACE_FILE.stat()
+        return info.st_ino, info.st_size
+    except OSError:
+        return None
+
+
+def relay_start_diagnostics(started_at, position):
+    # Never copy log lines, exception messages, process arguments or environment values.
+    events = {
+        "Failed to reconcile T3 Connect desired link on startup": "link_reconcile_failed",
+        "T3 Connect relay is still unavailable": "relay_retrying",
+        "T3 Connect desired link reconciled on startup": "link_reconciled",
+        "Failed to start relay client": "relay_spawn_failed",
+        "Relay client exited; restarting": "relay_exited",
+        "Relay client process started; waiting for tunnel connection": "relay_started",
+        "Failed to read the desired T3 Connect link": "desired_state_read_failed",
+        "Failed to start the confirmed T3 Connect tunnel": "stored_tunnel_start_failed",
+        "Unlink an unused environment in T3 Connect": "account_link_limit",
+        "Check this machine's date and time, update T3 Code": "link_proof_rejected",
+        "If the stored credential was revoked": "account_authorization_rejected",
+    }
+    errors = ("CloudLinkAuthorizationMissingError", "CloudLinkEndpointUnavailableError",
+              "CloudLinkInternalError", "CloudLinkOriginInvalidError", "RelayRequestError",
+              "SecretStoreReadError", "SecretStorePersistError")
+    result = {}
+    try:
+        with os.fdopen(os.open(TRACE_FILE, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+            info = os.fstat(stream.fileno())
+            require(stat.S_ISREG(info.st_mode), "Regular trace file required")
+            if info.st_mtime < started_at:
+                result["trace"] = "no_current_trace"
+                text = ""
+            else:
+                result["trace"] = "read"
+                offset = position[1] if position and position[0] == info.st_ino and position[1] <= info.st_size else 0
+                stream.seek(max(offset, info.st_size - 262144))
+                text = stream.read(262144).decode("utf-8", errors="replace")
+        result.update(events=sorted(code for phrase, code in events.items() if phrase in text),
+                      errors=sorted(code for code in errors if code in text))
+        result["relayExitCodes"] = sorted({
+            int(code) for line in text.splitlines() if "Relay client exited; restarting" in line
+            for code in re.findall(r'["\\]*exitCode["\\]*\s*:\s*(-?[0-9]{1,3})\b', line)
+        })
+        result["relayHttpStatuses"] = sorted({
+            int(code) for code in re.findall(r"T3 Connect relay returned HTTP ([45][0-9]{2})\b", text)
+        })
+    except (OSError, Blocked):
+        result["trace"] = "unavailable"
+    try:
+        properties = run(["systemctl", "show", "workspaces-t3.service",
+                          "-p", "ExecMainStatus", "-p", "ExecMainCode"], timeout=5)
+        for line in properties.splitlines():
+            key, _, value = line.partition("=")
+            if key in ("ExecMainStatus", "ExecMainCode") and re.fullmatch(r"[0-9]{1,3}", value):
+                result[key] = int(value)
+    except Blocked:
+        result["serviceStatus"] = "unavailable"
+    result["relayProcessRunning"] = False
+    try:
+        for process in Path("/proc").iterdir():
+            if not process.name.isdecimal():
+                continue
+            try:
+                if os.readlink(process / "exe") == T3_RELAY_CLIENT and \
+                        (process / "cgroup").read_text().strip() == \
+                        "0::/workspaceswork.slice/workspaces-t3.service":
+                    result["relayProcessRunning"] = True
+                    break
+            except OSError:
+                continue
+    except OSError:
+        result["processInventory"] = "unavailable"
+    return result
+
+
 def activate(config, state_dir=STATE):
     # This independent oneshot survives the management page's own PartOf restart.
     with (Path(state_dir) / "control.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        admitted(config, state_dir)
-        require(run(["systemctl", "is-active", "workspaces-t3.service"]) == "active",
+        operation = activation_status(config, state_dir)
+        try:
+            admitted(config, state_dir)
+        except Blocked:
+            if operation and operation["state"] in IN_FLIGHT:
+                save_activation(config, state_dir, operation["id"], "failed", "workspace_fenced")
+                return
+            raise
+        require(operation is not None, "Queued activation required")
+        if operation["state"] != "pending":
+            return
+        save_activation(config, state_dir, operation["id"], "restarting")
+    reason = "activation_failed"
+    diagnostics = {}
+    position = trace_position()
+    try:
+        reason = "t3_inactive"
+        require(run(["systemctl", "is-active", "workspaces-t3.service"], timeout=5) == "active",
                 "Activation never starts stopped compute or an inactive T3 service")
+        reason = "status_unavailable"
         status = json.loads(run(command("status"), timeout=40, cwd="/workspace"))
+        diagnostics.update(activation_diagnostics(status))
+        reason = "approval_required"
         require(status.get("desired") is True and status.get("authenticated") is True,
                 "Finish T3 account approval before activation")
+        reason = "relay_not_pinned"
+        require(diagnostics["relayClientPinned"] and diagnostics["relayClientStatus"] == "available",
+                "Pinned relay client must resolve before restarting")
+        reason = "interrupted"
+        require(time.time() < operation["deadline"] - 100, "Activation start was delayed; retry explicitly")
+        reason = "restart_failed"
         run(["systemctl", "restart", "workspaces-t3.service"], timeout=90)
+        until = min(time.time() + 90, operation["deadline"] - 30)
+        linked = False
+        while time.time() < until:
+            reason = "status_unavailable"
+            try:
+                status = json.loads(run(command("status"), timeout=20, cwd="/workspace"))
+                diagnostics.update(activation_diagnostics(status))
+                reason = "link_not_provisioned" if not diagnostics["linked"] else "relay_unavailable"
+                if diagnostics["revoked"]:
+                    reason = "link_revoked"
+                    break
+                if diagnostics["linked"] and diagnostics["reachable"]:
+                    linked = True
+                    break
+            except (Blocked, ValueError, TypeError):
+                diagnostics["statusQuery"] = "unavailable"
+            time.sleep(3)
+        diagnostics.update(relay_start_diagnostics(operation["startedAt"], position))
+        state = "linked" if linked else "failed"
+    except (Blocked, OSError, subprocess.SubprocessError, ValueError, TypeError) as error:
+        cause = error.__cause__ if isinstance(error, Blocked) else error
+        if isinstance(cause, subprocess.CalledProcessError):
+            diagnostics["commandExitCode"] = cause.returncode
+        if isinstance(cause, subprocess.TimeoutExpired):
+            diagnostics["commandTimedOut"] = True
+        diagnostics.update(relay_start_diagnostics(operation["startedAt"], position))
+        state = "failed"
+    with (Path(state_dir) / "control.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        save_activation(config, state_dir, operation["id"], state,
+                        None if state == "linked" else reason, diagnostics)
 
 
 def credential(config, state_dir=STATE):
@@ -174,26 +359,63 @@ class Enrollment:
     def status(self):
         with self.lock, self.guard():
             identity = {key: self.config[key] for key in ("vmId", "generation")}
+            activation = activation_status(self.config, self.state_dir)
+            if activation and activation["state"] in IN_FLIGHT:
+                return dict(operation="idle", activation=activation, **identity)
             if self.process is not None:
                 return dict(operation=self.result, approval=self.prompt, **identity)
-            result = subprocess.run(command("status"), capture_output=True, text=True,
-                                    timeout=40, cwd="/workspace")
-            require(result.returncode == 0, "Connect status unavailable")
-            with urllib.request.urlopen("http://127.0.0.1:3773/.well-known/t3/environment", timeout=3) as response:
-                raw = response.read(65537)
-            require(len(raw) <= 65536, "Oversized environment descriptor")
-            descriptor = json.loads(raw)
-            require(t3_descriptor_matches(descriptor, installed_t3()), "Unqualified environment descriptor")
-            environment_id = descriptor.get("environmentId")
-            require(isinstance(environment_id, str) and
-                    re.fullmatch(r"[a-zA-Z0-9._:-]{1,128}", environment_id),
-                    "Unqualified environment descriptor")
-            return dict(operation=self.result, environmentId=environment_id, **identity,
+            try:
+                result = subprocess.run(command("status"), capture_output=True, text=True,
+                                        timeout=40, cwd="/workspace")
+                require(result.returncode == 0, "Connect status unavailable")
+                value = public_status(json.loads(result.stdout))
+                with urllib.request.urlopen("http://127.0.0.1:3773/.well-known/t3/environment", timeout=3) as response:
+                    raw = response.read(65537)
+                require(len(raw) <= 65536, "Oversized environment descriptor")
+                descriptor = json.loads(raw)
+                require(t3_descriptor_matches(descriptor, installed_t3()), "Unqualified environment descriptor")
+                environment_id = descriptor.get("environmentId")
+                require(isinstance(environment_id, str) and
+                        re.fullmatch(r"[a-zA-Z0-9._:-]{1,128}", environment_id),
+                        "Unqualified environment descriptor")
+            except (Blocked, OSError, subprocess.SubprocessError, ValueError):
+                if activation:
+                    return dict(operation=self.result, activation=activation,
+                                statusAvailable=False, **identity)
+                raise
+            if activation and activation["state"] == "failed" and value["linked"] and value["reachable"]:
+                activation = save_activation(self.config, self.state_dir, activation["id"], "linked",
+                                             diagnostics=activation["diagnostics"])
+            return dict(operation=self.result, environmentId=environment_id, activation=activation, **identity,
                         remoteRemovalConfirmed=self.remote_removal_confirmed,
-                        **public_status(json.loads(result.stdout)))
+                        **value)
+
+    def require_no_activation(self):
+        activation = activation_status(self.config, self.state_dir)
+        require(not activation or activation["state"] not in IN_FLIGHT, "Activation is already pending")
+
+    def request_activation(self):
+        with self.lock, self.guard():
+            require(self.process is None, "Finish account approval first")
+            activation = activation_status(self.config, self.state_dir)
+            if activation and activation["state"] in IN_FLIGHT:
+                return dict(operation="idle", activation=activation)
+            now = time.time()
+            activation = dict(id=secrets.token_hex(16), state="pending", startedAt=now,
+                              deadline=now + ACTIVATION_TIMEOUT, reason=None, diagnostics={},
+                              **{key: self.config[key] for key in ("vmId", "generation")})
+            atomic_json(Path(self.state_dir) / ACTIVATION_FILE, activation)
+            try:
+                # Restart the helper so a retry cannot be lost while its previous invocation exits.
+                run(["systemctl", "restart", "--no-block", "workspaces-t3-connect-activate.service"], timeout=10)
+            except Blocked:
+                activation = save_activation(self.config, self.state_dir, activation["id"],
+                                             "failed", "queue_failed")
+            return dict(operation="idle", activation=activation)
 
     def start(self):
         with self.lock, self.guard():
+            self.require_no_activation()
             require(self.process is None, "A Connect operation is already pending")
             relay = Path(T3_RELAY_CLIENT)
             require(relay.is_file() and not relay.is_symlink() and relay.stat().st_uid == 0 and
@@ -213,6 +435,7 @@ class Enrollment:
                 marker.unlink(missing_ok=True)
                 raise
             threading.Thread(target=self.collect, args=(self.process,), daemon=True).start()
+            (Path(self.state_dir) / ACTIVATION_FILE).unlink(missing_ok=True)
             timer = threading.Timer(900, self.expire, args=(self.process,))
             timer.daemon = True
             timer.start()
@@ -270,6 +493,7 @@ class Enrollment:
 
     def unlink(self):
         with self.lock, self.guard():
+            self.require_no_activation()
             if self.process is not None:
                 process, self.process = self.process, None
                 self.terminate(process)
@@ -281,6 +505,7 @@ class Enrollment:
             # Upstream reports remote DELETE failures as warnings, sometimes with exit code zero.
             remote_confirmed = result.returncode == 0 and "Revoked the relay-side environment record." in result.stdout
             self.remote_removal_confirmed = remote_confirmed
+            (Path(self.state_dir) / ACTIVATION_FILE).unlink(missing_ok=True)
             return dict(operation=self.result, remoteRemovalConfirmed=remote_confirmed)
 
 
@@ -337,10 +562,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             elif self.path == "/unlink":
                 result = manager.unlink()
             elif self.path == "/activate":
-                with manager.lock, manager.guard():
-                    require(manager.process is None, "Finish account approval first")
-                    run(["systemctl", "start", "--no-block", "workspaces-t3-connect-activate.service"])
-                    result = dict(operation="restart_requested_check_status")
+                result = manager.request_activation()
             else:
                 self.reply(404, {})
                 return

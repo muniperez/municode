@@ -118,8 +118,13 @@ public sealed class DevelopmentWorkspaceRegionalProviderTests
         var inbound = Assert.Single(body.RootElement.GetProperty("inbound_rules").EnumerateArray());
         Assert.Equal("22", inbound.GetProperty("ports").GetString());
         Assert.Equal("198.51.100.1/32", inbound.GetProperty("sources").GetProperty("addresses")[0].GetString());
-        Assert.Equal(["80", "443", "53", "53", "123"],
-            body.RootElement.GetProperty("outbound_rules").EnumerateArray().Select(x => x.GetProperty("ports").GetString()));
+        var outbound = body.RootElement.GetProperty("outbound_rules").EnumerateArray().ToArray();
+        Assert.Equal(["80", "443", "7844", "7844", "53", "53", "123"],
+            outbound.Select(x => x.GetProperty("ports").GetString()));
+        var relay = outbound.Where(rule => rule.GetProperty("ports").GetString() == "7844").ToArray();
+        Assert.Equal(["tcp", "udp"], relay.Select(rule => rule.GetProperty("protocol").GetString()));
+        Assert.All(relay, rule => Assert.Equal(["0.0.0.0/0", "::/0"],
+            rule.GetProperty("destinations").GetProperty("addresses").EnumerateArray().Select(ip => ip.GetString())));
         await Assert.ThrowsAsync<ArgumentException>(() =>
             Do(new TestHttpMessageHandler()).CreateWorkspaceFirewallAsync("ignored", ["0.0.0.0/0"], ComputeLabels(), default));
     }
