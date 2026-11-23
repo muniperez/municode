@@ -9,11 +9,33 @@ templates/development-workspaces/test.sh
 ```
 
 Prepared images seed the supported T3 clone/add-folder default to
-`/workspace/repos` without overwriting an explicit user choice. This does not
-enable Clone for reduced gateway sessions or change named New Project's
-hard-coded parent in pinned T3. The project defaults use the retained workspace
-root. Broad filesystem and
-source-control scopes remain deliberately ungranted.
+`/workspace/repos` without overwriting an explicit user choice. Gateway sessions
+grant `source-control:write` for browser Git URL cloning and `filesystem:read`
+for destination browsing, alongside the existing terminal and orchestration
+read/operate scopes. This does not change named New Project's hard-coded parent
+in pinned T3. The project defaults use the retained workspace root.
+
+The root-only guest issuer allowlists these six scopes (subsets remain valid for
+read-only qualification fixtures). T3 v0.1.9 enforces RPC scopes server-side:
+clone requires source-control write; browsing/metadata requires filesystem read;
+adding projects requires orchestration operate. Its Clone action already explains
+missing write/add-project permission, separately from destination and Git failures.
+No T3 fork or filesystem write, settings, provider, access-management or relay
+scope is needed. Source-control write also authorizes other Git/PR mutations
+using credentials available to the guest; it is not a public-clone-only grant.
+
+Launch, redemption and relay resolution still require `WriteWorkspaces`:
+owner/admin/developer membership or a workspace-write API key. Viewers and
+read-only keys cannot launch T3. The dashboard uses the same role boundary.
+The gateway injects the generation-bound guest bearer, not a caller-supplied scope
+list, over the private tunnel. T3 runs as `coding` inside the workspace VM with
+`NoNewPrivileges`, a read-only system, writable workspace/scratch and private temp.
+Filesystem read is not a `/workspace/repos` sandbox: it permits browsing other
+guest paths readable by `coding`, including user files. It cannot traverse out of
+the VM into the control plane or another VM; guest root-only runtime/SSH secrets
+remain protected by Unix permissions. Existing terminal operate already exposes
+the same coding-user files and guest credentials. Keep operator credentials out
+of the guest; this change adds no credential or VM-boundary bypass.
 
 Outputs: ignored `.local/artifacts/runtime/`. Fixtures use two real independent
 clones and a local bare remote; injected process/mount/encryption/transport adapters test
@@ -30,8 +52,8 @@ qualification before capturing an image.
 
 Optional [T3 Connect enrollment](../../docs/setup/runtime.md#runtime-interfaces) uses the existing
 primary VM and managed T3 unit, a private memory-only approval page on loopback
-774, and a distinct root-only management credential. Normal gateway scopes do
-not expand. Pending approval and activation fence shutdown. Activation results
+774, and a distinct root-only management credential. Connect adds no relay scopes
+to normal gateway sessions. Pending approval and activation fence shutdown. Activation results
 are generation-bound root-owned state, survive the managed restart and page refresh,
 and report only allowlisted diagnostics. Both T3 and the enrollment CLI explicitly
 resolve the image's pinned cloudflared executable. Its updated native probe and

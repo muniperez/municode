@@ -8,6 +8,19 @@ namespace Workspaces.Worker.Tests.DevelopmentWorkspaces;
 public sealed class WorkspaceRuntimeTransportProtocolTests
 {
     [Theory]
+    [InlineData("primary")]
+    [InlineData("ephemeral")]
+    public void T3SessionGrantsOnlyWorkspaceTerminalOrchestrationCloneAndBrowseScopes(string kind)
+    {
+        var target = new WorkspaceRuntimeTarget("vm-current", 7, kind, "203.0.113.8", "");
+        Assert.Equal("python3 -B /opt/workspaces-workspace/issue-t3-session.py --vm-id vm-current " +
+            "--generation 7 --operation-id session-current --subject workspaces-gateway --ttl 300 " +
+            "--scope terminal:operate --scope orchestration:operate --scope terminal:read " +
+            "--scope orchestration:read --scope source-control:write --scope filesystem:read",
+            WorkspaceRuntimeTransport.IssueT3SessionCommand(target, "session-current", 300));
+    }
+
+    [Theory]
     [InlineData("connect", 774, true)]
     [InlineData("connect", 3774, false)]
     [InlineData("preview", 774, false)]

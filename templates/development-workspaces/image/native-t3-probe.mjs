@@ -113,8 +113,10 @@ async function handle(request) {
       && Date.parse(session.body.expiresAt) > Date.now()
       && Date.parse(session.body.expiresAt) <= Date.now() + 915000);
     const permissions = session.body.permissions ?? session.body.scopes;
-    requireTrue(["orchestration:read", "orchestration:operate", "terminal:read", "terminal:operate"]
-      .every((scope) => permissions.includes(scope)));
+    const expectedScopes = ["orchestration:read", "orchestration:operate", "terminal:read", "terminal:operate",
+      "source-control:write", "filesystem:read"];
+    requireTrue(permissions.length === expectedScopes.length
+      && expectedScopes.every((scope) => permissions.includes(scope)));
     const unauthorized = await http("/api/orchestration/shell");
     requireTrue([401, 403].includes(unauthorized.status));
     const denied = await http("/api/projects/mutate", readonly, "POST", {
