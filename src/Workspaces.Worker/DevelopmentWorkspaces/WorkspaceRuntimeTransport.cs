@@ -198,13 +198,15 @@ public sealed class WorkspaceRuntimeTransport(IOptions<WorkspaceSshOptions> opti
         return document.RootElement.Clone();
     }
 
-    public Task<string> IssueT3SessionAsync(WorkspaceRuntimeTarget target, string operationId, int ttlSeconds, CancellationToken ct)
+    public Task<string> IssueT3SessionAsync(WorkspaceRuntimeTarget target, string operationId, int ttlSeconds, CancellationToken ct) =>
+        ExecuteAsync(target, IssueT3SessionCommand(target, operationId, ttlSeconds), ct);
+
+    internal static string IssueT3SessionCommand(WorkspaceRuntimeTarget target, string operationId, int ttlSeconds)
     {
         if (operationId.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('_' or '-')) ||
             target.VmId.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('_' or '-')) || ttlSeconds is < 60 or > 3600)
             throw new InvalidOperationException("Invalid generation session request.");
-        return ExecuteAsync(target,
-            $"python3 -B /opt/workspaces-workspace/issue-t3-session.py --vm-id {target.VmId} --generation {WorkspaceBootstrap.Generation(target.Generation)} --operation-id {operationId} --subject workspaces-gateway --ttl {ttlSeconds} --scope terminal:operate --scope orchestration:operate --scope terminal:read --scope orchestration:read", ct);
+        return $"python3 -B /opt/workspaces-workspace/issue-t3-session.py --vm-id {target.VmId} --generation {WorkspaceBootstrap.Generation(target.Generation)} --operation-id {operationId} --subject workspaces-gateway --ttl {ttlSeconds} --scope terminal:operate --scope orchestration:operate --scope terminal:read --scope orchestration:read --scope source-control:write --scope filesystem:read";
     }
 
     public Task<string> ReadConnectCredentialAsync(WorkspaceRuntimeTarget target, CancellationToken ct)

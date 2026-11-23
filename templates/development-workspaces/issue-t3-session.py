@@ -10,6 +10,10 @@ import sys
 from runtime import Runtime, load_config, require, run
 
 
+ALLOWED_SCOPES = frozenset(("terminal:operate", "orchestration:operate", "terminal:read",
+                            "orchestration:read", "source-control:write", "filesystem:read"))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="/etc/workspaces-workspace/runtime.json")
@@ -25,6 +29,7 @@ def main():
     c = load_config(args.config)
     require(c["vmId"] == args.vm_id and c["generation"] == args.generation, "Stale generation")
     require(1 <= args.ttl <= 3600, "Bounded session TTL required")
+    require(set(args.scope) <= ALLOWED_SCOPES, "Unsupported workspace session scope")
     help_text = run(["t3", "auth", "session", "issue", "--help"])
     require(all(x in help_text for x in ("--token-only", "--ttl", "--subject", "--scope", "--base-dir")),
             "Actual runtime does not support verified headless auth; gateway remains blocked")
@@ -35,7 +40,6 @@ def main():
             "--label", "workspaces-" + args.vm_id + "-g" + str(args.generation),
             "--subject", args.subject, "--base-dir", "/workspace/t3"]
     for scope in args.scope:
-        require(scope and not scope.startswith("-"), "Explicit authorization scope required")
         argv.extend(("--scope", scope))
     with (Path(args.state_dir) / "control.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)

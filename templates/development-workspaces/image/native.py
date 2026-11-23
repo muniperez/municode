@@ -32,7 +32,8 @@ RUNTIME = Path("/opt/workspaces-workspace/runtime.py")
 STORAGE_TIERS = Path("/opt/workspaces-workspace/storage_tiers.py")
 EXPECTED_RUNTIME_SHA256 = None
 ACK = "RUN-NATIVE-QUALIFICATION-ON-DISPOSABLE-IMAGE-BUILDER"
-SCOPES = ["orchestration:read", "orchestration:operate", "terminal:read", "terminal:operate"]
+SCOPES = ["orchestration:read", "orchestration:operate", "terminal:read", "terminal:operate",
+          "source-control:write", "filesystem:read"]
 T3_UNIT = "workspaces-t3.service"
 MOUNT_UNIT = "workspaces-workspace-mount.service"
 WORK_CGROUP = Path("/sys/fs/cgroup/workspaceswork.slice")

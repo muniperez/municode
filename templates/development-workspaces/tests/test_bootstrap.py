@@ -340,8 +340,33 @@ class BootstrapTests(unittest.TestCase):
                 builder.builder_guard("DESTROY-DISPOSABLE-IMAGE-BUILDER")
 
     def test_headless_auth_uses_verified_singular_scope_duration_and_sensitive_stdout(self):
+        self.issue_session(["terminal:operate", "orchestration:operate", "terminal:read",
+                            "orchestration:read", "source-control:write", "filesystem:read"])
+
+    def test_headless_auth_preserves_readonly_subset_without_adding_write_scopes(self):
+        self.issue_session(["orchestration:read"])
+
+    def test_headless_auth_rejects_scopes_outside_workspace_allowlist_before_running_t3(self):
+        for scope in ("filesystem:write", "settings:write", "providers:manage", "access:write",
+                      "relay:write", "*", "unknown:read", "", "--token-only"):
+            with self.subTest(scope=scope):
+                arguments = ["issue-t3-session.py", "--vm-id", "vm", "--generation", "2",
+                             "--operation-id", "session", "--subject", "workspaces-gateway",
+                             "--scope=orchestration:read", "--scope=" + scope]
+                captured = io.StringIO()
+                with patch.object(sys, "argv", arguments), patch.object(sys, "stdout", captured), \
+                        patch.object(issuer.os, "geteuid", return_value=0), \
+                        patch.object(issuer, "load_config", return_value=self.config), \
+                        patch.object(issuer, "run") as help_command, \
+                        patch.object(issuer.subprocess, "run") as command:
+                    with self.assertRaisesRegex(runtime.Blocked, "Unsupported workspace session scope"):
+                        issuer.main()
+                help_command.assert_not_called()
+                command.assert_not_called()
+                self.assertEqual("", captured.getvalue())
+
+    def issue_session(self, scopes):
         self.config["workspace"] = str(self.root)
-        scopes = ["terminal:operate", "orchestration:operate", "terminal:read", "orchestration:read"]
         arguments = ["issue-t3-session.py", "--vm-id", "vm", "--generation", "2",
                      "--operation-id", "session", "--subject", "workspaces-gateway", "--ttl", "120",
                      *[value for scope in scopes for value in ("--scope", scope)],

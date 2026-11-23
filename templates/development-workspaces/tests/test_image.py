@@ -127,6 +127,35 @@ class NativeScratchFixtureTests(unittest.TestCase):
 
 
 class ImageTests(unittest.TestCase):
+    def test_native_qualification_issues_clone_and_browse_scopes_but_keeps_readonly_fixture(self):
+        expected = {"terminal:operate", "orchestration:operate", "terminal:read",
+                    "orchestration:read", "source-control:write", "filesystem:read"}
+        issued = {}
+
+        def command(argv, **kwargs):
+            if "--scope" in argv:
+                issued[argv[argv.index("--operation-id") + 1]] = [
+                    argv[index + 1] for index, value in enumerate(argv) if value == "--scope"]
+                return "synthetic-token"
+            if argv[:4] == ["t3", "auth", "session", "issue"]:
+                return "--scope --ttl --token-only --base-dir"
+            return {"MainPID": "123", "KillMode": "process", "SendSIGKILL": "no"}[argv[-2]]
+
+        with tempfile.TemporaryDirectory(dir=ARTIFACTS) as directory:
+            probe = native.Native.__new__(native.Native)
+            probe.directory = Path(directory)
+            probe.run_id = "fixture"
+            probe.t3_project_id = "fixture-project"
+            probe.wait = Mock()
+            client = Mock()
+            client.call.return_value = {"environmentId": "fixture-env", "snapshotSequence": 1}
+            with patch.object(native, "command", side_effect=command), \
+                    patch.object(native, "T3Client", return_value=client):
+                probe.start_services()
+        self.assertEqual(expected, set(issued["native-token-operate"]))
+        self.assertEqual(len(expected), len(issued["native-token-operate"]))
+        self.assertEqual(["orchestration:read"], issued["native-token-readonly"])
+
     def test_t3_recovery_resets_independent_frozen_fixtures_not_budget_retries(self):
         probe = native.Native.__new__(native.Native)
         adapter = Mock()
