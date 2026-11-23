@@ -10,10 +10,17 @@ const prompt = { url: "https://example.invalid/approve?code=SYNTHETIC-CODE", cod
 const idle = { operation: "idle", linked: false, desired: false };
 const approved = { operation: "approval_saved_activate_required", linked: false, desired: true };
 const linked = { operation: "idle", linked: true, desired: true };
+const pending = { operation: "idle", activation: { state: "pending" } };
+const ready = { ...linked, reachable: true, activation: { state: "linked" } };
+const visibilityListeners: EventListenerOrEventListenerObject[] = [];
 const element = (id: string) => document.getElementById(id)!;
 const button = (name: string) => getByRole<HTMLButtonElement>(document.body, "button", { name });
 const status = () => getByRole(document.body, "status");
-afterEach(() => { document.body.innerHTML = ""; });
+afterEach(() => {
+  for (const listener of visibilityListeners.splice(0)) document.removeEventListener("visibilitychange", listener);
+  vi.restoreAllMocks();
+  document.body.innerHTML = "";
+});
 
 function page(values: (object | Promise<object> | Error)[]) {
   document.body.innerHTML = html;
@@ -26,11 +33,16 @@ function page(values: (object | Promise<object> | Error)[]) {
   const confirm = vi.fn(() => true);
   let interval: () => void = () => {};
   let now = 0;
+  const listeners = vi.spyOn(document, "addEventListener");
   runInNewContext(source, {
     document, URL, fetch, confirm, AbortSignal,
     Date: { now: () => now },
     setInterval: (callback: () => void) => { interval = callback; },
   });
+  for (const [type, listener] of listeners.mock.calls) {
+    if (type === "visibilitychange") visibilityListeners.push(listener);
+  }
+  listeners.mockRestore();
   return { fetch, confirm, poll: () => interval(), advance: (ms: number) => { now += ms; } };
 }
 
@@ -134,19 +146,188 @@ it("confirms activation, prevents duplicate requests, and reconnects after trans
   expect(state.fetch).toHaveBeenCalledTimes(6);
 });
 
-it("bounds restart polling and asks for a status check rather than retrying activation", async () => {
-  const state = page([approved, { operation: "idle", activation: { state: "pending" } }, new Error("Offline")]);
+it("bounds the observation window without resetting it on pending responses, and checks again explicitly", async () => {
+  const state = page([approved, pending, pending, new Error("Offline"), pending, ready]);
+  await settled();
+  button("Activate and restart T3").click();
+  await settled();
+  state.advance(150_000);
+  state.poll();
+  await settled();
+  expect(status()).toHaveTextContent("Restarting T3");
+  state.advance(150_000);
+  state.poll();
+  await settled();
+  expect(status()).toHaveTextContent("Link status unavailable");
+  expect(element("message")).toHaveTextContent("does not mean activation failed");
+  expect(button("Check again")).toBeVisible();
+  state.poll();
+  document.dispatchEvent(new Event("visibilitychange"));
+  expect(state.fetch).toHaveBeenCalledTimes(4);
+  button("Check again").click();
+  await settled();
+  expect(status()).toHaveTextContent("Restarting T3");
+  state.poll();
+  await settled();
+  expect(status()).toHaveTextContent("Ready to connect");
+  expect(state.fetch).toHaveBeenCalledTimes(6);
+  expect(state.fetch.mock.calls.filter(([url]) => url === "/activate")).toHaveLength(1);
+});
+
+it("observes a durable failure without refresh after the guest's full activation deadline", async () => {
+  const state = page([
+    approved, pending, pending, new Error("Temporary status failure"),
+    { operation: "idle", statusAvailable: false, activation: { state: "failed", reason: "link_not_provisioned" } },
+  ]);
   await settled();
   button("Activate and restart T3").click();
   await settled();
   state.advance(120_000);
   state.poll();
   await settled();
-  expect(status()).toHaveTextContent("Restart not confirmed");
-  expect(button("Check link status")).toBeVisible();
+  expect(status()).toHaveTextContent("Restarting T3");
+  state.advance(100_000);
   state.poll();
+  await settled();
+  expect(status()).toHaveTextContent("Restarting T3");
+  state.advance(20_000);
+  state.poll();
+  await settled();
+  expect(status()).toHaveTextContent("T3 Connect activation failed");
+  expect(button("Retry activation")).toBeVisible();
+  state.poll();
+  expect(state.fetch).toHaveBeenCalledTimes(5);
+});
+
+it("explains the allowlisted account link limit without raw diagnostics and successfully retries activation", async () => {
+  const state = page([
+    pending,
+    { operation: "idle", statusAvailable: false, activation: {
+      state: "failed", reason: "link_not_provisioned",
+      diagnostics: { events: ["link_reconcile_failed", "account_link_limit", "private-event"], error: "private-error" },
+    } },
+    pending, ready,
+  ]);
+  await settled();
+  state.poll();
+  await settled();
+  expect(status()).toHaveTextContent("T3 Connect activation failed");
+  expect(element("message")).toHaveTextContent("In T3 Connect, deregister an unused T3 environment, then retry activation here");
+  expect(element("message")).toHaveTextContent("Your saved approval is kept and the VM stays running");
+  expect(document.body).not.toHaveTextContent(/private-event|private-error|account_link_limit|link_reconcile_failed/);
+  state.poll();
+  expect(state.fetch).toHaveBeenCalledTimes(2);
+  button("Retry activation").click();
+  await settled();
+  expect(status()).toHaveTextContent("Restarting T3");
+  state.poll();
+  await settled();
+  expect(status()).toHaveTextContent("Ready to connect");
+  expect(state.fetch).toHaveBeenNthCalledWith(3, "/activate", expect.objectContaining({ method: "POST" }));
+  expect(state.fetch.mock.calls.filter(([url]) => url === "/activate")).toHaveLength(1);
+  state.poll();
+  expect(state.fetch).toHaveBeenCalledTimes(4);
+});
+
+it("keeps checking durable pending activation through transient fetch failures", async () => {
+  const state = page([pending, new Error("Offline"), new Error("Still offline"), pending, ready]);
+  await settled();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    state.advance(3000);
+    state.poll();
+    await settled();
+    expect(status()).toHaveTextContent("Restarting T3");
+  }
+  state.poll();
+  await settled();
+  expect(status()).toHaveTextContent("Ready to connect");
+  expect(state.fetch).toHaveBeenCalledTimes(5);
+});
+
+it("reads the terminal result promptly on visibilitychange even after a pause beyond the observation window", async () => {
+  const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+  const state = page([pending, ready]);
+  await settled();
+  hidden.mockReturnValue(true);
+  document.dispatchEvent(new Event("visibilitychange"));
+  state.advance(600_000);
+  state.poll();
+  expect(state.fetch).toHaveBeenCalledTimes(1);
+  hidden.mockReturnValue(false);
+  document.dispatchEvent(new Event("visibilitychange"));
+  expect(state.fetch).toHaveBeenCalledTimes(2);
+  await settled();
+  expect(status()).toHaveTextContent("Ready to connect");
+  document.dispatchEvent(new Event("visibilitychange"));
+  state.poll();
+  expect(state.fetch).toHaveBeenCalledTimes(2);
+});
+
+it("coalesces visibility changes during an in-flight status request and checks immediately after it fails", async () => {
+  let failStatus = () => {};
+  const inFlight = new Promise<object>((_, reject) => {
+    failStatus = () => reject(new Error("Interrupted status"));
+  });
+  const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+  const state = page([
+    pending, inFlight, { operation: "idle", activation: { state: "failed", reason: "relay_unavailable" } },
+  ]);
+  await settled();
+  state.poll();
+  hidden.mockReturnValue(true);
+  document.dispatchEvent(new Event("visibilitychange"));
+  state.advance(600_000);
+  hidden.mockReturnValue(false);
+  document.dispatchEvent(new Event("visibilitychange"));
+  document.dispatchEvent(new Event("visibilitychange"));
+  state.poll();
+  expect(state.fetch).toHaveBeenCalledTimes(2);
+  failStatus();
+  await settled();
+  expect(state.fetch).toHaveBeenCalledTimes(3);
+  expect(status()).toHaveTextContent("T3 Connect activation failed");
+});
+
+it("retains one status check on return when an in-flight fetch fails while the tab is hidden past the deadline", async () => {
+  let failStatus = () => {};
+  const inFlight = new Promise<object>((_, reject) => {
+    failStatus = () => reject(new Error("Hidden status failure"));
+  });
+  const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+  const state = page([pending, inFlight, ready]);
+  await settled();
+  state.poll();
+  hidden.mockReturnValue(true);
+  state.advance(600_000);
+  failStatus();
+  await settled();
+  expect(status()).toHaveTextContent("Restarting T3");
+  state.poll();
+  expect(state.fetch).toHaveBeenCalledTimes(2);
+  hidden.mockReturnValue(false);
+  document.dispatchEvent(new Event("visibilitychange"));
+  await settled();
+  expect(status()).toHaveTextContent("Ready to connect");
   expect(state.fetch).toHaveBeenCalledTimes(3);
 });
+
+it("exhausts a finite request budget even if the clock does not advance and pending never finishes", async () => {
+  const state = page([pending, ...Array.from({ length: 100 }, () => pending), new Error("Still unavailable")]);
+  await settled();
+  for (let attempt = 0; attempt < 100; attempt++) {
+    state.poll();
+    await settled();
+  }
+  expect(status()).toHaveTextContent("Link status unavailable");
+  state.poll();
+  document.dispatchEvent(new Event("visibilitychange"));
+  expect(state.fetch).toHaveBeenCalledTimes(101);
+  button("Check again").click();
+  await settled();
+  expect(status()).toHaveTextContent("Link status unavailable");
+  state.poll();
+  expect(state.fetch).toHaveBeenCalledTimes(102);
+}, 10_000);
 
 it.each(["pending", "restarting"])("restores durable %s activation after refresh without offering another restart", async (activationState) => {
   const state = page([

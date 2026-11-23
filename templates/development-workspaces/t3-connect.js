@@ -46,16 +46,12 @@ const stages = {
     message: "Finish active turns and save your work before restarting T3. T3 terminals will close. The VM stays running, and your projects, threads, and sign-ins are kept.",
   },
   restarting: {
-    step: 1, title: "Restarting T3…", poll: true,
+    step: 1, title: "Restarting T3…",
     message: "This page checks the link automatically. A brief loss of connection is expected.",
   },
   activationFailed: {
     step: 1, title: "T3 Connect activation failed", action: "activate", actionLabel: "Retry activation", manage: true,
     message: "Activation did not finish. Retry activation after checking T3 and relay connectivity.",
-  },
-  restartUnconfirmed: {
-    step: 1, title: "Restart not confirmed", action: "status",
-    message: "T3 Connect could not confirm the result of the restart. Check link status before trying again.",
   },
   activationRejected: {
     step: 1, title: "Activation request not accepted", action: "status",
@@ -92,8 +88,8 @@ const stages = {
     help: "If you can still access this workspace, check link status before trying to unlink again.",
   },
   unavailable: {
-    title: "Link status unavailable", action: "status",
-    message: "Check that the primary workspace is running and that you still have management access, then check link status again.",
+    title: "Link status unavailable", action: "status", actionLabel: "Check again",
+    message: "Status checks could not confirm the result. This does not mean activation failed. Check that the primary workspace is running and that you still have management access, then check again.",
   },
   linkUnknown: {
     step: 0, title: "Could not confirm account linking", action: "status",
@@ -103,7 +99,13 @@ const stages = {
 
 let stage;
 let busy = false;
-let restartDeadline = 0;
+const requestTimeout = 50_000;
+const pollInterval = 3000;
+// Cover the guest's 240s deadline plus a final status request (up to 43s).
+const activationCheckWindow = 300_000;
+const maxActivationChecks = 100;
+let activationChecks;
+let resumeStatus = false;
 const activationFailures = {
   interrupted: "Activation was interrupted or timed out. Check that T3 is running, then retry activation.",
   approval_required: "T3 could not read a saved approval. Check link status and approve the account again if needed.",
@@ -117,6 +119,7 @@ const activationFailures = {
   queue_failed: "The activation service could not be queued. Check the managed activation service, then retry activation.",
   workspace_fenced: "Workspace management admissions are fenced. Wait until the workspace is Ready, then retry activation.",
 };
+const accountLinkLimit = "Your T3 account has reached its environment link limit. In T3 Connect, deregister an unused T3 environment, then retry activation here.";
 
 function render(next, prompt) {
   const focused = document.activeElement;
@@ -149,9 +152,12 @@ function render(next, prompt) {
 function readStatus(value) {
   if (value.activation?.state === "pending" || value.activation?.state === "restarting") return [stages.restarting];
   if (value.activation?.state === "failed") {
+    const events = value.activation.diagnostics?.events;
+    const failure = Array.isArray(events) && events.includes("account_link_limit")
+      ? accountLinkLimit : activationFailures[value.activation.reason] ?? stages.activationFailed.message;
     return [{
       ...stages.activationFailed,
-      message: `${activationFailures[value.activation.reason] ?? stages.activationFailed.message} Your saved approval is kept and the VM stays running.`,
+      message: `${failure} Your saved approval is kept and the VM stays running.`,
     }];
   }
   if (value.statusAvailable === false) return [stages.offline];
@@ -177,15 +183,35 @@ function readStatus(value) {
   }
 }
 
-function updateStatus(next, prompt) {
-  if (restartDeadline) {
-    if (next !== stages.ready && next !== stages.revoked) {
-      if (Date.now() < restartDeadline) return;
-      if (next !== stages.offline) next = stages.restartUnconfirmed;
+function startActivationChecks() {
+  activationChecks = { deadline: Date.now() + activationCheckWindow, remaining: maxActivationChecks };
+}
+
+function updateStatus(next, prompt, terminal = false) {
+  if (next === stages.restarting && !activationChecks) startActivationChecks();
+  if (activationChecks) {
+    if (terminal || next === stages.ready || next === stages.revoked) {
+      activationChecks = undefined;
+    } else if (activationChecks.remaining <= 0 ||
+        Date.now() >= activationChecks.deadline && !document.hidden && !resumeStatus) {
+      activationChecks = undefined;
+      render(stages.unavailable);
+      return;
+    } else {
+      render(stages.restarting);
+      return;
     }
-    restartDeadline = 0;
   }
   render(next, prompt);
+}
+
+function shouldPoll() {
+  return stage?.pending || activationChecks;
+}
+
+function pollStatus() {
+  // Even after a hidden-tab pause passes the deadline, read once before giving up.
+  if (!document.hidden && shouldPoll()) void request("status");
 }
 
 async function request(action) {
@@ -194,11 +220,12 @@ async function request(action) {
   primary.setAttribute("aria-disabled", "true");
   unlink.setAttribute("aria-disabled", "true");
   if (action === "activate") {
-    restartDeadline = Date.now() + 120_000;
+    startActivationChecks();
     render(stages.restarting);
   } else if (action === "unlink") {
     render(stages.unlinking);
   }
+  if (action === "status" && activationChecks) activationChecks.remaining--;
   try {
     const reading = action === "status";
     const response = await fetch(`/${action}`, {
@@ -207,21 +234,16 @@ async function request(action) {
       cache: "no-store",
       credentials: "same-origin",
       redirect: "error",
-      signal: AbortSignal.timeout(50_000),
+      signal: AbortSignal.timeout(requestTimeout),
     });
     if (action === "activate" && (response.status === 403 || response.status === 409)) {
-      restartDeadline = 0;
+      activationChecks = undefined;
       render(stages.activationRejected);
     } else {
       if (!response.ok) throw new Error("Connect request was not accepted");
       const value = await response.json();
-      if (value.activation) {
-        restartDeadline = 0;
-        render(...readStatus(value));
-        if (stage.poll) restartDeadline = Date.now() + 120_000;
-      } else {
-        updateStatus(...readStatus(value));
-      }
+      const [next, prompt] = readStatus(value);
+      updateStatus(next, prompt, value.activation?.state === "failed" || value.activation?.state === "linked");
     }
   } catch {
     updateStatus(action === "unlink" ? stages.unlinkUnknown
@@ -230,12 +252,19 @@ async function request(action) {
     busy = false;
     primary.removeAttribute("aria-disabled");
     unlink.removeAttribute("aria-disabled");
+    if (resumeStatus) {
+      resumeStatus = false;
+      pollStatus();
+    }
   }
 }
 
 primary.addEventListener("click", () => { if (!primary.hidden) void request(stage.action); });
 unlink.addEventListener("click", () => { if (management.open && !management.hidden) void request("unlink"); });
 void request("status");
-setInterval(() => {
-  if (!document.hidden && (stage?.pending || stage?.poll || restartDeadline)) void request("status");
-}, 3000);
+setInterval(pollStatus, pollInterval);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden || !shouldPoll()) return;
+  if (busy) resumeStatus = true;
+  else pollStatus();
+});

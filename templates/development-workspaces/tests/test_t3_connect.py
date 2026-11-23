@@ -250,7 +250,7 @@ class ConnectTests(unittest.TestCase):
         self.assertEqual(self.activation()["reason"], "workspace_fenced")
 
     def test_unprovisioned_link_times_out_with_allowlisted_diagnostics_not_raw_status(self):
-        self.queue_activation()
+        queued = self.queue_activation()
         now = [time.time()]
         status = self.approved_status(cloudUserId="private-account",
                                       relayUrl="https://example.invalid/private")
@@ -259,12 +259,32 @@ class ConnectTests(unittest.TestCase):
         with patch.object(connect, "run", side_effect=run), \
                 patch.object(connect.time, "time", side_effect=lambda: now[0]), \
                 patch.object(connect.time, "sleep", side_effect=lambda _: now.__setitem__(0, now[0] + 30)), \
-                patch.object(connect, "relay_start_diagnostics", return_value=dict(events=["link_reconcile_failed"])):
+                patch.object(connect, "relay_start_diagnostics",
+                             return_value=dict(events=["account_link_limit", "link_reconcile_failed"])):
             connect.activate(self.config, self.root)
         result = self.activation()
         self.assertEqual((result["state"], result["reason"]), ("failed", "link_not_provisioned"))
         self.assertTrue(result["diagnostics"]["relayClientPinned"])
+        self.assertIn("account_link_limit", result["diagnostics"]["events"])
         self.assertNotIn("private", json.dumps(result))
+        with patch.object(connect.subprocess, "run", side_effect=OSError("synthetic status failure")):
+            self.assertEqual(connect.Enrollment(self.config, self.root).status()["activation"], result)
+        descriptor = json.dumps(dict(serverVersion="1.2.3", orchestrationProtocolVersion=2,
+                                     environmentId="test-env")).encode()
+        with patch.object(connect, "installed_t3", return_value=dict(version="1.2.3", environmentProtocol=2)), \
+                patch.object(connect.subprocess, "run", return_value=SimpleNamespace(
+                    returncode=0, stdout=json.dumps(self.approved_status()))), \
+                patch.object(connect.urllib.request, "urlopen", return_value=io.BytesIO(descriptor)):
+            self.assertTrue(connect.Enrollment(self.config, self.root).status()["desired"])
+        retry = self.queue_activation()
+        self.assertNotEqual(retry["id"], queued["id"])
+        with patch.object(connect, "run", side_effect=[
+                "active", json.dumps(self.approved_status()), "",
+                json.dumps(self.approved_status(linked=True, reachability=dict(status="reachable")))]), \
+                patch.object(connect, "relay_start_diagnostics", return_value={}):
+            connect.activate(self.config, self.root)
+        self.assertEqual(self.activation()["state"], "linked")
+        self.assertEqual(json.loads((self.root / "state.json").read_text())["phase"], "Ready")
 
     def test_non_pinned_relay_resolution_blocks_restart(self):
         self.queue_activation()
@@ -296,9 +316,11 @@ class ConnectTests(unittest.TestCase):
             with trace.open("a") as stream:
                 stream.write('{"message":"Relay client exited; restarting","exitCode":7,"private":"new-output"}\n')
                 stream.write('{"message":"T3 Connect relay returned HTTP 403","private":"authenticated-url"}\n')
-            with patch.object(connect, "run", return_value="ExecMainStatus=0\nExecMainCode=1\nPrivate=value"):
+                stream.write('{"message":"Unlink an unused environment in T3 Connect","private":"account-output"}\n')
+            with patch.object(connect, "run", return_value="ExecMainStatus=0\nExecMainCode=1\nPrivate=value"), \
+                    patch.object(connect.Path, "iterdir", return_value=[]):
                 result = connect.relay_start_diagnostics(0, position)
-        self.assertEqual(result["events"], ["relay_exited"])
+        self.assertEqual(result["events"], ["account_link_limit", "relay_exited"])
         self.assertEqual(result["relayExitCodes"], [7])
         self.assertEqual(result["relayHttpStatuses"], [403])
         self.assertEqual(result["ExecMainStatus"], 0)
