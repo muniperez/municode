@@ -28,6 +28,7 @@ public partial class WorkspaceDbContext : DbContext
         ConfigureGitHubApps(modelBuilder);
         ConfigureDevelopmentWorkspaces(modelBuilder);
         ConfigureDevelopmentWorkspaceGateway(modelBuilder);
+        ConfigureBudgets(modelBuilder);
 
         modelBuilder.Entity<User>(entity =>
         {

@@ -36,7 +36,7 @@ beforeEach(() => {
     if (init?.method && init.method !== "GET") throw new Error(`Unexpected mutation: ${input}`);
     if (url.pathname.startsWith("/api/account/flows/settings")) return jsonResponse({ flow: browserFlow("settings"), session: null });
     if (url.pathname === "/api/github-apps") return jsonResponse({ organizationId: "org-1", status: "not_configured" });
-    if (["/api/development-workspaces", "/api/providers", "/api/provider-types", "/api/plans", "/api/api-keys"].includes(url.pathname)) return jsonResponse([]);
+    if (["/api/development-workspaces", "/api/providers", "/api/provider-types", "/api/plans", "/api/api-keys", "/api/budgets"].includes(url.pathname)) return jsonResponse([]);
     throw new Error(`Unexpected request: ${input}`);
   });
   vi.stubGlobal("fetch", fetcher);
@@ -52,7 +52,7 @@ it("switches all grouped items without navigating or resetting the underlying vi
   expect(within(dialog).getAllByRole("heading", { level: 2 }).map(heading => heading.textContent))
     .toEqual(["Settings", "Account", "Workspace administration", "Integrations"]);
   expect(within(dialog).getByRole("button", { name: "Account" })).toHaveFocus();
-  for (const label of ["Plans", "Team", "API Keys", "GitHub"]) {
+  for (const label of ["Plans", "Budgets", "Team", "API Keys", "GitHub"]) {
     fireEvent.click(within(dialog).getByRole("button", { name: label }));
     expect(within(dialog).getByRole("region", { name: label })).toBeInTheDocument();
     expect(screen.getByTestId("location")).toHaveTextContent(/^\/workspaces$/);

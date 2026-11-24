@@ -249,6 +249,82 @@ namespace Workspaces.Common.Migrations.Postgres
                     b.ToTable("browser_sessions", (string)null);
                 });
 
+            modelBuilder.Entity("Workspaces.Common.Models.Budget", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("text")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AlertPeriod")
+                        .HasMaxLength(7)
+                        .HasColumnType("character varying(7)")
+                        .HasColumnName("alert_period");
+
+                    b.Property<int?>("AlertThresholdPercent")
+                        .HasColumnType("integer")
+                        .HasColumnName("alert_threshold_percent");
+
+                    b.Property<DateTimeOffset?>("AlertedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("alerted_at");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)")
+                        .HasColumnName("currency");
+
+                    b.Property<decimal>("MonthlyAmount")
+                        .HasColumnType("numeric")
+                        .HasColumnName("monthly_amount");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("name");
+
+                    b.Property<string>("OrganizationId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("organization_id");
+
+                    b.Property<string>("ProviderAccountIdsJson")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("provider_account_ids_json");
+
+                    b.Property<long>("Revision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("ThresholdsJson")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("thresholds_json");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("budgets", (string)null);
+                });
+
             modelBuilder.Entity("Workspaces.Common.Models.CliLoginSession", b =>
                 {
                     b.Property<string>("Id")
@@ -1846,6 +1922,15 @@ namespace Workspaces.Common.Migrations.Postgres
                         .IsRequired();
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("Workspaces.Common.Models.Budget", b =>
+                {
+                    b.HasOne("Workspaces.Common.Models.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Workspaces.Common.Models.CliLoginSession", b =>

@@ -244,6 +244,82 @@ namespace Workspaces.Common.Migrations.Sqlite
                     b.ToTable("browser_sessions", (string)null);
                 });
 
+            modelBuilder.Entity("Workspaces.Common.Models.Budget", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AlertPeriod")
+                        .HasMaxLength(7)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("alert_period");
+
+                    b.Property<int?>("AlertThresholdPercent")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("alert_threshold_percent");
+
+                    b.Property<DateTimeOffset?>("AlertedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("alerted_at");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("currency");
+
+                    b.Property<decimal>("MonthlyAmount")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("monthly_amount");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("name");
+
+                    b.Property<string>("OrganizationId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("organization_id");
+
+                    b.Property<string>("ProviderAccountIdsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_account_ids_json");
+
+                    b.Property<long>("Revision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("ThresholdsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("thresholds_json");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("budgets", (string)null);
+                });
+
             modelBuilder.Entity("Workspaces.Common.Models.CliLoginSession", b =>
                 {
                     b.Property<string>("Id")
@@ -1841,6 +1917,15 @@ namespace Workspaces.Common.Migrations.Sqlite
                         .IsRequired();
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("Workspaces.Common.Models.Budget", b =>
+                {
+                    b.HasOne("Workspaces.Common.Models.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Workspaces.Common.Models.CliLoginSession", b =>

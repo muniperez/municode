@@ -12,6 +12,8 @@ public static class ApiKeyScopes
     public const string ProvidersWrite = "providers:write";
     public const string PlansRead = "plans:read";
     public const string PlansWrite = "plans:write";
+    public const string BudgetsRead = "budgets:read";
+    public const string BudgetsWrite = "budgets:write";
 
     public static readonly IReadOnlyList<string> CliLoginDefault =
         [GitHubRead, WorkspacesRead, WorkspacesWrite, PlansRead];
@@ -27,6 +29,8 @@ public static class ApiKeyScopes
         ProvidersRead,
         ProvidersWrite,
         PlansRead,
-        PlansWrite
+        PlansWrite,
+        BudgetsRead,
+        BudgetsWrite
     };
 }
