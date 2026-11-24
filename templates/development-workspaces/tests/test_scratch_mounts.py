@@ -559,8 +559,10 @@ class ScratchMountTests(unittest.TestCase):
                 request = self.deletion_request(app)
                 request["jobId"] += "-" + interruption
                 launches = []
+                preparation_calls = []
 
                 def prepare(payload):
+                    preparation_calls.append(payload)
                     try:
                         return self.make_helper(stop=lambda: payload.get("cancelled", False)).prepare_delete(payload)
                     except subprocess.TimeoutExpired as error:
@@ -593,6 +595,8 @@ class ScratchMountTests(unittest.TestCase):
                 original = self.sys.umount
 
                 def die_after_detach(*args, **kwargs):
+                    record_path = state / "fsjobs" / (request["jobId"] + ".json")
+                    self.assertEqual("preparing", json.loads(record_path.read_text())["stage"])
                     original(*args, **kwargs)
                     if interruption == "timeout":
                         raise subprocess.TimeoutExpired("scratch helper", 30)
@@ -604,6 +608,8 @@ class ScratchMountTests(unittest.TestCase):
                 record = json.loads((state / "fsjobs" / (request["jobId"] + ".json")).read_text())
                 self.assertEqual("preparing", record["stage"])
                 self.assertNotIn("preparation", record)
+                self.assertEqual(1, len(preparation_calls))
+                self.assertEqual(request["jobId"], preparation_calls[0]["jobId"])
                 self.assertEqual([], launches)
                 self.assertEqual("x", (app / "keep").read_text())
                 self.apply(self.make_helper())
