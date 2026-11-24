@@ -982,7 +982,8 @@ class InstalledManifestTests(unittest.TestCase):
             self.assertTrue(path.is_absolute() and path.resolve() == path and path.is_file())
             self.assertFalse(path.is_symlink() or path.stat().st_mode & 0o022)
             self.assertEqual(digest, hashlib.sha256(path.read_bytes()).hexdigest())
-        for name in ("runtime.py", "storage_tiers.py", "scratch_mounts.py", "t3-connect.js", "scratch.env"):
+        for name in ("runtime.py", "storage_tiers.py", "scratch_mounts.py", "repo_checkpoint.py", "t3-connect.js",
+                     "scratch.env"):
             self.assertIn(str(self.runtime / name), files)
         for name in native.UNIT_HASHES:
             self.assertIn(str(self.root / "etc/systemd/system" / name), files)

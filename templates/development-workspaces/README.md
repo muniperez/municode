@@ -930,6 +930,64 @@ rejects unknown fields.
   outputs are rebuilt.
 * Limits: 512 mounts, depth 12 and 100,000 scanned directories per pass.
 
+### Repository checkpoints (engine only)
+
+`repo_checkpoint.py` is the first slice of #105, which moves live checkouts to the VM disk
+and checkpoints them to the retained volume. The image installs it under
+`/opt/workspaces-workspace/`, but nothing calls it yet. Boot restore, the stop-path
+checkpoint, periodic saves, status reporting, backup changes and migration are later PRs.
+Existing layouts and scratch behavior do not change.
+
+The engine copies a source tree (by default `/workspace/repos`) to a root-owned store at
+`/workspace/.workspaces-checkpoints` (mode 0700):
+
+* `objects/<aa>/<sha256>`: file contents, stored once.
+* `manifests/<id>.json`: the tree, with modes, mtimes and symlink targets. Each object is
+  referenced by hash and size.
+* `current.json`: the published checkpoint and its binding: workspace, provider volume,
+  filesystem UUID, VM, generation and writer generation. It also lists the retained history
+  (the last 2 checkpoints).
+* `status.json`: the last attempt and last success.
+* `tmp/`, `staging/` and `lock`.
+
+A save writes new objects and a staging manifest, then flushes and verifies them. It then
+publishes atomically by replacing `current.json`. An interrupted, failed or disk-full save
+leaves the previous checkpoint readable. Unreferenced objects are removed only after a
+publish. One lock serializes all operations. Periodic saves do not wait for the lock.
+Fenced saves wait up to 10 minutes.
+
+* **Kept:** Git metadata, stashes, the index, linked worktrees, new and ignored files, and
+  non-Git directories. Absolute paths, such as linked worktree `gitdir` files, stay valid
+  because restore recreates the same fixed path.
+* **Omitted:** only scratch-allowlisted output directories, such as `node_modules`, `bin` and
+  `obj`. A directory is omitted only when Git, run as the coding user without hooks or global
+  config, confirms it is ignored and contains no tracked files. If Git fails, it is copied.
+* **Reported:** symlinks, `gitdir` files and `alternates` that point outside the fixed root
+  are recorded by path and kind. FIFOs and sockets are skipped and reported.
+* **Refused:** device nodes and other filesystems inside the tree fail the save.
+
+The tree is walked twice. If anything changes between passes, a periodic save is deferred
+(exit 75). A save under a writer fence fails instead. Racily modified files are rehashed.
+
+`verify` checks the binding, an optional stop operation ID, and object sizes. With
+`--deep`, it also checks hashes. `restore` builds the tree in a sibling `.restore-staging`
+directory, checks every hash, and renames it into a target that must not already exist. A
+partial staging directory is removed on retry. Restored entries belong to uid/gid 2000, and
+setuid/setgid bits are dropped. `status` reports the store as `empty`, `ready` or `corrupt`.
+A missing pointer with retained manifests is corrupt, never empty.
+
+Limitations: extended attributes, ACLs and hard links are not preserved. Writes through
+`mmap` that do not update ctime can be missed. A tree that changes continuously can keep
+deferring periodic saves. Callers must not save an empty replacement tree over a checkpoint
+they still need to restore. Gating saves on restore state is part of the wiring PRs.
+
+Run the engine checks with:
+
+```bash
+TMPDIR=$PWD/.local/artifacts/tmp python3 -B -m unittest discover \
+  -s templates/development-workspaces/tests -p test_repo_checkpoint.py -v
+```
+
 ### Confirmed checkout deletion
 
 The supported single-operation path for a checkout with scratch binds is the existing
