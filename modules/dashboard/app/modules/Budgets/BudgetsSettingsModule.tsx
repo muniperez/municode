@@ -10,7 +10,10 @@ import { Disclosure } from "@/core/components/Disclosure";
 import { EmptyState } from "@/core/components/EmptyState";
 import { PageScaffold } from "@/core/components/PageScaffold";
 import { useAuth } from "@/core/auth/AuthProvider";
-import { createBudget, deleteBudget, listBudgets, updateBudget, type Budget, type BudgetContributor, type BudgetNotificationInput } from "@/api/budgetsApi";
+import {
+  createBudget, deleteBudget, listBudgets, updateBudget, type Budget, type BudgetContributor, type BudgetEmailAudience,
+  type BudgetNotificationInput,
+} from "@/api/budgetsApi";
 import { listProviders, type ProviderAccount } from "@/api/providersApi";
 import { formatPrice } from "@/modules/Workspaces/WorkspaceCostEstimate";
 
@@ -175,7 +178,7 @@ function BudgetCard({ budget, canManage, providers, onEdit, onDeleted, onError }
           <TableHeader><TableRow><TableHead>Channel</TableHead><TableHead>Threshold</TableHead>
             <TableHead>Status</TableHead><TableHead>Attempts</TableHead><TableHead>Details</TableHead></TableRow></TableHeader>
           <TableBody>{budget.deliveries.map(item => <TableRow key={item.id}>
-            <TableCell>{item.channel === "in_app" ? "In-app" : "Webhook"}</TableCell>
+            <TableCell>{channelLabel[item.channel]}</TableCell>
             <TableCell>{item.threshold}% · {item.period}</TableCell>
             <TableCell>{deliveryStatus[item.status]}</TableCell>
             <TableCell>{item.attempts}</TableCell>
@@ -192,9 +195,15 @@ function BudgetCard({ budget, canManage, providers, onEdit, onDeleted, onError }
 
 const deliveryStatus = { pending: "Retrying", delivered: "Delivered", failed: "Failed", cancelled: "Cancelled" } as const;
 
+const channelLabel = { in_app: "In-app", webhook: "Webhook", email: "Email" } as const;
+const audienceLabel = { admins: "owners and admins", members: "all members" } as const;
+
 function channels(budget: Budget) {
-  const enabled = [budget.notifications.inApp ? "in-app" : null,
-    budget.notifications.webhook ? `webhook to ${budget.notifications.webhookTarget}` : null].filter(Boolean);
+  const { notifications } = budget;
+  const enabled = [notifications.inApp ? "in-app" : null,
+    notifications.webhook ? `webhook to ${notifications.webhookTarget}` : null,
+    notifications.email ? `email to ${audienceLabel[notifications.emailAudience]}${notifications.emailAvailable ? "" : " (not configured)"}` : null,
+  ].filter(Boolean);
   return enabled.length ? enabled.join(", ") : "off";
 }
 
@@ -212,6 +221,8 @@ function BudgetForm({ organizationId, budget, providers, onCancel, onSaved }: {
   const [webhookUrl, setWebhookUrl] = useState("");
   const [removeWebhook, setRemoveWebhook] = useState(false);
   const [rotate, setRotate] = useState(false);
+  const [email, setEmail] = useState(budget?.notifications.email ?? false);
+  const [audience, setAudience] = useState<BudgetEmailAudience>(budget?.notifications.emailAudience ?? "admins");
   const target = budget?.notifications.webhookTarget ?? null;
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -221,7 +232,7 @@ function BudgetForm({ organizationId, budget, providers, onCancel, onSaved }: {
     if (parsed.some(x => !Number.isInteger(x))) { setError("Thresholds must be whole percentages, for example 50, 80, 100."); return; }
     const url = webhookUrl.trim();
     if (webhook && !removeWebhook && !url && !target) { setError("Enter an HTTPS webhook URL or turn off webhook notifications."); return; }
-    const notifications: BudgetNotificationInput = { inApp, webhook: webhook && !removeWebhook };
+    const notifications: BudgetNotificationInput = { inApp, webhook: webhook && !removeWebhook, email, emailAudience: audience };
     if (url && !removeWebhook) notifications.webhookUrl = url;
     else if (removeWebhook) notifications.webhookUrl = "";
     if (rotate && !removeWebhook) notifications.rotateWebhookSecret = true;
@@ -288,7 +299,21 @@ function BudgetForm({ organizationId, budget, providers, onCancel, onSaved }: {
               Remove webhook URL and signing secret
             </label>
           </div>}
-          <p className="text-xs text-muted-foreground">Email notifications are not available yet.</p>
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox aria-label="Email" checked={email} onCheckedChange={checked => setEmail(checked === true)} />
+            Email
+          </label>
+          {email && <div role="radiogroup" aria-label="Email recipients" className="grid gap-1 pl-6 text-sm">
+            {(["admins", "members"] as const).map(value => <label key={value} className="flex items-center gap-2">
+              <input type="radio" name="budget-email-audience" value={value} checked={audience === value}
+                onChange={() => setAudience(value)} />
+              {value === "admins" ? "Owners and admins" : "All organization members"}
+            </label>)}
+            <p className="text-xs text-muted-foreground">Sent to each member's account email address; other addresses cannot be added.</p>
+          </div>}
+          {email && budget && !budget.notifications.emailAvailable && <p className="text-xs text-muted-foreground">
+            Outbound email is not configured for this installation, so no email is sent until an operator sets it up.
+          </p>}
         </fieldset>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         <div className="flex gap-2">

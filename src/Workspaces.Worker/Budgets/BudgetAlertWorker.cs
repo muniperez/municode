@@ -16,6 +16,8 @@ public static class BudgetAlertWorkerExtensions
         services.AddScoped<BudgetService>();
         services.AddScoped<BudgetNotificationDispatcher>();
         services.AddSingleton<IBudgetWebhookSender, HttpBudgetWebhookSender>();
+        services.Configure<BudgetEmailOptions>(configuration.GetSection(BudgetEmailOptions.SectionName));
+        services.AddScoped<IBudgetEmailSender, SmtpBudgetEmailSender>();
         services.AddHttpClient(HttpBudgetWebhookSender.HttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan)
             .RemoveAllLoggers()
             .ConfigurePrimaryHttpMessageHandler(provider =>

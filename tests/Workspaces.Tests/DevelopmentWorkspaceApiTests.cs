@@ -670,6 +670,7 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
     private sealed class WorkspaceApiFactory(SqliteConnection connection) : WebApplicationFactory<Program>
     {
         public ProviderSecrets Secrets { get; } = new();
+        public BudgetEmailOptions Email { get; } = new();
         public DevelopmentWorkspaceOptions Policy { get; } = new()
         {
             Enabled = true, VolumeMonthlyRatePerGb = .1m, PricingUpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-1),
@@ -697,6 +698,7 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
             {
                 services.AddSingleton<IOptions<DevelopmentWorkspaceOptions>>(Options.Create(Policy));
                 services.AddSingleton<ISecretStore>(Secrets);
+                services.AddSingleton<IOptions<BudgetEmailOptions>>(Options.Create(Email));
                 services.AddHttpClient(ProviderAccountClientFactory.HttpClientName)
                     .ConfigurePrimaryHttpMessageHandler(() => new CatalogProviderTransport());
             });

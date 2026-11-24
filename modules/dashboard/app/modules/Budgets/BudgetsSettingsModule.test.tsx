@@ -14,7 +14,7 @@ vi.mock("@/modules/Settings/SettingsProvider", () => ({ useSettings: () => ({ op
 
 function budget(overrides: Partial<Budget["projection"]> = {}, extra: Partial<Budget> = {}): Budget {
   return {
-    notifications: { inApp: true, webhook: false, webhookTarget: null, webhookSecretConfigured: false },
+    notifications: { inApp: true, webhook: false, webhookTarget: null, webhookSecretConfigured: false, email: false, emailAudience: "admins", emailAvailable: true },
     lastAlert: null, deliveries: [],
     id: "budget-1", organizationId: "org", name: "Team", currency: "USD", monthlyAmount: 50, thresholds: [50, 80, 100],
     providerAccountIds: [], revision: 3, createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z",
@@ -92,13 +92,13 @@ it("lets owners create, edit with the current revision and delete after confirma
   fireEvent.click(screen.getByRole("checkbox", { name: /Droplets/ }));
   fireEvent.click(screen.getByRole("button", { name: "Create budget" }));
   await waitFor(() => expect(createBudget).toHaveBeenCalledWith({ organizationId: "org", currency: "USD", name: "Droplets",
-    monthlyAmount: 25.5, thresholds: [80, 100], providerAccountIds: ["do"], notifications: { inApp: true, webhook: false } }));
+    monthlyAmount: 25.5, thresholds: [80, 100], providerAccountIds: ["do"], notifications: { inApp: true, webhook: false, email: false, emailAudience: "admins" } }));
 
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.change(screen.getByLabelText("Monthly amount"), { target: { value: "60" } });
   fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
   await waitFor(() => expect(updateBudget).toHaveBeenCalledWith("budget-1", { name: "Team", monthlyAmount: 60,
-    thresholds: [50, 80, 100], providerAccountIds: [], revision: 3, notifications: { inApp: true, webhook: false } }));
+    thresholds: [50, 80, 100], providerAccountIds: [], revision: 3, notifications: { inApp: true, webhook: false, email: false, emailAudience: "admins" } }));
 
   fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
   expect(deleteBudget).not.toHaveBeenCalled();
@@ -145,7 +145,7 @@ it("configures a signed webhook, reveals the signing secret once and shows deliv
   fireEvent.change(screen.getByLabelText("Webhook URL"), { target: { value: " https://hooks.example.com/b?token=t " } });
   fireEvent.click(screen.getByRole("button", { name: "Create budget" }));
   await waitFor(() => expect(createBudget).toHaveBeenCalledWith(expect.objectContaining({
-    notifications: { inApp: false, webhook: true, webhookUrl: "https://hooks.example.com/b?token=t" } })));
+    notifications: { inApp: false, webhook: true, email: false, emailAudience: "admins", webhookUrl: "https://hooks.example.com/b?token=t" } })));
   const secret = await screen.findByRole("region", { name: "Webhook signing secret" });
   expect(secret).toHaveTextContent("mcwh_secret");
   expect(secret).toHaveTextContent("not shown again");
@@ -155,7 +155,7 @@ it("configures a signed webhook, reveals the signing secret once and shows deliv
 
 it("rotates an existing webhook secret without resending the write-only URL and lists deliveries", async () => {
   const configured = budget({}, {
-    notifications: { inApp: true, webhook: true, webhookTarget: "https://hooks.example.com", webhookSecretConfigured: true },
+    notifications: { inApp: true, webhook: true, webhookTarget: "https://hooks.example.com", webhookSecretConfigured: true, email: false, emailAudience: "admins", emailAvailable: true },
     lastAlert: { period: "2026-11", threshold: 100, alertedAt: "2026-11-20T00:00:00Z" },
     deliveries: [{ id: "n1", channel: "webhook", period: "2026-11", threshold: 100, status: "pending", attempts: 2,
       lastError: "HTTP 503", createdAt: "2026-11-20T00:00:00Z", deliveredAt: null, nextAttemptAt: "2026-11-20T00:04:00Z" }],
@@ -175,15 +175,40 @@ it("rotates an existing webhook secret without resending the write-only URL and 
   fireEvent.click(screen.getByRole("checkbox", { name: "Rotate signing secret" }));
   fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
   await waitFor(() => expect(updateBudget).toHaveBeenCalledWith("budget-1", expect.objectContaining({
-    notifications: { inApp: true, webhook: true, rotateWebhookSecret: true } })));
+    notifications: { inApp: true, webhook: true, email: false, emailAudience: "admins", rotateWebhookSecret: true } })));
   expect(await screen.findByRole("region", { name: "Webhook signing secret" })).toHaveTextContent("mcwh_rotated");
 });
 
 it("shows no banner for budgets with in-app alerts turned off", async () => {
   vi.mocked(listBudgets).mockResolvedValue([budget({}, {
-    notifications: { inApp: false, webhook: false, webhookTarget: null, webhookSecretConfigured: false } })]);
+    notifications: { inApp: false, webhook: false, webhookTarget: null, webhookSecretConfigured: false, email: false, emailAudience: "admins", emailAvailable: true } })]);
   render(<BudgetAlertBanner />);
   await waitFor(() => expect(listBudgets).toHaveBeenCalled());
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(screen.queryByRole("status")).not.toBeInTheDocument();
+});
+
+it("sends budget email to a member audience and explains when the operator has not configured email", async () => {
+  const unconfigured = budget({}, {
+    notifications: { inApp: true, webhook: false, webhookTarget: null, webhookSecretConfigured: false,
+      email: true, emailAudience: "admins", emailAvailable: false },
+    deliveries: [{ id: "e1", channel: "email", period: "2026-11", threshold: 50, status: "failed", attempts: 6,
+      lastError: "SMTP error (451)", createdAt: "2026-11-20T00:00:00Z", deliveredAt: null, nextAttemptAt: null }],
+  });
+  vi.mocked(listBudgets).mockResolvedValue([unconfigured]);
+  vi.mocked(updateBudget).mockResolvedValue(unconfigured);
+  render(<BudgetsSettingsModule />);
+  const card = await screen.findByLabelText("Budget Team");
+  expect(card).toHaveTextContent("email to owners and admins (not configured)");
+  fireEvent.click(within(card).getByText("Recent notifications (1)"));
+  const deliveries = within(card).getByRole("table", { name: "Team recent notifications" });
+  expect(within(deliveries).getByRole("cell", { name: "Email" })).toBeInTheDocument();
+  expect(deliveries).toHaveTextContent("Failed6SMTP error (451)");
+
+  fireEvent.click(within(card).getByRole("button", { name: "Edit" }));
+  expect(screen.getByText(/Outbound email is not configured/)).toBeInTheDocument();
+  fireEvent.click(within(screen.getByRole("radiogroup", { name: "Email recipients" })).getByLabelText("All organization members"));
+  fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
+  await waitFor(() => expect(updateBudget).toHaveBeenCalledWith("budget-1", expect.objectContaining({
+    notifications: { inApp: true, webhook: false, email: true, emailAudience: "members" } })));
 });

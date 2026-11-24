@@ -283,6 +283,16 @@ namespace Workspaces.Common.Migrations.Postgres
                         .HasColumnType("character varying(3)")
                         .HasColumnName("currency");
 
+                    b.Property<string>("EmailAudience")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("email_audience");
+
+                    b.Property<bool>("EmailEnabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("email_enabled");
+
                     b.Property<bool>("InAppAlertsEnabled")
                         .HasColumnType("boolean")
                         .HasColumnName("in_app_alerts_enabled");
@@ -411,6 +421,12 @@ namespace Workspaces.Common.Migrations.Postgres
                         .HasColumnType("character varying(7)")
                         .HasColumnName("period");
 
+                    b.Property<string>("Recipient")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("recipient");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(16)
@@ -429,7 +445,7 @@ namespace Workspaces.Common.Migrations.Postgres
 
                     b.HasIndex("Status", "Channel");
 
-                    b.HasIndex("BudgetId", "BudgetRevision", "Period", "Threshold", "Channel")
+                    b.HasIndex("BudgetId", "BudgetRevision", "Period", "Threshold", "Channel", "Recipient")
                         .IsUnique();
 
                     b.ToTable("budget_notifications", (string)null);

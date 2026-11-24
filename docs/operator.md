@@ -267,8 +267,24 @@ The worker evaluates budgets and delivers budget webhooks. Tune it with the
 `WebhookTimeoutSeconds` (10) and `DeliveryBatchSize` (25). Webhook targets must
 resolve to public addresses. `AllowPrivateWebhookTargets` relaxes the worker's
 resolved-address check for isolated test installations only; the API still
-rejects private and loopback literals. Webhook signing secrets live in the secret store,
-never in PostgreSQL.
+rejects private and loopback literals. Webhook signing secrets live in the secret
+store, never in PostgreSQL.
+
+Budget email is off until you configure SMTP in `BudgetAlerts:Email` for both
+the API and the worker. The API uses it to report whether email is available.
+The keys are `Enabled`, `Host`, `Port` (587), `FromAddress`, `FromName`
+(`Municode`), `Username`, `PasswordSecretPath`, `TimeoutSeconds` (30) and
+`MaxRecipientsPerBudget` (50).
+
+The worker always requires STARTTLS; implicit TLS on port 465 is not supported.
+Keep the SMTP password in OpenBao, never in configuration. Store it as the
+`value` field of a KV secret, for example
+`bao kv put -mount=workspaces env/<prefix>/operator/budget-smtp value=...`. Then
+set `PasswordSecretPath` to `env/<prefix>/operator/budget-smtp`. The bundled
+service policy grants read-only access to `env/+/operator/+`. Omit `Username` for unauthenticated
+relays. If email is disabled or incomplete, the worker queues no email and
+cancels already queued email. SMTP failures follow the same retry settings as
+webhooks and record only the SMTP status code.
 
 For a failed startup, inspect only service status and sanitized logs; bearer
 capabilities can occur in gateway requests. Do not paste request URLs, tokens,

@@ -87,6 +87,7 @@ public static class WorkspacesApiServiceCollectionExtensions
         services.AddScoped<WorkspaceGitAccessService>();
         services.AddScoped<DevelopmentWorkspaceService>();
         services.AddScoped<BudgetService>();
+        services.Configure<BudgetEmailOptions>(configuration.GetSection(BudgetEmailOptions.SectionName));
         services.AddDevelopmentWorkspaceGateway(configuration);
         services.Configure<DevelopmentWorkspaceOptions>(configuration.GetSection(DevelopmentWorkspaceOptions.SectionName));
         services.Configure<HetznerOptions>(configuration.GetSection("Providers:Hetzner"));

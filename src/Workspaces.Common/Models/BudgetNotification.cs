@@ -1,10 +1,12 @@
 namespace Workspaces.Common.Models;
 
-// Outbox row for one threshold alert on one channel; unique per budget revision, period, threshold and channel.
+// Outbox row for one threshold alert on one channel and recipient; unique per budget revision, period, threshold,
+// channel and recipient.
 public sealed class BudgetNotification
 {
     public const string InApp = "in_app";
     public const string Webhook = "webhook";
+    public const string Email = "email";
     public const string Pending = "pending";
     public const string Delivered = "delivered";
     public const string Failed = "failed";
@@ -15,6 +17,8 @@ public sealed class BudgetNotification
     public string BudgetId { get; set; } = default!;
     public long BudgetRevision { get; set; }
     public string Channel { get; set; } = default!;
+    // Member user ID for email rows; empty for channels without per-recipient delivery.
+    public string Recipient { get; set; } = "";
     public string Period { get; set; } = default!;
     public int Threshold { get; set; }
     // Secret-free event body; webhooks sign and send exactly these bytes.

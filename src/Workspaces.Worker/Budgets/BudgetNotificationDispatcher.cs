@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net.Mail;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
@@ -10,11 +11,12 @@ using Workspaces.Common.Services;
 namespace Workspaces.Worker.Budgets;
 
 /// <summary>
-/// Delivers queued budget webhooks with HMAC signatures and exponential backoff. Only notification rows change here:
+/// Delivers queued budget webhooks (HMAC-signed) and emails with exponential backoff. Only notification rows change here:
 /// delivery outcomes never touch budgets, workspaces or VMs.
 /// </summary>
 public sealed class BudgetNotificationDispatcher(WorkspaceDbContext db, ISecretStore secrets, IBudgetWebhookSender sender,
-    TimeProvider clock, IOptions<BudgetAlertWorkerOptions> options)
+    IBudgetEmailSender emailSender, TimeProvider clock, IOptions<BudgetAlertWorkerOptions> options,
+    IOptions<BudgetEmailOptions> email)
 {
     public const string EventHeader = "X-Municode-Event";
     public const string DeliveryHeader = "X-Municode-Delivery";
@@ -31,7 +33,8 @@ public sealed class BudgetNotificationDispatcher(WorkspaceDbContext db, ISecretS
         var now = clock.GetUtcNow();
         // Due times are filtered in memory because SQLite cannot compare DateTimeOffset values.
         var due = (await db.BudgetNotifications.AsNoTracking()
-                .Where(x => x.Status == BudgetNotification.Pending && x.Channel == BudgetNotification.Webhook).ToListAsync(ct))
+                .Where(x => x.Status == BudgetNotification.Pending
+                    && (x.Channel == BudgetNotification.Webhook || x.Channel == BudgetNotification.Email)).ToListAsync(ct))
             .Where(x => x.NextAttemptAt is null || x.NextAttemptAt <= now)
             .OrderBy(x => x.NextAttemptAt ?? x.CreatedAt).Take(Math.Clamp(Settings.DeliveryBatchSize, 1, 500)).ToList();
         var delivered = 0;
@@ -53,19 +56,41 @@ public sealed class BudgetNotificationDispatcher(WorkspaceDbContext db, ISecretS
         if (claimed != 1) return false;
 
         var budget = await db.Budgets.AsNoTracking().SingleOrDefaultAsync(x => x.Id == notification.BudgetId, ct);
+        var outcome = notification.Channel == BudgetNotification.Email
+            ? await SendEmailAsync(notification, budget, ct)
+            : await SendWebhookAsync(notification, budget, ct);
+        switch (outcome.Status)
+        {
+            case BudgetNotification.Delivered:
+                await FinishAsync(notification.Id, attempt, BudgetNotification.Delivered, null, ct);
+                return true;
+            case BudgetNotification.Cancelled:
+                await FinishAsync(notification.Id, attempt, BudgetNotification.Cancelled, outcome.Error, ct);
+                return false;
+            default:
+                await RetryAsync(notification.Id, attempt, outcome.Error ?? "Delivery failed", ct);
+                return false;
+        }
+    }
+
+    private readonly record struct Outcome(string Status, string? Error)
+    {
+        public static Outcome Delivered => new(BudgetNotification.Delivered, null);
+        public static Outcome Cancel(string reason) => new(BudgetNotification.Cancelled, reason);
+        public static Outcome Retry(string? error) => new(BudgetNotification.Pending, error ?? "Delivery failed");
+    }
+
+    private async Task<Outcome> SendWebhookAsync(BudgetNotification notification, Budget? budget, CancellationToken ct)
+    {
         var reference = budget is null ? null : BudgetService.WebhookSecret(budget);
         if (budget is null || !budget.WebhookEnabled || budget.WebhookUrl is null || reference is null)
-        {
-            await FinishAsync(notification.Id, attempt, BudgetNotification.Cancelled, "Webhook channel was disabled before delivery.", ct);
-            return false;
-        }
+            return Outcome.Cancel("Webhook channel was disabled before delivery.");
 
         string secret;
         try { secret = await secrets.GetAsync(reference, ct); }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
-            await RetryAsync(notification.Id, attempt, "Signing secret unavailable", ct);
-            return false;
+            return Outcome.Retry("Signing secret unavailable");
         }
 
         var timestamp = clock.GetUtcNow().ToUnixTimeSeconds();
@@ -77,20 +102,44 @@ public sealed class BudgetNotificationDispatcher(WorkspaceDbContext db, ISecretS
             [SignatureHeader] = Sign(secret, timestamp, notification.PayloadJson),
             ["User-Agent"] = "Municode-Budget-Webhook/1"
         };
-        BudgetWebhookResult result;
-        using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(Settings.WebhookTimeout);
+        try
         {
-            timeout.CancelAfter(Settings.WebhookTimeout);
-            try { result = await sender.SendAsync(new(new Uri(budget.WebhookUrl), notification.PayloadJson, headers), timeout.Token); }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { result = new(false, "Timed out"); }
+            var result = await sender.SendAsync(new(new Uri(budget.WebhookUrl), notification.PayloadJson, headers), timeout.Token);
+            return result.Delivered ? Outcome.Delivered : Outcome.Retry(result.Error);
         }
-        if (result.Delivered)
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return Outcome.Retry("Timed out"); }
+    }
+
+    // Recipients are re-checked at delivery: only current members in the budget's audience with a valid address get email.
+    private async Task<Outcome> SendEmailAsync(BudgetNotification notification, Budget? budget, CancellationToken ct)
+    {
+        if (!email.Value.IsConfigured) return Outcome.Cancel("Email delivery is not configured.");
+        if (budget is null || !budget.EmailEnabled) return Outcome.Cancel("Email channel was disabled before delivery.");
+        var member = await db.OrganizationMembers.AsNoTracking()
+            .Where(x => x.OrganizationId == budget.OrganizationId && x.UserId == notification.Recipient)
+            .Select(x => new { x.Role, x.User.Email }).FirstOrDefaultAsync(ct);
+        if (member is null || budget.EmailAudience != Budget.EmailAudienceMembers
+                && member.Role is not (OrganizationRole.Owner or OrganizationRole.Admin))
+            return Outcome.Cancel("Recipient is no longer in this budget's email audience.");
+        if (!MailAddress.TryCreate(member.Email, out var address))
+            return Outcome.Cancel("Recipient has no valid email address.");
+
+        var message = BudgetEmailContent.Render(address.Address, notification.PayloadJson, budget.EmailAudience);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(email.Value.Timeout);
+        try
         {
-            await FinishAsync(notification.Id, attempt, BudgetNotification.Delivered, null, ct);
-            return true;
+            var result = await emailSender.SendAsync(message, timeout.Token);
+            return result.Delivered ? Outcome.Delivered : Outcome.Retry(result.Error);
         }
-        await RetryAsync(notification.Id, attempt, result.Error ?? "Delivery failed", ct);
-        return false;
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return Outcome.Retry("Timed out"); }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            // Exception messages can echo server responses or addresses; only the type is recorded.
+            return Outcome.Retry($"Email transport unavailable ({error.GetType().Name})");
+        }
     }
 
     private Task RetryAsync(string id, int attempt, string error, CancellationToken ct) => attempt >= Settings.MaxAttempts
