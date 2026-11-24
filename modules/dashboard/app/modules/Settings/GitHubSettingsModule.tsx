@@ -134,6 +134,7 @@ export function GitHubCallbackModule() {
   const { status } = useAuth();
   const started = useRef(false);
   const [result, setResult] = useState("Verifying GitHub callback...");
+  const [organizationId, setOrganizationId] = useState<string | null>(null);
   useEffect(() => {
     if (status !== "authenticated" || started.current) return;
     started.current = true;
@@ -146,12 +147,15 @@ export function GitHubCallbackModule() {
       method: "POST", body: installation
         ? { connectionId, state, installationId: Number(parameters.get("installation_id")) }
         : { connectionId, state, code: parameters.get("code") },
-    }).then(value => setResult(`GitHub status: ${value.status}. ${installation ? "Repository access verified." : "App created. Install it next to grant repository access."}`))
+    }).then(value => {
+      setOrganizationId(value.organizationId);
+      setResult(`GitHub status: ${value.status}. ${installation ? "Repository access verified." : "App created. Install it next to grant repository access."}`);
+    })
       .catch(reason => setResult(message(reason)));
   }, [status]);
   return <main className="mx-auto max-w-xl space-y-4 p-6">
     <h1>GitHub connection</h1>
     <p role="status">{status === "authenticated" ? result : status === "initializing" ? "Checking your Municode session..." : "Sign in to Municode, then restart GitHub setup. No callback credentials have been saved in browser storage."}</p>
-    <Link to="/settings/github">Return to GitHub settings</Link>
+    <Link to={`/workspaces?${new URLSearchParams({ settings: "github", ...(organizationId ? { organizationId } : {}) })}`}>Return to GitHub settings</Link>
   </main>;
 }

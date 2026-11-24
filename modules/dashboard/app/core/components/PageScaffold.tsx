@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 export type BreadcrumbItem = {
   label: string;
   to?: string;
+  onClick?: () => void;
 };
 
 export function PageScaffold({
@@ -26,7 +27,11 @@ export function PageScaffold({
           {breadcrumbs.map((item, index) => (
             <span className="flex items-center gap-1" key={`${item.label}-${index}`}>
               {index > 0 ? <span aria-hidden="true">/</span> : null}
-              {item.to && index < breadcrumbs.length - 1 ? (
+              {item.onClick && index < breadcrumbs.length - 1 ? (
+                <button type="button" className="hover:text-foreground hover:underline" onClick={item.onClick}>
+                  {item.label}
+                </button>
+              ) : item.to && index < breadcrumbs.length - 1 ? (
                 <Link className="hover:text-foreground hover:underline" to={item.to}>
                   {item.label}
                 </Link>

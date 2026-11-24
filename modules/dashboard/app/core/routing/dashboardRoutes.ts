@@ -1,4 +1,4 @@
-import { HardDrive, KeyRound, Server, Users } from "lucide-react";
+import { HardDrive } from "lucide-react";
 import type { ComponentType } from "react";
 
 export type DashboardRouteLayout = "guest" | "main" | "standalone";
@@ -20,7 +20,7 @@ function defineRoute(route: DashboardRouteDefinition) {
 }
 
 export const dashboardRoutes = {
-  github: defineRoute({ key: "github", name: "GitHub", path: "/settings/github", layout: "main", nav: { label: "GitHub", icon: KeyRound, group: "settings" } }),
+  github: defineRoute({ key: "github", name: "GitHub", path: "/settings/github", layout: "main" }),
   setup: defineRoute({ key: "setup", name: "First operator setup", path: "/setup", layout: "standalone" }),
   gettingStarted: defineRoute({ key: "gettingStarted", name: "Provider and plan guide", path: "/getting-started", layout: "main" }),
   signIn: defineRoute({ key: "signIn", name: "Sign in", path: "/sign-in", layout: "guest" }),
@@ -28,11 +28,11 @@ export const dashboardRoutes = {
   onboarding: defineRoute({ key: "onboarding", name: "Onboarding", path: "/onboarding", layout: "standalone" }),
   workspaces: defineRoute({ key: "workspaces", name: "Workspaces", path: "/workspaces", layout: "main", nav: { label: "Workspaces", icon: HardDrive, group: "main" } }),
   workspaceDetail: defineRoute({ key: "workspaceDetail", name: "Workspace", path: "/workspaces/:workspaceId", layout: "main" }),
-  plans: defineRoute({ key: "plans", name: "Plans", path: "/plans", layout: "main", nav: { label: "Plans", icon: Server, group: "main" } }),
+  plans: defineRoute({ key: "plans", name: "Plans", path: "/plans", layout: "main" }),
   providerAccounts: defineRoute({ key: "providerAccounts", name: "Provider accounts", path: "/plans/accounts", layout: "main" }),
   providers: defineRoute({ key: "providers", name: "Providers", path: "/providers", layout: "main" }),
-  apiKeys: defineRoute({ key: "apiKeys", name: "API Keys", path: "/settings/api-keys", layout: "main", nav: { label: "API Keys", icon: KeyRound, group: "settings" } }),
-  teamSettings: defineRoute({ key: "teamSettings", name: "Team", path: "/settings/team", layout: "main", nav: { label: "Team", icon: Users, group: "settings" } }),
+  apiKeys: defineRoute({ key: "apiKeys", name: "API Keys", path: "/settings/api-keys", layout: "main" }),
+  teamSettings: defineRoute({ key: "teamSettings", name: "Team", path: "/settings/team", layout: "main" }),
   settings: defineRoute({ key: "settings", name: "Settings", path: "/settings/account", layout: "main" }),
 } as const;
 
