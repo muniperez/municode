@@ -278,6 +278,16 @@ namespace Workspaces.Common.Migrations.Sqlite
                         .HasColumnType("TEXT")
                         .HasColumnName("currency");
 
+                    b.Property<string>("EmailAudience")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("email_audience");
+
+                    b.Property<bool>("EmailEnabled")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("email_enabled");
+
                     b.Property<bool>("InAppAlertsEnabled")
                         .HasColumnType("INTEGER")
                         .HasColumnName("in_app_alerts_enabled");
@@ -406,6 +416,12 @@ namespace Workspaces.Common.Migrations.Sqlite
                         .HasColumnType("TEXT")
                         .HasColumnName("period");
 
+                    b.Property<string>("Recipient")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("recipient");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(16)
@@ -424,7 +440,7 @@ namespace Workspaces.Common.Migrations.Sqlite
 
                     b.HasIndex("Status", "Channel");
 
-                    b.HasIndex("BudgetId", "BudgetRevision", "Period", "Threshold", "Channel")
+                    b.HasIndex("BudgetId", "BudgetRevision", "Period", "Threshold", "Channel", "Recipient")
                         .IsUnique();
 
                     b.ToTable("budget_notifications", (string)null);

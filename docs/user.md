@@ -104,8 +104,19 @@ chooses its channels:
   followed, and targets that resolve to private or loopback addresses are
   refused.
 
-Email notifications are not available yet. **Recent notifications** on each
-budget card shows delivery status, attempts and the last error.
+- **Email**: one plain-text email per recipient. Recipients are the
+  organization's owners and admins (the default) or all members. Email goes to
+  each member's account address; you cannot add other addresses. Membership and
+  role are checked again just before sending, so removed members get nothing.
+  The email lists the threshold, the estimated projection, the top contributors,
+  warnings and assumptions. It states that the figures are estimates and that
+  budgets never block or stop resources. It never contains webhook URLs, signing
+  secrets or credentials. Email needs an operator to configure outbound email.
+  Until then the budget card shows "not configured" and no email is queued or
+  sent.
+
+**Recent notifications** on each budget card shows each delivery's status,
+attempts and last error. Turning a channel off cancels its pending deliveries.
 
 ## Removing a checkout
 

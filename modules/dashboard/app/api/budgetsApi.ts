@@ -25,10 +25,17 @@ export type BudgetProjection = {
   providers: BudgetProviderProjection[]; contributors: BudgetContributor[]; excluded: BudgetExcludedWorkspace[];
   warnings: string[]; assumptions: string[];
 };
-/** The full webhook URL is write-only; only its scheme, host and port are returned. */
-export type BudgetNotificationSettings = { inApp: boolean; webhook: boolean; webhookTarget: string | null; webhookSecretConfigured: boolean };
+export type BudgetEmailAudience = "admins" | "members";
+/**
+ * The full webhook URL is write-only; only its scheme, host and port are returned.
+ * emailAvailable is false until the operator configures outbound email; until then no email is sent.
+ */
+export type BudgetNotificationSettings = {
+  inApp: boolean; webhook: boolean; webhookTarget: string | null; webhookSecretConfigured: boolean;
+  email: boolean; emailAudience: BudgetEmailAudience; emailAvailable: boolean;
+};
 export type BudgetNotificationDelivery = {
-  id: string; channel: "in_app" | "webhook"; period: string; threshold: number;
+  id: string; channel: "in_app" | "webhook" | "email"; period: string; threshold: number;
   status: "pending" | "delivered" | "failed" | "cancelled"; attempts: number; lastError: string | null;
   createdAt: string; deliveredAt: string | null; nextAttemptAt: string | null;
 };
@@ -41,7 +48,10 @@ export type Budget = {
   webhookSigningSecret?: string | null;
 };
 /** Omitted fields keep their current value; webhookUrl "" removes the webhook. */
-export type BudgetNotificationInput = { inApp?: boolean; webhook?: boolean; webhookUrl?: string; rotateWebhookSecret?: boolean };
+export type BudgetNotificationInput = {
+  inApp?: boolean; webhook?: boolean; webhookUrl?: string; rotateWebhookSecret?: boolean;
+  email?: boolean; emailAudience?: BudgetEmailAudience;
+};
 export type BudgetInput = {
   name: string; monthlyAmount: number; thresholds: number[]; providerAccountIds: string[]; notifications?: BudgetNotificationInput;
 };

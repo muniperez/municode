@@ -22,6 +22,11 @@ public sealed class Budget
     public string? WebhookSecretProvider { get; set; }
     public string? WebhookSecretPath { get; set; }
     public string? WebhookSecretVersion { get; set; }
+    // Email goes to current organization members only, chosen by role; addresses are resolved at delivery time.
+    public bool EmailEnabled { get; set; }
+    public string EmailAudience { get; set; } = EmailAudienceAdmins;
+    public const string EmailAudienceAdmins = "admins";
+    public const string EmailAudienceMembers = "members";
     public string CreatedBy { get; set; } = default!;
     public long Revision { get; set; } = 1;
     public DateTimeOffset CreatedAt { get; set; }

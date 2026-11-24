@@ -129,6 +129,58 @@ public sealed partial class DevelopmentWorkspaceApiTests
         Assert.DoesNotContain(secret, audit);
     }
 
+    [Fact]
+    public async Task BudgetEmailQueuesOneRowPerAudienceMemberOnlyWhenOperatorConfiguredEmail()
+    {
+        await using (var seed = factory.Services.CreateAsyncScope())
+        {
+            var db = seed.ServiceProvider.GetRequiredService<WorkspaceDbContext>();
+            foreach (var (id, role) in new[] { ("u-owner", OrganizationRole.Owner), ("u-admin", OrganizationRole.Admin),
+                ("u-dev", OrganizationRole.Developer) })
+            {
+                db.Users.Add(new User { Id = id, Email = $"{id}@example.test" });
+                db.OrganizationMembers.Add(new OrganizationMember { Id = "m-" + id, OrganizationId = "org", UserId = id, Role = role });
+            }
+            await db.SaveChangesAsync();
+        }
+        using var owner = Client(token);
+        var budget = await CreateBudget(owner, new("org", "Mail", 100m, null, [1],
+            Notifications: new(Email: true)));
+        Assert.Equal(new BudgetNotificationSettingsResponse(true, false, null, false, true, "admins", false), budget.Notifications);
+        var invalid = await owner.PutAsJsonAsync($"{Budgets}/{budget.Id}",
+            new UpdateBudgetRequest(budget.Revision, "Mail", 100m, Notifications: new(EmailAudience: "everyone")));
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+
+        // Unconfigured email: the threshold still alerts in-app, and no email is queued or attempted.
+        await Create(owner);
+        Assert.Equal(1, await EvaluateBudgetsConcurrentlyAsync());
+        Assert.Equal(["in_app"], (await BudgetNotificationsAsync()).Select(x => x.Channel));
+
+        factory.Email.Enabled = true;
+        factory.Email.Host = "smtp.example.test";
+        factory.Email.FromAddress = "budgets@example.test";
+        var configured = (await ListBudgets(owner)).Single();
+        Assert.True(configured.Notifications.EmailAvailable);
+        await UpdateBudget(owner, configured, 50m);
+        Assert.Equal(1, await EvaluateBudgetsConcurrentlyAsync());
+        var emails = (await BudgetNotificationsAsync()).Where(x => x.Channel == "email").ToList();
+        Assert.Equal(["u-admin", "u-owner"], emails.Select(x => x.Recipient).Order());
+        Assert.All(emails, x => Assert.Equal((BudgetNotification.Pending, 1), (x.Status, x.Threshold)));
+
+        // Widening the audience is a notification-only change: already-alerted thresholds are not re-sent.
+        var widened = await PutBudget(owner, budget.Id, new((await ListBudgets(owner)).Single().Revision, "Mail", 50m, [1], [],
+            new(EmailAudience: "members")));
+        Assert.Equal("members", widened.Notifications.EmailAudience);
+        Assert.Equal(0, await EvaluateBudgetsConcurrentlyAsync());
+        Assert.Equal(2, (await BudgetNotificationsAsync()).Count(x => x.Channel == "email"));
+    }
+
+    private async Task<List<BudgetNotification>> BudgetNotificationsAsync()
+    {
+        await using var scope = factory.Services.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<WorkspaceDbContext>().BudgetNotifications.AsNoTracking().ToListAsync();
+    }
+
     private async Task<List<AuditEvent>> BudgetAlertsAsync()
     {
         await using var scope = factory.Services.CreateAsyncScope();

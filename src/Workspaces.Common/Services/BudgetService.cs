@@ -16,10 +16,7 @@ public sealed class BudgetException(string code, string message, int status = 40
     public int Status { get; } = status;
 }
 
-/// <summary>
-/// Informational budgets: projections and threshold alerts only. Nothing here is consulted by
-/// workspace create, start, stop or resize paths, and crossing a threshold never changes resources.
-/// </summary>
+/// <summary>Saved budget plus a signing secret to reveal once and a retired secret to delete after commit.</summary>
 public sealed record BudgetChange(Budget Budget, string? WebhookSigningSecret, StoredSecretReference? RetiredWebhookSecret);
 
 /// <summary>
@@ -28,7 +25,8 @@ public sealed record BudgetChange(Budget Budget, string? WebhookSigningSecret, S
 /// Reads are side-effect free; <see cref="EvaluateAlertsAsync"/> is only called by the background worker.
 /// </summary>
 public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeProvider clock,
-    IOptions<DevelopmentWorkspaceOptions> options, AuditEventService audit, ISecretStore secrets)
+    IOptions<DevelopmentWorkspaceOptions> options, AuditEventService audit, ISecretStore secrets,
+    IOptions<BudgetEmailOptions> email)
 {
     public const string AlertActor = "system:budgets";
     public const string ThresholdCrossedEvent = "budget.threshold_crossed";
@@ -37,6 +35,7 @@ public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeP
     private const int PayloadContributors = 10;
     private static readonly int[] DefaultThresholds = [50, 80, 100];
     private DevelopmentWorkspaceOptions Policy => options.Value;
+    private bool EmailAvailable => email.Value.IsConfigured;
     private DateTimeOffset Now => clock.GetUtcNow();
 
     public async Task<IReadOnlyList<BudgetResponse>> ListAsync(string organizationId, CancellationToken ct)
@@ -46,7 +45,7 @@ public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeP
         var inputs = await LoadInputsAsync(organizationId, ct);
         var deliveries = await LoadDeliveriesAsync(budgets.Select(x => x.Id).ToList(), ct);
         return budgets.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(budget => Respond(budget, Project(budget, inputs), deliveries)).ToList();
+            .Select(budget => Respond(budget, Project(budget, inputs), deliveries, EmailAvailable)).ToList();
     }
 
     public async Task<BudgetChange> CreateAsync(CreateBudgetRequest request, string actor, CancellationToken ct)
@@ -124,7 +123,7 @@ public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeP
     {
         var projection = Project(budget, await LoadInputsAsync(budget.OrganizationId, ct));
         var deliveries = await LoadDeliveriesAsync([budget.Id], ct);
-        return Respond(budget, projection, deliveries) with { WebhookSigningSecret = webhookSigningSecret };
+        return Respond(budget, projection, deliveries, EmailAvailable) with { WebhookSigningSecret = webhookSigningSecret };
     }
 
     public Task<List<string>> OrganizationsWithBudgetsAsync(CancellationToken ct) =>
@@ -176,6 +175,11 @@ public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeP
             if (budget.WebhookEnabled && budget.WebhookUrl is not null && budget.WebhookSecretPath is not null)
                 db.BudgetNotifications.Add(Notification(budget, BudgetNotification.Webhook, period, threshold, payload, now,
                     BudgetNotification.Pending));
+            // One email row per recipient; with email disabled or unconfigured nothing is queued or attempted.
+            if (budget.EmailEnabled && EmailAvailable)
+                foreach (var recipient in await EmailRecipientsAsync(budget, ct))
+                    db.BudgetNotifications.Add(Notification(budget, BudgetNotification.Email, period, threshold, payload, now,
+                        BudgetNotification.Pending, recipient));
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
             return true;
@@ -189,11 +193,21 @@ public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeP
         }
     }
 
+    /// <summary>Current members in the budget's email audience, as user IDs; the delivery re-checks membership.</summary>
+    public async Task<List<string>> EmailRecipientsAsync(Budget budget, CancellationToken ct)
+    {
+        var members = db.OrganizationMembers.AsNoTracking().Where(x => x.OrganizationId == budget.OrganizationId);
+        if (budget.EmailAudience != Budget.EmailAudienceMembers)
+            members = members.Where(x => x.Role == OrganizationRole.Owner || x.Role == OrganizationRole.Admin);
+        return (await members.Select(x => x.UserId).Distinct().ToListAsync(ct)).Order(StringComparer.Ordinal)
+            .Take(email.Value.RecipientLimit).ToList();
+    }
+
     private BudgetNotification Notification(Budget budget, string channel, string period, int threshold, string payload,
-        DateTimeOffset now, string status) => new()
+        DateTimeOffset now, string status, string recipient = "") => new()
     {
         Id = ids.NewId("budget_notification"), OrganizationId = budget.OrganizationId, BudgetId = budget.Id,
-        BudgetRevision = budget.Revision, Channel = channel, Period = period, Threshold = threshold, PayloadJson = payload,
+        BudgetRevision = budget.Revision, Channel = channel, Recipient = recipient, Period = period, Threshold = threshold, PayloadJson = payload,
         Status = status, Attempts = status == BudgetNotification.Delivered ? 1 : 0,
         NextAttemptAt = status == BudgetNotification.Pending ? now : null,
         DeliveredAt = status == BudgetNotification.Delivered ? now : null, CreatedAt = now, UpdatedAt = now
@@ -223,6 +237,11 @@ public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeP
     {
         if (request is null) return new(budget, null, null);
         if (request.InApp is { } inApp) budget.InAppAlertsEnabled = inApp;
+        if (request.EmailAudience is { } audience)
+            budget.EmailAudience = audience.Trim().ToLowerInvariant() is Budget.EmailAudienceAdmins or Budget.EmailAudienceMembers
+                ? audience.Trim().ToLowerInvariant()
+                : throw new BudgetException("budget_email_audience_invalid", "Choose email recipients: admins or members.");
+        if (request.Email is { } emailEnabled) budget.EmailEnabled = emailEnabled;
         if (request.WebhookUrl is { } url)
         {
             budget.WebhookUrl = url.Trim().Length == 0 ? null : ValidWebhookUrl(url);
@@ -297,14 +316,15 @@ public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeP
     }
 
     private static BudgetResponse Respond(Budget budget, BudgetProjectionResponse projection,
-        ILookup<string, BudgetNotification> deliveries)
+        ILookup<string, BudgetNotification> deliveries, bool emailAvailable)
     {
         var target = budget.WebhookUrl is null ? null : new Uri(budget.WebhookUrl).GetLeftPart(UriPartial.Authority);
         var lastAlert = budget.AlertPeriod is null || budget.AlertThresholdPercent is null || budget.AlertedAt is null ? null
             : new BudgetLastAlertResponse(budget.AlertPeriod, budget.AlertThresholdPercent.Value, budget.AlertedAt.Value);
         return new(budget.Id, budget.OrganizationId, budget.Name, budget.Currency, budget.MonthlyAmount, Thresholds(budget),
             AccountIds(budget), budget.Revision, budget.CreatedAt, budget.UpdatedAt, projection,
-            new(budget.InAppAlertsEnabled, budget.WebhookEnabled, target, budget.WebhookSecretPath is not null), lastAlert,
+            new(budget.InAppAlertsEnabled, budget.WebhookEnabled, target, budget.WebhookSecretPath is not null,
+                budget.EmailEnabled, budget.EmailAudience, emailAvailable), lastAlert,
             deliveries[budget.Id].OrderByDescending(x => x.CreatedAt).ThenBy(x => x.Channel, StringComparer.Ordinal).Take(10)
                 .Select(x => new BudgetNotificationDeliveryResponse(x.Id, x.Channel, x.Period, x.Threshold, x.Status, x.Attempts,
                     x.LastError, x.CreatedAt, x.DeliveredAt, x.Status == BudgetNotification.Pending ? x.NextAttemptAt : null))

@@ -21,3 +21,8 @@ path "auth/token/renew-self" {
 path "auth/token/lookup-self" {
   capabilities = ["read"]
 }
+
+# Operator-provisioned secrets such as the budget SMTP password; services only read them.
+path "workspaces/data/env/+/operator/+" {
+  capabilities = ["read"]
+}

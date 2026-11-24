@@ -124,6 +124,110 @@ public sealed partial class DevelopmentWorkspaceProcessorTests
             await db.BudgetNotifications.AsNoTracking().SingleAsync(x => x.Channel == BudgetNotification.Webhook);
     }
 
+    [Fact]
+    public async Task BudgetEmailGoesOncePerAudienceMemberPerThresholdAndContainsOnlyEstimates()
+    {
+        var (budgets, worker, sender) = BudgetWorker();
+        await SeedBudgetMembers();
+        await StartedBudgetWorkspace();
+        var created = await budgets.CreateAsync(new("org", "Team", 100m, null, [50, 80],
+            Notifications: new(Webhook: true, WebhookUrl: BudgetHook, Email: true)), "actor", default);
+
+        // Operator email disabled: nothing is queued or attempted, and webhook delivery is unchanged.
+        await worker.RunOnceAsync(default);
+        Assert.Empty(emailSender.Messages);
+        Assert.Single(sender.Requests);
+        Assert.False(await db.BudgetNotifications.AnyAsync(x => x.Channel == BudgetNotification.Email));
+
+        ConfigureBudgetEmail();
+        // The claim uses ExecuteUpdate, so reload the budget as the API would instead of reusing the tracked instance.
+        db.ChangeTracker.Clear();
+        var budget = await db.Budgets.SingleAsync(x => x.Id == created.Budget.Id);
+        await budgets.UpdateAsync(budget, new(budget.Revision, "Team", 120m, [50, 80], []), default);
+        clock.Advance(TimeSpan.FromMinutes(10));
+        await worker.RunOnceAsync(default);
+        Assert.Equal(["admin@example.test", "owner@example.test"], emailSender.Messages.Select(x => x.To).Order());
+        var message = emailSender.Messages[0];
+        Assert.Contains("estimate reached 50%", message.Subject);
+        Assert.Contains("Projected this month: 74 USD", message.TextBody);
+        Assert.Contains("Budget fixture", message.TextBody);
+        Assert.Contains(BudgetEmailContent.EstimateNotice, message.TextBody);
+        Assert.Contains(BudgetEmailContent.InformOnlyNotice, message.TextBody);
+        foreach (var secret in new[] { "sensitive-token", "hooks.example.test", created.WebhookSigningSecret!, "smtp-password" })
+            Assert.DoesNotContain(secret, message.Subject + message.TextBody);
+
+        // Repeated evaluations in the same period never re-send; delivered rows stay delivered.
+        for (var i = 0; i < 3; i++)
+        {
+            clock.Advance(TimeSpan.FromMinutes(10));
+            await worker.RunOnceAsync(default);
+        }
+        Assert.Equal(2, emailSender.Messages.Count);
+        Assert.All(await db.BudgetNotifications.AsNoTracking().Where(x => x.Channel == BudgetNotification.Email).ToListAsync(),
+            x => Assert.Equal(BudgetNotification.Delivered, x.Status));
+    }
+
+    [Fact]
+    public async Task BudgetEmailRetriesTransportFailuresAndStopsWhenChannelOrRecipientIsRemoved()
+    {
+        var (budgets, worker, _) = BudgetWorker(new() { MaxDeliveryAttempts = 2, RetryBaseSeconds = 60 });
+        await SeedBudgetMembers();
+        ConfigureBudgetEmail();
+        emailSender.Result = new(false, "SMTP error (451)");
+        await StartedBudgetWorkspace();
+        var created = await budgets.CreateAsync(new("org", "Mail", 100m, null, [50],
+            Notifications: new(Email: true, EmailAudience: "members")), "actor", default);
+        await worker.RunOnceAsync(default);
+        Assert.Equal(3, emailSender.Messages.Count);
+        var before = await db.Budgets.AsNoTracking().SingleAsync(x => x.Id == created.Budget.Id);
+        var rows = await EmailRows();
+        Assert.All(rows, x => Assert.Equal((1, BudgetNotification.Pending, "SMTP error (451)"), (x.Attempts, x.Status, x.LastError)));
+
+        // A removed member is cancelled; disabling the channel cancels the rest; nothing changes the budget or VM.
+        db.OrganizationMembers.Remove(await db.OrganizationMembers.SingleAsync(x => x.UserId == "dev"));
+        await db.SaveChangesAsync();
+        clock.Advance(TimeSpan.FromSeconds(60));
+        await worker.RunOnceAsync(default);
+        rows = await EmailRows();
+        Assert.Equal(BudgetNotification.Cancelled, rows.Single(x => x.Recipient == "dev").Status);
+        Assert.All(rows.Where(x => x.Recipient != "dev"), x => Assert.Equal((2, BudgetNotification.Failed), (x.Attempts, x.Status)));
+        Assert.Equal(5, emailSender.Messages.Count);
+
+        var budget = await db.Budgets.SingleAsync(x => x.Id == created.Budget.Id);
+        await budgets.UpdateAsync(budget, new(budget.Revision, "Mail", 100m, [50], [], new(Email: false)), default);
+        db.BudgetNotifications.Add(new BudgetNotification { Id = "queued", OrganizationId = "org", BudgetId = budget.Id,
+            BudgetRevision = budget.Revision, Channel = BudgetNotification.Email, Recipient = "owner", Period = "2099-01",
+            Threshold = 80, CreatedAt = clock.GetUtcNow(), UpdatedAt = clock.GetUtcNow() });
+        await db.SaveChangesAsync();
+        await worker.RunOnceAsync(default);
+        Assert.Equal(5, emailSender.Messages.Count);
+        Assert.Equal(BudgetNotification.Cancelled, (await db.BudgetNotifications.AsNoTracking().SingleAsync(x => x.Id == "queued")).Status);
+        var after = await db.Budgets.AsNoTracking().SingleAsync(x => x.Id == created.Budget.Id);
+        Assert.Equal((before.AlertPeriod, before.AlertThresholdPercent), (after.AlertPeriod, after.AlertThresholdPercent));
+        Assert.True((await db.DevelopmentWorkspaceVms.AsNoTracking().SingleAsync()).ComputeReserved);
+
+        Task<List<BudgetNotification>> EmailRows() =>
+            db.BudgetNotifications.AsNoTracking().Where(x => x.Channel == BudgetNotification.Email).ToListAsync();
+    }
+
+    private void ConfigureBudgetEmail()
+    {
+        budgetEmail.Enabled = true;
+        budgetEmail.Host = "smtp.example.test";
+        budgetEmail.FromAddress = "budgets@example.test";
+    }
+
+    private async Task SeedBudgetMembers()
+    {
+        foreach (var (id, role) in new[] { ("owner", OrganizationRole.Owner), ("admin", OrganizationRole.Admin),
+            ("dev", OrganizationRole.Developer) })
+        {
+            db.Users.Add(new User { Id = id, Email = $"{id}@example.test" });
+            db.OrganizationMembers.Add(new OrganizationMember { Id = "member-" + id, OrganizationId = "org", UserId = id, Role = role });
+        }
+        await db.SaveChangesAsync();
+    }
+
     [Theory]
     [InlineData("203.0.113.10", false)]
     [InlineData("8.8.8.8", true)]
@@ -143,6 +247,9 @@ public sealed partial class DevelopmentWorkspaceProcessorTests
         return workspace;
     }
 
+    private readonly BudgetEmailOptions budgetEmail = new();
+    private readonly SyntheticEmailSender emailSender = new();
+
     private (BudgetService Budgets, BudgetAlertWorker Worker, SyntheticWebhookSender Sender) BudgetWorker(
         BudgetAlertWorkerOptions? settings = null)
     {
@@ -153,11 +260,24 @@ public sealed partial class DevelopmentWorkspaceProcessorTests
             .AddSingleton<ISecretStore>(secrets).AddSingleton<IBudgetWebhookSender>(sender)
             .AddSingleton<IOptions<DevelopmentWorkspaceOptions>>(Options.Create(policy))
             .AddSingleton<IOptions<BudgetAlertWorkerOptions>>(Options.Create(settings))
+            .AddSingleton<IOptions<BudgetEmailOptions>>(Options.Create(budgetEmail)).AddSingleton<IBudgetEmailSender>(emailSender)
             .AddScoped<AuditEventService>().AddScoped<BudgetService>().AddScoped<BudgetNotificationDispatcher>()
             .BuildServiceProvider();
         var worker = new BudgetAlertWorker(provider.GetRequiredService<IServiceScopeFactory>(), clock, Options.Create(settings),
             NullLogger<BudgetAlertWorker>.Instance);
         return (ActivatorUtilities.CreateInstance<BudgetService>(provider), worker, sender);
+    }
+
+    private sealed class SyntheticEmailSender : IBudgetEmailSender
+    {
+        public List<BudgetEmailMessage> Messages { get; } = [];
+        public BudgetEmailResult Result { get; set; } = new(true, null);
+
+        public Task<BudgetEmailResult> SendAsync(BudgetEmailMessage message, CancellationToken ct)
+        {
+            Messages.Add(message);
+            return Task.FromResult(Result);
+        }
     }
 
     private sealed class SyntheticWebhookSender : IBudgetWebhookSender

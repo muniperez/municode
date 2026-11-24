@@ -9,8 +9,9 @@ public sealed record UpdateBudgetRequest(long Revision, string Name, decimal Mon
     BudgetNotificationSettingsRequest? Notifications = null);
 
 // Null fields keep the current value. WebhookUrl "" removes the webhook. The full URL is write-only.
+// EmailAudience is "admins" (owners and admins) or "members" (every current member).
 public sealed record BudgetNotificationSettingsRequest(bool? InApp = null, bool? Webhook = null, string? WebhookUrl = null,
-    bool RotateWebhookSecret = false);
+    bool RotateWebhookSecret = false, bool? Email = null, string? EmailAudience = null);
 
 public sealed record BudgetResponse(string Id, string OrganizationId, string Name, string Currency, decimal MonthlyAmount,
     IReadOnlyList<int> Thresholds, IReadOnlyList<string> ProviderAccountIds, long Revision, DateTimeOffset CreatedAt,
@@ -22,7 +23,9 @@ public sealed record BudgetResponse(string Id, string OrganizationId, string Nam
 }
 
 // WebhookTarget is only the scheme, host and port so query-string tokens in the URL are never echoed back.
-public sealed record BudgetNotificationSettingsResponse(bool InApp, bool Webhook, string? WebhookTarget, bool WebhookSecretConfigured);
+// EmailAvailable is false until the operator configures outbound email; until then no email is queued or sent.
+public sealed record BudgetNotificationSettingsResponse(bool InApp, bool Webhook, string? WebhookTarget, bool WebhookSecretConfigured,
+    bool Email = false, string EmailAudience = "admins", bool EmailAvailable = false);
 
 public sealed record BudgetLastAlertResponse(string Period, int Threshold, DateTimeOffset AlertedAt);
 
