@@ -49,8 +49,17 @@ public sealed class KratosBrowserFlowClient(HttpClient client, IOptions<KratosOp
     private static readonly HashSet<string> Fields = new(StringComparer.Ordinal)
     {
         "csrf_token", "identifier", "password", "method", "email", "code",
-        "traits.email", "traits.name", "traits.name.first", "traits.name.last"
+        "traits.email", "traits.name", "traits.name.first", "traits.name.last",
+        PasskeyLoginField, PasskeyRegisterField, PasskeyRemoveField
     };
+    private const string PasskeyGroup = "passkey";
+    private const string PasskeyLoginField = "passkey_login";
+    private const string PasskeyRegisterField = "passkey_settings_register";
+    private const string PasskeyRemoveField = "passkey_remove";
+    private const string PasskeyChallengeNode = "passkey_challenge";
+    private const string PasskeyCreateDataNode = "passkey_create_data";
+    private const int PasskeyNameLimit = 128;
+    private static readonly Regex PasskeyCredentialId = new("^[0-9a-f]{2,2048}$", RegexOptions.CultureInvariant);
 
     public static bool IsFlowCookie(string name) =>
         name is "ory_kratos_session" or "ory_kratos_continuity" || Regex.IsMatch(name, @"^csrf_token_[A-Za-z0-9_-]{1,128}$");
@@ -103,7 +112,7 @@ public sealed class KratosBrowserFlowClient(HttpClient client, IOptions<KratosOp
         AddCookies(request, cookieJar);
         if (operation == "submit")
         {
-            request.Content = new StringContent(SerializeFields(fields), Encoding.UTF8, "application/json");
+            request.Content = new StringContent(SerializeFields(kind, fields), Encoding.UTF8, "application/json");
         }
         var changesPassword = kind == "settings" && operation == "submit" && fields is { } body &&
             body.TryGetProperty("method", out var method) && method.ValueEquals("password");
@@ -158,11 +167,12 @@ public sealed class KratosBrowserFlowClient(HttpClient client, IOptions<KratosOp
             var nodes = flow.Ui.Nodes
                 .Where(node => node is not null && node.Attributes is not null && Fields.Contains(node.Attributes.Name) &&
                     node.Attributes.Type is "hidden" or "text" or "email" or "password" or "submit" &&
-                    node.Group != "oidc")
+                    node.Group is not ("oidc" or PasskeyGroup))
                 .Select(node => new AccountFlowNode(
                     node.Group, node.Attributes.Type, node.Attributes.Name,
                     node.Attributes.Type == "password" || node.Attributes.Name is "password" or "code" ? null : node.Attributes.Value.ToString(),
                     node.Attributes.Required, SanitizeMessages(node.Messages)))
+                .Concat(_options.PasskeyEnabled ? PasskeyNodes(kind, flow.Ui.Nodes) : Enumerable.Empty<AccountFlowNode>())
                 .ToArray();
             // Provider navigation is never a generic form submit; it uses the fixed provider action below.
             var providerField = kind == "login" ? "provider" : "link";
@@ -381,7 +391,64 @@ public sealed class KratosBrowserFlowClient(HttpClient client, IOptions<KratosOp
         return uri;
     }
 
-    private string SerializeFields(JsonElement? fields)
+    /// <summary>
+    /// Exposes only the WebAuthn options and removable credentials of the Kratos passkey method; the browser
+    /// performs the ceremony itself, so Kratos scripts and trigger buttons are never forwarded.
+    /// </summary>
+    private static IEnumerable<AccountFlowNode> PasskeyNodes(string kind, UpstreamNode[] nodes)
+    {
+        foreach (var node in nodes)
+        {
+            if (node is not { Group: PasskeyGroup, Attributes: { } attributes }) continue;
+            var value = attributes.Value.ValueKind == JsonValueKind.String ? attributes.Value.GetString() : null;
+            if (attributes.Type == "hidden" && value is { Length: > 0 } &&
+                (kind == "login" && attributes.Name == PasskeyChallengeNode ||
+                 kind == "settings" && attributes.Name == PasskeyCreateDataNode))
+            {
+                if (!IsPublicKeyOptions(value)) throw new KratosUnavailableException();
+                yield return new AccountFlowNode(PasskeyGroup, "hidden", attributes.Name, value, false, []);
+            }
+            else if (kind == "settings" && attributes is { Name: PasskeyRemoveField, Type: "submit" } &&
+                value is not null && PasskeyCredentialId.IsMatch(value))
+            {
+                yield return new AccountFlowNode(PasskeyGroup, "submit", PasskeyRemoveField, value, false,
+                    SanitizeMessages(node.Messages), PasskeyDetails(node.Meta?.Label?.Context), attributes.Disabled == true);
+            }
+        }
+    }
+
+    private static bool IsPublicKeyOptions(string value)
+    {
+        try
+        {
+            using var options = JsonDocument.Parse(value, new JsonDocumentOptions { MaxDepth = 16 });
+            return options.RootElement.ValueKind == JsonValueKind.Object &&
+                options.RootElement.TryGetProperty("publicKey", out var publicKey) && publicKey.ValueKind == JsonValueKind.Object;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static AccountFlowPasskey PasskeyDetails(JsonElement? context)
+    {
+        string? name = null;
+        DateTimeOffset? addedAt = null;
+        if (context is { ValueKind: JsonValueKind.Object } values)
+        {
+            if (values.TryGetProperty("display_name", out var displayName) && displayName.ValueKind == JsonValueKind.String &&
+                displayName.GetString() is { Length: > 0 and <= PasskeyNameLimit } text &&
+                !text.Any(char.IsControl) && text != "unnamed")
+                name = text;
+            if (values.TryGetProperty("added_at", out var added) && added.ValueKind == JsonValueKind.String &&
+                added.TryGetDateTimeOffset(out var timestamp))
+                addedAt = timestamp;
+        }
+        return new AccountFlowPasskey(name, addedAt);
+    }
+
+    private string SerializeFields(string kind, JsonElement? fields)
     {
         if (fields is not { ValueKind: JsonValueKind.Object } body) throw InvalidFlow();
         var values = new Dictionary<string, object>(StringComparer.Ordinal);
@@ -405,9 +472,37 @@ public sealed class KratosBrowserFlowClient(HttpClient client, IOptions<KratosOp
             else if (!values.TryAdd(field.Name, value)) throw InvalidFlow();
         }
         if (traits.Count > 0) values["traits"] = traits;
+        ValidatePasskeyFields(kind, values);
         if (!values.TryGetValue("csrf_token", out var csrf) || string.IsNullOrWhiteSpace(csrf.ToString()))
             throw new AccountFlowException("csrf_invalid", 403, "The account form is invalid.");
         return JsonSerializer.Serialize(values);
+    }
+
+    private void ValidatePasskeyFields(string kind, IReadOnlyDictionary<string, object> values)
+    {
+        var passkeyFields = values.Keys.Where(name => name.StartsWith("passkey_", StringComparison.Ordinal)).ToArray();
+        var passkeyMethod = values.TryGetValue("method", out var method) && Equals(method, PasskeyGroup);
+        if (passkeyFields.Length == 0 && !passkeyMethod) return;
+        // One passkey operation per submit, only for its flow, and never mixed with another method's fields.
+        var allowed = kind == "login" ? new[] { PasskeyLoginField } :
+            kind == "settings" ? new[] { PasskeyRegisterField, PasskeyRemoveField } : [];
+        if (!_options.PasskeyEnabled || !passkeyMethod || passkeyFields.Length != 1 || !allowed.Contains(passkeyFields[0]) ||
+            values.Keys.Any(name => name is not ("csrf_token" or "method" or "identifier") && !name.StartsWith("passkey_", StringComparison.Ordinal)) ||
+            values[passkeyFields[0]] is not string value || value.Length == 0 ||
+            passkeyFields[0] == PasskeyRemoveField && !PasskeyCredentialId.IsMatch(value))
+            throw InvalidFlow();
+        if (passkeyFields[0] != PasskeyRemoveField)
+        {
+            try
+            {
+                using var credential = JsonDocument.Parse(value, new JsonDocumentOptions { MaxDepth = 8 });
+                if (credential.RootElement.ValueKind != JsonValueKind.Object) throw InvalidFlow();
+            }
+            catch (JsonException)
+            {
+                throw InvalidFlow();
+            }
+        }
     }
 
     private static void AddCookies(HttpRequestMessage request, IReadOnlyDictionary<string, string> cookies)
@@ -493,10 +588,12 @@ public sealed class KratosBrowserFlowClient(HttpClient client, IOptions<KratosOp
     {
         public UpstreamMessage[] Messages { get; init; } = Messages ?? [];
     }
-    private sealed record UpstreamNode(string Group, UpstreamAttributes Attributes, UpstreamMessage[] Messages)
+    private sealed record UpstreamNode(string Group, UpstreamAttributes Attributes, UpstreamMessage[] Messages, UpstreamMeta? Meta)
     {
         public UpstreamMessage[] Messages { get; init; } = Messages ?? [];
     }
-    private sealed record UpstreamAttributes(string Name, string Type, JsonElement Value, bool Required);
+    private sealed record UpstreamAttributes(string Name, string Type, JsonElement Value, bool Required, bool? Disabled);
+    private sealed record UpstreamMeta(UpstreamLabel? Label);
+    private sealed record UpstreamLabel(JsonElement? Context);
     private sealed record UpstreamMessage(int Id, string Type);
 }

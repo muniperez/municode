@@ -162,6 +162,64 @@ class PackageTests(unittest.TestCase):
             networks,
         )
 
+    def test_passkeys_bind_to_the_configured_dashboard_origin(self):
+        bundle = ROOT / "packaging" / "bundle"
+        self.assertIn(
+            "    passkey:\n"
+            "      enabled: true\n"
+            "      config:\n"
+            "        rp:\n"
+            "          display_name: Municode\n",
+            (bundle / "kratos.yml").read_text(),
+        )
+        for schema in (bundle / "identity.schema.json",
+                       ROOT / "docs" / "setup" / "identity.schema.json"):
+            with self.subTest(schema=schema.name):
+                email = json.loads(schema.read_text())["properties"]["traits"]["properties"]["email"]
+                self.assertEqual(
+                    email["ory.sh/kratos"]["credentials"]["passkey"], {"display_name": True}
+                )
+
+        if shutil.which("docker") is None or subprocess.run(
+                ["docker", "compose", "version"], capture_output=True).returncode != 0:
+            self.skipTest("docker compose is unavailable")
+        secrets = self.root / "secrets"
+        for name in ("postgres-admin-password", "app-db-password", "kratos-db-password",
+                     "workspace-gateway-credential", "ssh/worker-key", "openbao-server.crt",
+                     "openbao-server.key", "openbao-ca.crt", "openbao-approle/role-id",
+                     "openbao-approle/secret-id", "kratos.env"):
+            (secrets / name).parent.mkdir(parents=True, exist_ok=True)
+            (secrets / name).write_text("synthetic\n")
+        (secrets / "bootstrap").mkdir()
+
+        def render(**overrides):
+            environment = {
+                key: value for key, value in os.environ.items()
+                if not key.startswith(("CONSOLE_", "WORKSPACES_"))
+            }
+            environment.update(WORKSPACES_SECRETS_DIR=str(secrets),
+                               CONSOLE_HOSTNAME="dashboard.customer.test",
+                               CONSOLE_URL="https://dashboard.customer.test", **overrides)
+            rendered = subprocess.run(
+                ["docker", "compose", "-f", str(bundle / "compose.yml"),
+                 "--env-file", str(bundle / ".env.example"), "config", "--format", "json"],
+                env=environment, check=True, capture_output=True, text=True,
+            ).stdout
+            services = json.loads(rendered)["services"]
+            return services["kratos"]["environment"], services["api"]["environment"]
+
+        kratos, api = render()
+        self.assertEqual(kratos["SELFSERVICE_METHODS_PASSKEY_ENABLED"], "true")
+        self.assertEqual(kratos["SELFSERVICE_METHODS_PASSKEY_CONFIG_RP_ID"], "dashboard.customer.test")
+        self.assertEqual(kratos["SELFSERVICE_METHODS_PASSKEY_CONFIG_RP_ORIGINS"],
+                         "https://dashboard.customer.test")
+        self.assertEqual(api["Kratos__DashboardOrigin"], "https://dashboard.customer.test")
+        self.assertEqual(api["Kratos__PasskeyEnabled"], "true")
+
+        kratos, api = render(WORKSPACES_PASSKEYS_ENABLED="false")
+        self.assertEqual(kratos["SELFSERVICE_METHODS_PASSKEY_ENABLED"], "false")
+        self.assertEqual(api["Kratos__PasskeyEnabled"], "false")
+
     def test_archive_checksum_is_present(self):
         subprocess.run(self.command(), check=True, capture_output=True, text=True)
         lines = (self.output / "checksums.txt").read_text().splitlines()

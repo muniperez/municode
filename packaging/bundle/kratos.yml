@@ -27,6 +27,15 @@ selfservice:
   methods:
     password:
       enabled: true
+    # Compose derives the relying party from CONSOLE_HOSTNAME and CONSOLE_URL.
+    passkey:
+      enabled: true
+      config:
+        rp:
+          display_name: Municode
+          id: localhost
+          origins:
+            - https://localhost
   flows:
     error:
       ui_url: https://localhost/sign-in

@@ -6,6 +6,8 @@ export type AccountCapabilities = {
   emailRecovery: boolean;
   /** Whether the operator offers "Keep me signed in". */
   keepSignedIn?: boolean;
+  /** Whether the operator enabled passkey sign-in and enrollment. */
+  passkey?: boolean;
   bootstrapState: "required" | "ready" | "blocked";
 };
 
@@ -31,6 +33,9 @@ export type FlowNode = {
   value: string | null;
   required: boolean;
   messages: FlowMessage[];
+  disabled?: boolean;
+  /** Present on settings `passkey_remove` nodes. */
+  passkey?: { displayName: string | null; addedAt: string | null };
 };
 export type FlowProvider = { id: string; action: string; method: string };
 export type BrowserFlow = {

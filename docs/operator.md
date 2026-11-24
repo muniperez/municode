@@ -193,6 +193,15 @@ installation ID, and retain image references from the exact release metadata. If
 reverse proxy or firewall imposes another private address, retain the API,
 gateway and worker consistency described in [runtime setup](setup/runtime.md).
 
+Passkey sign-in is enabled by default. Kratos uses `CONSOLE_HOSTNAME` as the
+WebAuthn relying-party ID and `CONSOLE_URL` as its only allowed origin, so
+`CONSOLE_HOSTNAME` must be the bare host name of the HTTPS `CONSOLE_URL`.
+Passkeys are bound to that host name: changing the dashboard domain later
+invalidates every enrolled passkey, and users must sign in with their password
+and enroll again. Set `WORKSPACES_PASSKEYS_ENABLED=false` in `.env` to turn
+passkeys off for both Kratos and the dashboard; password sign-in remains
+available either way.
+
 Start only PostgreSQL and OpenBao first:
 
 ```sh

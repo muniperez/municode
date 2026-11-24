@@ -7,7 +7,8 @@ public sealed record AccountCapabilitiesResponse(
     bool Google,
     bool EmailRecovery,
     string BootstrapState,
-    bool KeepSignedIn = false);
+    bool KeepSignedIn = false,
+    bool Passkey = false);
 
 /// <param name="KeepSignedIn">Whether this session is a remembered ("Keep me signed in") session.</param>
 /// <param name="RenewAfter">Earliest time <c>POST /api/account/session/renew</c> extends the idle deadline; null at the cap.</param>
@@ -57,6 +58,14 @@ public sealed record AccountFlowNode(
     string Name,
     string? Value,
     bool Required,
-    IReadOnlyList<AccountFlowMessage> Messages);
+    IReadOnlyList<AccountFlowMessage> Messages,
+    // Set only on passkey removal nodes.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    AccountFlowPasskey? Passkey = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    bool Disabled = false);
+
+/// <param name="DisplayName">The enrolled passkey name; null when Kratos has none.</param>
+public sealed record AccountFlowPasskey(string? DisplayName, DateTimeOffset? AddedAt);
 
 public sealed record AccountFlowMessage(int Id, string Text, string Type);
