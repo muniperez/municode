@@ -31,13 +31,27 @@
 			}
 		}	`
 	}
+	handle /assets/* {
+		file_server
+	}
 	handle {
 		header /settings/github/* {
 			Referrer-Policy no-referrer
 			Cache-Control no-store
 		}
-		try_files {path} /index.html
-		file_server
+		route {
+			try_files {path} /index.html
+			@shell path / /index.html
+			header @shell {
+				?Cache-Control no-cache
+				-ETag
+				-Last-Modified
+			}
+			# Packaged shells can share deterministic timestamps and file sizes.
+			request_header @shell -If-None-Match
+			request_header @shell -If-Modified-Since
+			file_server
+		}
 	}
 }
 
