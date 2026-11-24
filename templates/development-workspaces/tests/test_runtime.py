@@ -131,6 +131,12 @@ class FakeLinux:
     def scratch_resume(self):
         self.events.append("scratch-resume")
 
+    def migrate_layout(self, requested):
+        self.events.append("migrate-layout" if requested else "migration-check")
+
+    def finish_layout_migration(self):
+        return None
+
     def attach_repos(self, restore=True):
         self.events.append("attach-repos")
 
@@ -1498,6 +1504,147 @@ class LocalCheckoutTests(unittest.TestCase):
         self.assertEqual([], self.commands)
         self.assertFalse((self.root / "vm-b/repos").exists())
 
+    def legacy_tree(self):
+        """A layout 1 volume: checkouts directly on it, with Git state, edits and ignored outputs."""
+        app = self.workspace / "repos/app"
+        app.mkdir()
+        git(app, "init", "-q", "-b", "main")
+        (app / ".gitignore").write_text("node_modules/\n")
+        (app / "package.json").write_text("{}\n")
+        git(app, "add", "-A")
+        git(app, "commit", "-qm", "initial")
+        git(app, "worktree", "add", "-q", "-b", "feature", str(self.workspace / "repos/app-feature"))
+        (app / "package.json").write_text('{"dirty": true}\n')
+        (app / "untracked.txt").write_text("uncommitted\n")
+        (app / "node_modules/pkg").mkdir(parents=True)
+        (app / "node_modules/pkg/index.js").write_text("rebuildable\n")
+        (self.workspace / "repos/notes.txt").write_text("non-Git data\n")
+        return {str(path.relative_to(self.workspace / "repos")): path.read_bytes()
+                for path in sorted((self.workspace / "repos").rglob("*")) if path.is_file()}
+
+    def migrating(self, local, **changes):
+        adapter = self.adapter(local, **changes)
+        patcher = patch.object(adapter, "scratch_detach", return_value=dict(unmounted=1, lazy=0, lazyPaths=[]))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return adapter
+
+    def tree(self, root):
+        return {str(path.relative_to(root)): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
+
+    def test_layout_1_volume_migrates_through_a_proven_restore_and_keeps_uncommitted_edits(self):
+        before = self.legacy_tree()
+        local = self.root / "vm-a"
+        adapter = self.migrating(local)
+        journal = adapter.migrate_layout(True)
+        record = journal["migration"]
+        self.assertEqual("detached", journal["state"])
+        self.assertEqual(record["checkpointId"], self.marker()["initialCheckpoint"])
+        self.assertEqual(1, record["omittedCount"])
+        self.assertEqual(1, record["scratchUnmounted"])
+        for key in ("saveMs", "verifyMs", "restoreMs", "compareMs", "writersBlockedMs", "bytes",
+                    "peakStoreGrowthBytes"):
+            self.assertIsInstance(record[key], int)
+        # The old tree is moved aside unchanged until the new mount is attached.
+        self.assertEqual(before, self.tree(self.workspace / rt.MIGRATION_OLD))
+        self.assertFalse((self.workspace / "repos").exists())
+        expected = {path: data for path, data in before.items() if "node_modules" not in path}
+        self.assertEqual(expected, self.tree(local / "repos"))
+        (self.workspace / "repos").mkdir()  # layout() recreates the empty mount point.
+        self.assertEqual("kept", self.attach(adapter)["action"])
+        self.assertEqual(record, adapter.finish_layout_migration())
+        for name in (rt.MIGRATION_OLD, rt.MIGRATION_JOURNAL, rt.MIGRATION_LINEAGE):
+            self.assertFalse(os.path.lexists(self.workspace / name))
+        self.assertIsNone(adapter.migrate_layout(True))
+        self.assertIsNone(adapter.finish_layout_migration())
+        # A replacement VM restores the migrated tree, with its uncommitted edits.
+        successor = self.adapter(self.root / "vm-b", vmId="vm-b", generation=4)
+        self.assertEqual(("restored", record["checkpointId"]),
+                         (lambda result: (result["action"], result["checkpointId"]))(self.attach(successor)))
+        self.assertEqual(expected, self.tree(self.root / "vm-b/repos"))
+
+    def test_migration_failure_or_crash_before_cutover_rolls_back_to_layout_1(self):
+        before = self.legacy_tree()
+        local = self.root / "vm-a"
+        adapter = self.migrating(local)
+        with patch.object(rc, "compare_tree", side_effect=rc.Failed("Restored checkout differs from its checkpoint")), \
+                self.assertRaisesRegex(rt.Blocked, "rolled back: Restored checkout differs"):
+            adapter.migrate_layout(True)
+        with patch.object(rc, "restore", side_effect=rc.Failed("Restore destination is full")), \
+                self.assertRaisesRegex(rt.Blocked, "rolled back: Restore destination is full"):
+            adapter.migrate_layout(True)
+
+        def rolled_back():
+            self.assertEqual(before, self.tree(self.workspace / "repos"))
+            for name in (rt.LAYOUT_MARKER, rt.CHECKPOINT_STORE, rt.MIGRATION_JOURNAL, rt.MIGRATION_LINEAGE,
+                         rt.MIGRATION_OLD):
+                self.assertFalse(os.path.lexists(self.workspace / name), name)
+            for name in ("repos", "repos.lineage.json", ".restore-staging"):
+                self.assertFalse(os.path.lexists(local / name), name)
+
+        rolled_back()
+        # A crash after the proof, before the marker is written: the next bootstrap rolls back even
+        # without the request (the worker no longer asks for layout 2).
+        with patch.object(adapter, "layout_marker", side_effect=SystemExit("crash")), \
+                self.assertRaises(SystemExit):
+            adapter.migrate_layout(True)
+        self.assertEqual("cutover", adapter.migration_journal()["state"])
+        self.assertTrue((local / "repos/notes.txt").exists())
+        legacy = self.adapter(local, storageLayout=1)
+        self.assertIsNone(legacy.migrate_layout(False))
+        rolled_back()
+
+    def test_migration_resumes_after_a_crash_following_cutover(self):
+        self.legacy_tree()
+        local = self.root / "vm-a"
+        adapter = self.migrating(local)
+        real_rename = os.rename
+
+        def crash(source, target, *args, **kwargs):
+            if Path(target).name == rt.MIGRATION_OLD:
+                raise SystemExit("crash")
+            return real_rename(source, target, *args, **kwargs)
+
+        with patch.object(rt.os, "rename", side_effect=crash), self.assertRaises(SystemExit):
+            adapter.migrate_layout(True)
+        self.assertTrue(self.marker()["initialCheckpoint"])
+        self.assertEqual("cutover", adapter.migration_journal()["state"])
+        self.assertTrue((self.workspace / "repos/notes.txt").exists())  # Past cutover: never rolled back.
+        # A same-VM reboot that attached the tree hides the old one; the journal waits.
+        with patch.object(rt.os.path, "ismount", return_value=True):
+            self.assertEqual("cutover", adapter.migrate_layout(True)["state"])
+        self.assertIsNone(adapter.finish_layout_migration())
+        self.assertEqual("detached", adapter.migrate_layout(False)["state"])
+        (self.workspace / "repos").mkdir()
+        self.attach(adapter)
+        self.assertEqual(self.marker()["initialCheckpoint"], adapter.finish_layout_migration()["checkpointId"])
+        self.assertFalse((self.workspace / rt.MIGRATION_OLD).exists())
+
+    def test_migration_refuses_unresolved_scratch_or_foreign_state_without_writing(self):
+        local = self.root / "vm-a"
+        adapter = self.migrating(local)
+        self.assertIsNone(adapter.migrate_layout(True))  # Empty volume: layout 2 starts empty.
+        self.legacy_tree()
+        self.assertIsNone(adapter.migrate_layout(False))
+        (self.workspace / rt.SCRATCH_TRASH).mkdir()
+        with self.assertRaisesRegex(rt.Blocked, "relocation is unresolved"):
+            adapter.migrate_layout(True)
+        (self.workspace / rt.SCRATCH_TRASH).rmdir()
+        (local / "repos").mkdir()
+        with self.assertRaisesRegex(rt.Blocked, "already exists"):
+            adapter.migrate_layout(True)
+        (local / "repos").rmdir()
+        (self.workspace / rt.CHECKPOINT_STORE / "objects").mkdir(parents=True)
+        with self.assertRaisesRegex(rt.Blocked, "without a storage layout marker"):
+            adapter.migrate_layout(True)
+        shutil.rmtree(self.workspace / rt.CHECKPOINT_STORE)
+        rt.atomic_json(self.workspace / rt.MIGRATION_JOURNAL, dict(
+            schemaVersion=1, state="started", workspaceId="ws-1", providerVolumeId="other", filesystemUuid="fs-1"))
+        with self.assertRaisesRegex(rt.Blocked, "belongs to another volume"):
+            adapter.migrate_layout(True)
+        self.assertTrue((self.workspace / "repos/notes.txt").exists())
+        self.assertFalse((self.workspace / rt.LAYOUT_MARKER).exists())
+
     def test_offhost_backup_carries_the_final_checkpoint_and_restores_it_on_a_separate_volume(self):
         local = self.root / "vm-a"
         source = self.adapter(local)
@@ -1780,14 +1927,23 @@ class LocalCheckoutTests(unittest.TestCase):
         request = dict(vmId="vm-a", generation=3, gatewayAdmissionsFenced=True, unobservableToolsAbsent=True,
                        t3SnapshotSequence=0)
         runtime.handle(dict(request, operationId="boot", action="bootstrap"))
-        self.assertEqual(["mount", "layout", "attach-repos"], fake.events)
+        self.assertEqual(["mount", "migration-check", "layout", "attach-repos"], fake.events)
         self.assertEqual("Ready", runtime.s["phase"])
+        # Migration runs only on request, before the layout, and its record reaches the receipt.
+        fake.events.clear()
+        fake.finish_layout_migration = lambda: dict(checkpointId="c-1", saveMs=5)
+        migrating = rt.Runtime(dict(config, migrateStorageLayout=True), self.root / "migrate", fake,
+                               git=object(), clock=lambda: 1000)
+        receipt = migrating.handle(dict(request, operationId="boot", action="bootstrap"))
+        self.assertEqual(["mount", "migrate-layout", "layout", "attach-repos"], fake.events)
+        self.assertEqual(dict(checkpointId="c-1", saveMs=5), receipt["storageLayoutMigration"])
         rt.Runtime(dict(config, checkpointIntervalSeconds=60), self.root / "interval", fake, git=object())
         for change in (dict(kind="ephemeral", volume=None, ignoredDataAcknowledged=True),
                        dict(storageLayout=3), dict(storageLayout=True),
                        dict(checkpointIntervalSeconds=59), dict(checkpointIntervalSeconds=3601),
                        dict(checkpointIntervalSeconds=True), dict(checkpointIntervalSeconds=300.0),
-                       dict(storageLayout=1, checkpointIntervalSeconds=300)):
+                       dict(storageLayout=1, checkpointIntervalSeconds=300),
+                       dict(migrateStorageLayout=1), dict(storageLayout=1, migrateStorageLayout=True)):
             with self.subTest(change=change), self.assertRaises(rt.Blocked):
                 rt.Runtime(dict(config, **change), self.root / "invalid", fake, git=object())
 

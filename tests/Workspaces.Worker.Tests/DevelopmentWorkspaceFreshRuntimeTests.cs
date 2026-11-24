@@ -101,6 +101,51 @@ public sealed partial class DevelopmentWorkspaceProcessorTests
     }
 
     [Fact]
+    public async Task MigrationOptionMovesAnExistingLayout1VolumeOnlyAfterAReadyBootstrap()
+    {
+        cloud.AllowProvisioning = true;
+        runtime.VolumeFilesystemUuid = "filesystem-retained";
+        workerOptions.MigrateExistingCheckouts = true;
+        UseEnrollment();
+        var workspace = await lifecycle.CreateAsync(new("org", "Migration fixture", "image", "standard", "plan", 20, "migrate"), "actor", default);
+        var vmId = workspace.PrimaryVmId;
+        await lifecycle.StartAsync(workspace.Id, "org", default);
+        var first = await ProcessUntilAsync(vmId, "ready");
+        // Without LocalCheckouts the migration option does nothing.
+        Assert.Equal(1, (await CurrentWorkspace(workspace.Id)).StorageLayout);
+        Assert.False(runtime.BootstrapConfiguration!.Value.TryGetProperty("storageLayout", out _));
+        Assert.False(runtime.BootstrapConfiguration!.Value.TryGetProperty("migrateStorageLayout", out _));
+        await lifecycle.StopVmAsync(workspace.Id, "org", vmId, first.Generation, default);
+        var stopped = await ProcessUntilAsync(vmId, "stopped");
+
+        workerOptions.LocalCheckouts = true;
+        var enroll = runtime.Enroll!;
+        runtime.Enroll = (_, _) => throw new IOException("Synthetic migration rolled back before cutover.");
+        await lifecycle.StartVmAsync(workspace.Id, "org", vmId, stopped.Generation, default);
+        await ProcessUntilAsync(vmId, "blocked");
+        Assert.Equal(1, (await CurrentWorkspace(workspace.Id)).StorageLayout);
+        Assert.Equal(2, runtime.BootstrapConfiguration!.Value.GetProperty("storageLayout").GetInt32());
+        Assert.True(runtime.BootstrapConfiguration!.Value.GetProperty("migrateStorageLayout").GetBoolean());
+
+        // The retried bootstrap sends the same request; only a Ready runtime records layout 2.
+        runtime.Enroll = enroll;
+        var migrated = await ProcessUntilAsync(vmId, "ready");
+        Assert.True(runtime.BootstrapConfiguration!.Value.GetProperty("migrateStorageLayout").GetBoolean());
+        var retained = await CurrentWorkspace(workspace.Id);
+        Assert.Equal(2, retained.StorageLayout);
+
+        runtime.Checkpoint = (target, operationId) =>
+            FinalCheckpoint(retained, target, operationId, target.Generation, retained.ProviderVolumeId!);
+        await lifecycle.StopVmAsync(workspace.Id, "org", vmId, migrated.Generation, default);
+        stopped = await ProcessUntilAsync(vmId, "stopped");
+        Assert.Contains("\"checkpoint\"", stopped.QuiescenceReceipt!);
+        await lifecycle.StartVmAsync(workspace.Id, "org", vmId, stopped.Generation, default);
+        await ProcessUntilAsync(vmId, "ready");
+        Assert.Equal(2, runtime.BootstrapConfiguration!.Value.GetProperty("storageLayout").GetInt32());
+        Assert.False(runtime.BootstrapConfiguration!.Value.TryGetProperty("migrateStorageLayout", out _));
+    }
+
+    [Fact]
     public async Task RestartFencesPersistedPortsAndReadyMonitorRestoresCurrentGeneration()
     {
         var (_, vm, _) = await Seed("session");

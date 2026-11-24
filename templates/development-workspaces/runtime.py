@@ -686,6 +686,13 @@ LOCAL_ROOT = "/var/lib/workspaces-local"
 LOCAL_FILESYSTEMS = ("ext4", "xfs", "btrfs")
 LAYOUT_MARKER = ".workspaces-layout.json"
 CHECKPOINT_STORE = ".workspaces-checkpoints"
+# Migration of a layout 1 volume: a root-only journal, the lineage of the old tree (it must stay on
+# the volume, next to the tree) and the old tree, moved aside after cutover until it is deleted.
+MIGRATION_JOURNAL = ".workspaces-layout-migration.json"
+MIGRATION_LINEAGE = ".workspaces-layout-migration.lineage.json"
+MIGRATION_OLD = ".workspaces-layout-migration-old"
+MIGRATION_OPERATION = "storage-layout-2-migration"
+SCRATCH_TRASH = ".workspaces-scratch-trash"
 # Periodic checkpoints: the timer fires every minute; a save starts once the interval passed
 # since the last attempt. Freshness turns Stale after CHECKPOINT_STALE_FACTOR intervals.
 CHECKPOINT_UNIT = "workspaces-repos-checkpoint.service"
@@ -963,7 +970,7 @@ class Linux:
                 "Unsupported local checkout filesystem")
         return root
 
-    def layout_marker(self, create=False):
+    def layout_marker(self, create=False, initial_checkpoint=None):
         """Binds the volume to layout 2 so an older image or layout never writes checkouts into it."""
         path = self.workspace / LAYOUT_MARKER
         claim = self.config["volume"]
@@ -982,7 +989,7 @@ class Linux:
                     "Storage layout marker belongs to another volume or layout")
             return value
         require(create, "Checkout storage requires bootstrap")
-        value = dict(expected, initialCheckpoint=None)
+        value = dict(expected, initialCheckpoint=initial_checkpoint)
         atomic_json(path, value)
         return value
 
@@ -1024,6 +1031,146 @@ class Linux:
             run(["umount", str(mountpoint)], timeout=30)
             raise
         return result
+
+    def migration_journal(self):
+        path = self.workspace / MIGRATION_JOURNAL
+        if not os.path.lexists(path):
+            return None
+        info = path.lstat()
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and not info.st_mode & 0o077,
+                "Unsafe storage layout migration journal")
+        try:
+            value = json.loads(path.read_text())
+        except ValueError as error:
+            raise Blocked("Storage layout migration journal is corrupt") from error
+        claim = self.config["volume"]
+        require(isinstance(value, dict) and value.get("schemaVersion") == 1 and
+                value.get("state") in ("started", "cutover", "detached") and
+                value.get("workspaceId") == claim["owner"]["workspaceId"] and
+                value.get("providerVolumeId") == claim["providerVolumeId"] and
+                value.get("filesystemUuid") == claim["filesystemUuid"],
+                "Storage layout migration journal belongs to another volume or is corrupt")
+        return value
+
+    def migrate_layout(self, requested):
+        """Moves the checkouts of a layout 1 volume to the VM disk (storage layout 2).
+
+        Runs in bootstrap after the volume is mounted and before anything can write. The old tree is
+        checkpointed under a writer fence, deep-verified, restored to the VM disk and compared with
+        the checkpoint. Only then is the layout marker written (cutover). Before cutover the old
+        tree is never modified, and any failure, crash or a bootstrap without the request rolls back
+        to layout 1. After cutover the old tree is moved aside; finish_layout_migration deletes it
+        once the new checkout mount is attached. Returns the migration record, or None."""
+        journal = self.migration_journal()
+        marker = os.path.lexists(self.workspace / LAYOUT_MARKER)
+        if journal is not None and not marker:
+            # The marker is the cutover point; the journal reaches "cutover" just before it.
+            require(journal["state"] in ("started", "cutover"), "Storage layout migration lost its layout marker")
+            self.rollback_layout_migration()
+            journal = None
+        repos = self.workspace / "repos"
+        if marker:
+            if not self.local_layout() or journal is None or journal["state"] != "cutover":
+                return journal  # An older layout refuses the marker in layout().
+            # Cutover happened but the old tree was not moved aside yet. A mounted checkout tree
+            # (same-VM reboot) hides it; the journal then waits for a bootstrap without the mount.
+            if not os.path.ismount(repos):
+                if not os.path.lexists(self.workspace / MIGRATION_OLD):
+                    os.rename(repos, self.workspace / MIGRATION_OLD)
+                journal = dict(journal, state="detached")
+                atomic_json(self.workspace / MIGRATION_JOURNAL, journal)
+            return journal
+        if not requested or not repos.is_dir() or repos.is_symlink() or os.path.ismount(repos) or \
+                not any(repos.iterdir()):
+            return None  # Nothing to migrate: an empty volume starts layout 2 with an empty tree.
+        import repo_checkpoint as checkpoints
+        store = self.workspace / CHECKPOINT_STORE
+        require(not os.path.lexists(store) or (store.is_dir() and not store.is_symlink() and
+                                               not any(store.iterdir())),
+                "Checkpoint store exists without a storage layout marker")
+        root = self.local_root()
+        require(not any(os.path.lexists(root / name) for name in ("repos", "repos.lineage.json")),
+                "A VM-disk checkout tree already exists; refusing to migrate over it")
+        started = time.monotonic()
+        scratch = self.scratch_detach()
+        require(not os.path.lexists(self.workspace / SCRATCH_TRASH),
+                "A scratch build-output relocation is unresolved; migration waits until it is recovered")
+        claim = self.config["volume"]
+        journal = dict(schemaVersion=1, state="started", workspaceId=claim["owner"]["workspaceId"],
+                       providerVolumeId=claim["providerVolumeId"], filesystemUuid=claim["filesystemUuid"],
+                       vmId=self.config["vmId"], generation=self.config["generation"])
+        atomic_json(self.workspace / MIGRATION_JOURNAL, journal)
+        binding = self.repos_binding()
+        try:
+            saved = checkpoints.save(str(repos), str(store), binding, str(self.workspace / MIGRATION_LINEAGE),
+                                     fenced=True, operation_id=MIGRATION_OPERATION, logical_root=str(repos))
+            checked = time.monotonic()
+            checkpoints.verify(str(store), binding, saved["checkpointId"], MIGRATION_OPERATION, deep=True)
+            verified = time.monotonic()
+            restored = checkpoints.restore(str(store), str(root), "repos", binding, str(root / "repos.lineage.json"),
+                                           checkpoint_id=saved["checkpointId"],
+                                           uid=self.config["uid"], gid=self.config["gid"])
+            restored_at = time.monotonic()
+            proof = checkpoints.compare_tree(str(store), str(root / "repos"), binding, saved["checkpointId"],
+                                             deep=True)
+            compared = time.monotonic()
+        except (checkpoints.Failed, checkpoints.Deferred) as error:
+            self.rollback_layout_migration()
+            raise Blocked("Storage layout migration failed and was rolled back: " + error.reason) from error
+        except BaseException:
+            self.rollback_layout_migration()
+            raise
+        record = dict(checkpointId=saved["checkpointId"], manifestSha256=saved["manifestSha256"],
+                      files=saved["files"], bytes=saved["bytes"], bytesWritten=saved["bytesWritten"],
+                      peakStoreGrowthBytes=saved["peakStoreGrowthBytes"], omittedCount=saved["omittedCount"],
+                      skippedCount=saved["skippedCount"], externalReferences=len(saved["externalReferences"]),
+                      saveMs=saved["durationMs"], verifyMs=int((verified - checked) * 1000),
+                      restoreMs=restored["durationMs"], restoredEntries=proof["entries"],
+                      compareMs=int((compared - restored_at) * 1000),
+                      scratchUnmounted=(scratch or {}).get("unmounted", 0))
+        journal = dict(journal, state="cutover", migration=record)
+        atomic_json(self.workspace / MIGRATION_JOURNAL, journal)
+        # Cutover: from here the volume is layout 2 and the checkpoint is its only checkout source.
+        self.layout_marker(create=True, initial_checkpoint=saved["checkpointId"])
+        os.rename(repos, self.workspace / MIGRATION_OLD)
+        journal = dict(journal, state="detached",
+                       migration=dict(record, writersBlockedMs=int((time.monotonic() - started) * 1000)))
+        atomic_json(self.workspace / MIGRATION_JOURNAL, journal)
+        return journal
+
+    def rollback_layout_migration(self):
+        """Undo a migration that did not reach cutover. Only its own outputs are removed: a store
+        without a layout marker, the migration lineage and the VM-disk tree. The old tree stays."""
+        require(not os.path.lexists(self.workspace / LAYOUT_MARKER),
+                "Storage layout migration already cut over; it cannot be rolled back")
+
+        def remove(path):
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            elif os.path.lexists(path):
+                path.unlink()
+
+        remove(self.workspace / CHECKPOINT_STORE)
+        remove(self.workspace / MIGRATION_LINEAGE)
+        root = self.local_root()
+        for name in ("repos", ".restore-staging", "repos.lineage.json"):
+            remove(root / name)
+        (self.workspace / MIGRATION_JOURNAL).unlink(missing_ok=True)
+
+    def finish_layout_migration(self):
+        """After the new checkout mount is attached, delete the old tree and the migration files."""
+        journal = self.migration_journal()
+        if journal is None or journal["state"] != "detached":
+            return None
+        require(os.path.lexists(self.workspace / LAYOUT_MARKER), "Storage layout migration lost its layout marker")
+        old = self.workspace / MIGRATION_OLD
+        if old.is_dir() and not old.is_symlink():
+            shutil.rmtree(old)
+        elif os.path.lexists(old):
+            old.unlink()
+        (self.workspace / MIGRATION_LINEAGE).unlink(missing_ok=True)
+        (self.workspace / MIGRATION_JOURNAL).unlink(missing_ok=True)
+        return journal.get("migration")
 
     def checkpoint_repos(self, operation):
         """Fenced final checkpoint of the VM-disk checkout tree into the retained volume.
@@ -1590,7 +1737,8 @@ class Runtime:
         allowed = {"vmId", "generation", "kind", "uid", "gid", "workspace", "volume", "backup",
                    "restore", "requireFreshBackup", "ignoredDataAcknowledged", "repositories",
                    "infrastructureUnits", "stopUnits", "forbiddenPaths",
-                   "startServices", "observedTerminalInputs", "storageLayout", "checkpointIntervalSeconds"}
+                   "startServices", "observedTerminalInputs", "storageLayout", "checkpointIntervalSeconds",
+                   "migrateStorageLayout"}
         require(not set(config) - allowed, "Unknown runtime configuration field; reject implicit credentials")
         require(config["kind"] in ("primary", "ephemeral"), "Invalid VM kind")
         require(config["uid"] == 2000 and config["gid"] == 2000, "Coding UID/GID must be 2000")
@@ -1601,6 +1749,9 @@ class Runtime:
         self.local = config.get("storageLayout") == 2
         require(not self.local or config["kind"] == "primary", "Local checkouts require a primary workspace")
         require(self.local or "checkpointIntervalSeconds" not in config, "Checkpoint interval requires local checkouts")
+        require(type(config.get("migrateStorageLayout", False)) is bool and
+                (self.local or not config.get("migrateStorageLayout")),
+                "Storage layout migration requires local checkouts")
         checkpoint_interval(config)
         if config["kind"] == "ephemeral":
             require(not any(config.get(key) for key in
@@ -1906,20 +2057,25 @@ class Runtime:
                         operationId=operation, repositories=evidence, deletionEligible=False)
         if action == "bootstrap":
             require(self.s["phase"] in ("New", "Ready"), "Cannot bootstrap frozen runtime")
+            migrated = None
             if self.c["kind"] == "primary":
                 self.adapter.mount(self.c["volume"])
+                # Also rolls back a migration that never reached cutover, whatever the layout.
+                self.adapter.migrate_layout(self.local and self.c.get("migrateStorageLayout") is True)
             else:
                 self.adapter.ephemeral()
             self.adapter.layout()
             if self.local:
                 # Restore or keep the checkout tree before Ready; a missing checkpoint blocks here.
                 self.adapter.attach_repos()
+                migrated = self.adapter.finish_layout_migration()
             if self.c["kind"] == "ephemeral":
                 self.git.prepare(self.c.get("repositories", []), self.c["workspace"])
             self.scratch("resume")  # Initial clones get their build-output mounts before T3 starts.
             self.s["phase"] = "Ready"
             self.save()
-            return self.receipt("BootstrapReady", operation, toolchainReinstalled=False)
+            extra = dict(storageLayoutMigration=migrated) if migrated else {}
+            return self.receipt("BootstrapReady", operation, toolchainReinstalled=False, **extra)
         if action == "task-start":
             require(self.s["phase"] == "Ready", "Admissions fenced")
             self.require_workspace()

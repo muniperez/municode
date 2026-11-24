@@ -26,6 +26,8 @@ public sealed partial class DevelopmentWorkspaceProcessor(
     {
         public bool VolumeAttempted { get; set; }
         public bool NewVolume { get; set; }
+        // Decided once before bootstrap, so every retry sends the same runtime configuration.
+        public bool MigrateStorageLayout { get; set; }
         public string? VolumeDeviceId { get; set; }
         public bool FirewallAttempted { get; set; }
         public bool AllocationAttempted { get; set; }
@@ -315,6 +317,8 @@ public sealed partial class DevelopmentWorkspaceProcessor(
                 if (string.IsNullOrWhiteSpace(uuid) || workspace.VolumeFilesystemUuid is not null && workspace.VolumeFilesystemUuid != uuid)
                     throw new InvalidOperationException("Retained volume filesystem UUID differs from its recorded identity.");
                 evidence.VolumeDeviceId = deviceId;
+                evidence.MigrateStorageLayout = workspace.StorageLayout == 1 && !evidence.NewVolume &&
+                    options.Value.LocalCheckouts && options.Value.MigrateExistingCheckouts;
                 await SaveAsync(op, evidence, "bootstrap", (_, fresh, parent) =>
                 { parent.VolumeFilesystemUuid = uuid; fresh.Phase = "bootstrapping"; }, ct); break;
             case "bootstrap":
@@ -338,7 +342,7 @@ public sealed partial class DevelopmentWorkspaceProcessor(
                         recovered.GetProperty("generation").GetInt64() != vm.Generation ||
                         recovered.GetProperty("kind").GetString() != vm.Kind)
                         throw new InvalidOperationException("Accepted enrollment has no ready runtime.");
-                    await SaveAsync(op, evidence, "session", FinishBootstrap, ct);
+                    await SaveAsync(op, evidence, "session", (_, machine, owner) => FinishBootstrap(machine, owner, evidence), ct);
                     break;
                 }
                 var identity = JsonSerializer.Deserialize<WorkspaceBootstrapSecret>(await SecretAsync(vm.SshBootstrapSecretRef!, ct), Json)!;
@@ -350,7 +354,7 @@ public sealed partial class DevelopmentWorkspaceProcessor(
                     url = endpoint.AbsoluteUri, token = identity.EnrollmentToken, vmId = vm.Id, generation = vm.Generation,
                     operationId = op.Id, expiresAt = vm.EnrollmentTokenExpiresAt!.Value.ToUnixTimeSeconds()
                 }, ct));
-                await SaveAsync(op, evidence, "session", FinishBootstrap, ct); break;
+                await SaveAsync(op, evidence, "session", (_, machine, owner) => FinishBootstrap(machine, owner, evidence), ct); break;
             case "session":
                 await RefreshRuntimeAsync(workspace, vm, op.Id, ct);
                 await SaveAsync(op, evidence, "ready", (fresh, machine, _) =>
@@ -363,10 +367,15 @@ public sealed partial class DevelopmentWorkspaceProcessor(
         }
     }
 
-    private void FinishBootstrap(DevelopmentWorkspaceOperation _, DevelopmentWorkspaceVm vm, DevelopmentWorkspace workspace)
+    private void FinishBootstrap(DevelopmentWorkspaceVm vm, DevelopmentWorkspace workspace, Evidence evidence)
     {
         if (vm.EnrolledAt is null) throw new InvalidOperationException("The one-time enrollment was not durably accepted.");
-        if (vm.Kind == "primary") workspace.VolumeStatus = "mounted";
+        if (vm.Kind == "primary")
+        {
+            workspace.VolumeStatus = "mounted";
+            // A Ready runtime with the migration request has cut the volume over (or found it already cut over).
+            if (evidence.MigrateStorageLayout) workspace.StorageLayout = 2;
+        }
         else { vm.BaseVerifiedGeneration = vm.Generation; vm.BaseVerifiedAt = Now; }
     }
 
@@ -395,9 +404,10 @@ public sealed partial class DevelopmentWorkspaceProcessor(
                 owner = new { organizationId = workspace.OrganizationId, workspaceId = workspace.Id,
                     providerAccountId = workspace.ProviderAccountId, location = workspace.Region, providerVolumeId = workspace.ProviderVolumeId }
             };
-            if (workspace.StorageLayout == 2)
+            if (workspace.StorageLayout == 2 || evidence.MigrateStorageLayout)
             {
                 config["storageLayout"] = 2;
+                if (evidence.MigrateStorageLayout) config["migrateStorageLayout"] = true;
                 // Only sent when changed, so the default stays compatible with earlier layout 2 images.
                 if (options.Value.CheckpointIntervalSeconds != DevelopmentWorkspaceWorkerOptions.DefaultCheckpointIntervalSeconds)
                     config["checkpointIntervalSeconds"] = options.Value.CheckpointIntervalSeconds;

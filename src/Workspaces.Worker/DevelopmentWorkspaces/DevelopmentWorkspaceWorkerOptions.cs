@@ -25,6 +25,9 @@ public sealed class DevelopmentWorkspaceWorkerOptions
     // New primary volumes use storage layout 2 (VM-disk checkouts checkpointed to the volume).
     // Requires an image whose runtime supports it; existing workspaces keep their layout.
     public bool LocalCheckouts { get; set; }
+    // With LocalCheckouts, also migrate existing layout 1 primaries to layout 2 on their next start.
+    // Requires an image whose runtime supports migration; the layout is recorded only after a Ready bootstrap.
+    public bool MigrateExistingCheckouts { get; set; }
     // Layout 2: how often a running primary checkpoints its checkouts to the retained volume.
     public int CheckpointIntervalSeconds { get; set; } = DefaultCheckpointIntervalSeconds;
     internal const int DefaultCheckpointIntervalSeconds = 300;
