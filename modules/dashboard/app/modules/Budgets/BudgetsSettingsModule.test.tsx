@@ -56,7 +56,8 @@ it("labels projections as estimates with provider breakdown, warnings and over-b
   expect(within(card).getByText("Over budget")).toBeInTheDocument();
   expect(within(card).getByText("Incomplete estimate")).toBeInTheDocument();
   expect(within(card).getByText(/Estimated \$76\.00/)).toBeInTheDocument();
-  expect(within(card).getByText(/Provider-reported charges are not available yet/)).toBeInTheDocument();
+  expect(within(card).getByText(/The estimate does not include provider-reported charges/)).toBeInTheDocument();
+  expect(within(card).queryByRole("region", { name: "Team provider-reported charges" })).not.toBeInTheDocument();
   expect(within(card).getByRole("table", { name: "Team estimate by provider" })).toHaveTextContent("Droplets (digital-ocean)");
   expect(within(card).getByText(/missing pricing/)).toBeInTheDocument();
   expect(within(card).getByText("Missing prices")).toBeInTheDocument();
@@ -67,6 +68,47 @@ it("labels projections as estimates with provider breakdown, warnings and over-b
   fireEvent.click(within(card).getByRole("button", { name: /Contributing workspaces/ }));
   expect(within(card).getByRole("table", { name: "Team contributing workspaces" })).toHaveTextContent("Current · fallback rate");
   expect(screen.getByText(/Budgets only inform\. Crossing a threshold never blocks/)).toBeInTheDocument();
+});
+
+it("lists provider-reported charges apart from the estimate by currency and freshness, never as zero", async () => {
+  const account = { providerType: "digital-ocean", attemptedAt: "2026-11-09T15:00:00Z", source: "synthetic" };
+  vi.mocked(listBudgets).mockResolvedValue([budget({}, { providerCharges: {
+    period: "2026-11", complete: false,
+    accounts: [
+      { ...account, providerAccountId: "do", providerName: "Droplets", status: "available", amount: 12.5, currency: "USD",
+        asOf: "2026-11-09T15:00:00Z", message: "Month-to-date charges reported by the provider." },
+      { ...account, providerAccountId: "vultr", providerName: "Vultr EU", providerType: "vultr", status: "stale", amount: 7.25,
+        currency: "EUR", asOf: "2026-11-08T01:00:00Z", message: "Not refreshed in the last 3 hours; showing the last reported amount." },
+      { ...account, providerAccountId: "do-2", providerName: "Droplets 2", status: "failed", amount: null, currency: null, asOf: null,
+        message: "The last refresh failed (HTTP 403: the provider credential cannot read billing data). Provider-reported charges not available." },
+      { ...account, providerAccountId: "hz", providerName: "Hetzner", providerType: "hetzner", status: "unsupported", amount: null,
+        currency: null, asOf: null, attemptedAt: null, source: null, message: "Provider-reported charges not available: Hetzner has no billing API." },
+    ],
+    totals: [{ currency: "EUR", amount: 7.25, accountCount: 1 }, { currency: "USD", amount: 12.5, accountCount: 1 }],
+    notes: ["Amounts are in each provider's billing currency. Different currencies are listed separately and never converted or summed."],
+  } })]);
+  render(<BudgetsSettingsModule />);
+  const section = await screen.findByRole("region", { name: "Team provider-reported charges" });
+  expect(within(section).getByText(/Reported for 2026-11 so far: .*7\.25 \(1 account\) · \$12\.50 \(1 account\)/)).toBeInTheDocument();
+  const rows = within(section).getAllByRole("row").slice(1);
+  expect(rows.map(row => within(row).getAllByRole("cell")[3].firstChild?.textContent))
+    .toEqual(["Current", "Stale", "Refresh failed", "Not available"]);
+  expect(rows[2]).toHaveTextContent(/Not available.*HTTP 403/);
+  expect(rows[2]).not.toHaveTextContent("$0.00");
+  expect(rows[3]).toHaveTextContent("Provider-reported charges not available: Hetzner has no billing API.");
+  expect(within(section).getByText(/never converted or summed/)).toBeInTheDocument();
+  // The estimate stays the projection only.
+  expect(screen.getByText(/Estimated \$76\.00/)).toBeInTheDocument();
+});
+
+it("shows provider-reported charges as not available when no account reported any", async () => {
+  vi.mocked(listBudgets).mockResolvedValue([budget({}, { providerCharges: { period: "2026-11", complete: false, totals: [], notes: [],
+    accounts: [{ providerAccountId: "do", providerName: "Droplets", providerType: "digital-ocean", status: "not_retrieved", amount: null,
+      currency: null, asOf: null, attemptedAt: null, source: null, message: "Provider-reported charges not available yet." }] } })]);
+  render(<BudgetsSettingsModule />);
+  const section = await screen.findByRole("region", { name: "Team provider-reported charges" });
+  expect(within(section).getByText("Provider-reported charges not available for 2026-11.")).toBeInTheDocument();
+  expect(within(section).getByText("Not available yet")).toBeInTheDocument();
 });
 
 it("is read-only for viewers", async () => {

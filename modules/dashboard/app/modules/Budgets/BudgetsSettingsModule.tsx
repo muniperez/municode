@@ -16,6 +16,7 @@ import {
 } from "@/api/budgetsApi";
 import { listProviders, type ProviderAccount } from "@/api/providersApi";
 import { formatPrice } from "@/modules/Workspaces/WorkspaceCostEstimate";
+import { ProviderChargesSection } from "./ProviderChargesSection";
 
 export function budgetStatus(budget: Budget) {
   const projection = budget.projection;
@@ -131,7 +132,7 @@ function BudgetCard({ budget, canManage, providers, onEdit, onDeleted, onError }
     <CardContent className="space-y-3 text-sm">
       <div>
         <p><span className="font-medium">Estimated {money(projection.projectedMonthly)}</span> of {money(budget.monthlyAmount)} for {projection.period} ({projection.percentOfBudget}%)</p>
-        <p className="text-muted-foreground">Estimated current run rate {money(projection.projectedHourly)}/hour. Provider-reported charges are not available yet.</p>
+        <p className="text-muted-foreground">Estimated current run rate {money(projection.projectedHourly)}/hour. The estimate does not include provider-reported charges.</p>
         <div className="mt-2 h-2 overflow-hidden rounded bg-muted" role="progressbar" aria-label={`${budget.name} estimated spend`}
           aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, projection.percentOfBudget)}>
           <div className={`h-full ${projection.overBudget ? "bg-destructive" : "bg-primary"}`} style={{ width: `${Math.min(100, projection.percentOfBudget)}%` }} />
@@ -173,6 +174,7 @@ function BudgetCard({ budget, canManage, providers, onEdit, onDeleted, onError }
       {projection.excluded.length > 0 && <Disclosure label={`Excluded workspaces (${projection.excluded.length})`}>
         <ul className="list-disc space-y-1 pl-5">{projection.excluded.map(item => <li key={item.workspaceId}>{item.workspaceName}: {item.reason}</li>)}</ul>
       </Disclosure>}
+      <ProviderChargesSection budget={budget} />
       {budget.deliveries.length > 0 && <Disclosure label={`Recent notifications (${budget.deliveries.length})`}>
         <Table aria-label={`${budget.name} recent notifications`}>
           <TableHeader><TableRow><TableHead>Channel</TableHead><TableHead>Threshold</TableHead>

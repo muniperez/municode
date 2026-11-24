@@ -20,6 +20,9 @@ public sealed record BudgetResponse(string Id, string OrganizationId, string Nam
 {
     // Returned once, only by the create or update call that generated or rotated the secret.
     public string? WebhookSigningSecret { get; init; }
+
+    // What providers report they have charged, kept apart from the projection and never converted between currencies.
+    public BudgetProviderChargesResponse? ProviderCharges { get; init; }
 }
 
 // WebhookTarget is only the scheme, host and port so query-string tokens in the URL are never echoed back.
@@ -32,7 +35,8 @@ public sealed record BudgetLastAlertResponse(string Period, int Threshold, DateT
 public sealed record BudgetNotificationDeliveryResponse(string Id, string Channel, string Period, int Threshold, string Status,
     int Attempts, string? LastError, DateTimeOffset CreatedAt, DateTimeOffset? DeliveredAt, DateTimeOffset? NextAttemptAt);
 
-// Every amount is an estimate derived from recorded rates; provider-reported charges are not available yet.
+// Every amount is an estimate derived from recorded rates. Provider-reported charges are never mixed in; see
+// BudgetResponse.ProviderCharges, so ProviderChargesAvailable stays false here.
 public sealed record BudgetProjectionResponse(string Period, bool Estimate, bool Complete, decimal ProjectedHourly,
     decimal ProjectedMonthly, decimal PercentOfBudget, int? CrossedThreshold, bool OverBudget, bool ProviderChargesAvailable,
     IReadOnlyList<BudgetProviderProjectionResponse> Providers, IReadOnlyList<BudgetContributorResponse> Contributors,
@@ -52,3 +56,15 @@ public sealed record BudgetPriceLineResponse(string Resource, string ResourceId,
     string? CatalogEntryId, string BillingModel, string Currency, decimal? Amount, string Status, DateTimeOffset? PricedAt);
 
 public sealed record BudgetExcludedWorkspaceResponse(string WorkspaceId, string WorkspaceName, string Currency, string Reason);
+
+// Status is "available", "stale" (older than the freshness window), "failed" (the last refresh failed; Amount is the last
+// reported value, if any), "unsupported" (the provider has no billing API) or "not_retrieved". Amount is null, never zero,
+// when nothing was reported. Totals are per currency; different currencies are never summed.
+public sealed record BudgetProviderChargesResponse(string Period, bool Complete,
+    IReadOnlyList<BudgetProviderChargeResponse> Accounts, IReadOnlyList<BudgetProviderChargeTotalResponse> Totals,
+    IReadOnlyList<string> Notes);
+
+public sealed record BudgetProviderChargeResponse(string ProviderAccountId, string ProviderName, string ProviderType, string Status,
+    decimal? Amount, string? Currency, DateTimeOffset? AsOf, DateTimeOffset? AttemptedAt, string? Source, string Message);
+
+public sealed record BudgetProviderChargeTotalResponse(string Currency, decimal Amount, int AccountCount);

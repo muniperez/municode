@@ -87,6 +87,8 @@ public static class WorkspacesApiServiceCollectionExtensions
         services.AddScoped<WorkspaceGitAccessService>();
         services.AddScoped<DevelopmentWorkspaceService>();
         services.AddScoped<BudgetService>();
+        services.AddScoped<ProviderChargeService>();
+        services.Configure<ProviderChargesOptions>(configuration.GetSection(ProviderChargesOptions.SectionName));
         services.Configure<BudgetEmailOptions>(configuration.GetSection(BudgetEmailOptions.SectionName));
         services.AddDevelopmentWorkspaceGateway(configuration);
         services.Configure<DevelopmentWorkspaceOptions>(configuration.GetSection(DevelopmentWorkspaceOptions.SectionName));

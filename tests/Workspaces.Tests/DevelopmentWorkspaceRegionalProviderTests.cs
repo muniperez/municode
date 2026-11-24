@@ -44,6 +44,34 @@ public sealed class DevelopmentWorkspaceRegionalProviderTests
     private const string VolumeId = "506f78a4-e098-11e5-ad9f-000f53306ae1";
 
     [Fact]
+    public async Task DigitalOceanAndVultrReportMonthToDateChargesFromReadOnlyBillingEndpoints()
+    {
+        var doHandler = new TestHttpMessageHandler();
+        doHandler.QueueJsonResponse("""{"month_to_date_balance":"23.44","account_balance":"12.23","month_to_date_usage":"11.21","generated_at":"2026-11-09T15:01:12Z"}""");
+        var vultrHandler = new TestHttpMessageHandler();
+        vultrHandler.QueueJsonResponse("""{"account":{"name":"synthetic","email":"user@example.test","balance":-50.5,"pending_charges":57.03}}""");
+
+        var digitalOcean = await Do(doHandler).GetMonthToDateChargesAsync(default);
+        var vultr = await Vultr(vultrHandler).GetMonthToDateChargesAsync(default);
+
+        Assert.Equal(new ProviderMonthToDateCharges(11.21m, "USD", new DateTimeOffset(2026, 11, 9, 15, 1, 12, TimeSpan.Zero),
+            DigitalOceanClient.ChargesSource), digitalOcean);
+        Assert.Equal(new ProviderMonthToDateCharges(57.03m, "USD", null, VultrClient.ChargesSource), vultr);
+        var doRequest = Assert.Single(doHandler.RecordedRequests);
+        Assert.Equal((HttpMethod.Get, "https://api.digitalocean.com/v2/customers/my/balance"), (doRequest.Method, doRequest.Uri));
+        var vultrRequest = Assert.Single(vultrHandler.RecordedRequests);
+        Assert.Equal((HttpMethod.Get, "https://api.vultr.com/v2/account"), (vultrRequest.Method, vultrRequest.Uri));
+
+        var denied = new TestHttpMessageHandler();
+        denied.QueueJsonResponse("""{"id":"forbidden","message":"You are not authorized to perform this operation"}""", HttpStatusCode.Forbidden);
+        var error = await Assert.ThrowsAsync<ProviderApiException>(() => Do(denied).GetMonthToDateChargesAsync(default));
+        Assert.Equal(HttpStatusCode.Forbidden, error.StatusCode);
+        var malformed = new TestHttpMessageHandler();
+        malformed.QueueJsonResponse("""{"account":{"pending_charges":-1}}""");
+        await Assert.ThrowsAsync<ProviderApiException>(() => Vultr(malformed).GetMonthToDateChargesAsync(default));
+    }
+
+    [Fact]
     public async Task DigitalOceanDropletIsCreatedWithOwnershipTagsAndItsFirewallTag()
     {
         var handler = new TestHttpMessageHandler();

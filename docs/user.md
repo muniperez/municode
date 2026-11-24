@@ -118,6 +118,28 @@ chooses its channels:
 **Recent notifications** on each budget card shows each delivery's status,
 attempts and last error. Turning a channel off cancels its pending deliveries.
 
+**Provider-reported charges** appear on each budget card separately from the
+estimate. For each provider account in the budget's scope, the card shows the
+month-to-date amount the provider reports for the current UTC month, in the
+provider's currency, with the time it was reported ("as of"). Totals are listed
+per currency; different currencies are never converted or summed, and the
+amounts are never added to the estimate or used for threshold alerts. Each
+amount covers the whole provider account, including resources Municode does not
+manage. The worker refreshes them about once an hour. An amount older than
+three hours is marked **Stale**. If a refresh fails, the card shows **Refresh
+failed** with the last reported amount, if any. Missing data shows as **Not
+available**, never as zero.
+
+- **DigitalOcean**: `month_to_date_usage` from the read-only customer balance
+  endpoint. A custom-scoped API token needs the `billing:read` scope.
+- **Vultr**: the account's pending charges (accrued since the last invoice). The
+  API key's user needs billing access.
+- **Hetzner Cloud** has no billing API, so its accounts always show "Provider-reported
+  charges not available".
+
+Only the aggregated amount is stored; invoice line items are never retrieved or
+kept.
+
 ## Removing a checkout
 
 For a checkout with scratch-mounted build outputs, use the dashboard's confirmed
