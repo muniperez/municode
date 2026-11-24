@@ -12,8 +12,10 @@ vi.mock("@/core/auth/AuthProvider", () => ({ useAuth: () => ({ selectedOrganizat
 const openSettings = vi.fn();
 vi.mock("@/modules/Settings/SettingsProvider", () => ({ useSettings: () => ({ openSettings }) }));
 
-function budget(overrides: Partial<Budget["projection"]> = {}): Budget {
+function budget(overrides: Partial<Budget["projection"]> = {}, extra: Partial<Budget> = {}): Budget {
   return {
+    notifications: { inApp: true, webhook: false, webhookTarget: null, webhookSecretConfigured: false },
+    lastAlert: null, deliveries: [],
     id: "budget-1", organizationId: "org", name: "Team", currency: "USD", monthlyAmount: 50, thresholds: [50, 80, 100],
     providerAccountIds: [], revision: 3, createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z",
     projection: {
@@ -27,6 +29,7 @@ function budget(overrides: Partial<Budget["projection"]> = {}): Budget {
       assumptions: ["Budgets only inform: crossing a threshold never blocks creating or starting workspaces and never stops resources."],
       ...overrides,
     },
+    ...extra,
   };
 }
 
@@ -73,16 +76,16 @@ it("lets owners create, edit with the current revision and delete after confirma
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Droplets" } });
   fireEvent.change(screen.getByLabelText("Monthly amount"), { target: { value: "25.5" } });
   fireEvent.change(screen.getByLabelText("Alert thresholds (%)"), { target: { value: "80, 100" } });
-  fireEvent.click(screen.getByRole("checkbox"));
+  fireEvent.click(screen.getByRole("checkbox", { name: /Droplets/ }));
   fireEvent.click(screen.getByRole("button", { name: "Create budget" }));
   await waitFor(() => expect(createBudget).toHaveBeenCalledWith({ organizationId: "org", currency: "USD", name: "Droplets",
-    monthlyAmount: 25.5, thresholds: [80, 100], providerAccountIds: ["do"] }));
+    monthlyAmount: 25.5, thresholds: [80, 100], providerAccountIds: ["do"], notifications: { inApp: true, webhook: false } }));
 
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.change(screen.getByLabelText("Monthly amount"), { target: { value: "60" } });
   fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
   await waitFor(() => expect(updateBudget).toHaveBeenCalledWith("budget-1", { name: "Team", monthlyAmount: 60,
-    thresholds: [50, 80, 100], providerAccountIds: [], revision: 3 }));
+    thresholds: [50, 80, 100], providerAccountIds: [], revision: 3, notifications: { inApp: true, webhook: false } }));
 
   fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
   expect(deleteBudget).not.toHaveBeenCalled();
@@ -110,5 +113,64 @@ it("shows no banner when no threshold is crossed", async () => {
   vi.mocked(listBudgets).mockResolvedValue([budget({ crossedThreshold: null, overBudget: false, percentOfBudget: 10 })]);
   render(<BudgetAlertBanner />);
   await waitFor(() => expect(listBudgets).toHaveBeenCalled());
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+});
+
+it("configures a signed webhook, reveals the signing secret once and shows delivery status", async () => {
+  vi.mocked(createBudget).mockResolvedValue(budget({}, { name: "Hooks", webhookSigningSecret: "mcwh_secret" }));
+  render(<BudgetsSettingsModule />);
+  await screen.findByLabelText("Budget Team");
+  fireEvent.click(screen.getByRole("button", { name: "Create budget" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Hooks" } });
+  fireEvent.change(screen.getByLabelText("Monthly amount"), { target: { value: "10" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: "In-app alerts" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Signed webhook" }));
+  fireEvent.click(screen.getByRole("button", { name: "Create budget" }));
+  expect(await screen.findByText(/Enter an HTTPS webhook URL/)).toBeInTheDocument();
+  expect(createBudget).not.toHaveBeenCalled();
+
+  fireEvent.change(screen.getByLabelText("Webhook URL"), { target: { value: " https://hooks.example.com/b?token=t " } });
+  fireEvent.click(screen.getByRole("button", { name: "Create budget" }));
+  await waitFor(() => expect(createBudget).toHaveBeenCalledWith(expect.objectContaining({
+    notifications: { inApp: false, webhook: true, webhookUrl: "https://hooks.example.com/b?token=t" } })));
+  const secret = await screen.findByRole("region", { name: "Webhook signing secret" });
+  expect(secret).toHaveTextContent("mcwh_secret");
+  expect(secret).toHaveTextContent("not shown again");
+  fireEvent.click(within(secret).getByRole("button", { name: "Done" }));
+  expect(screen.queryByText("mcwh_secret")).not.toBeInTheDocument();
+});
+
+it("rotates an existing webhook secret without resending the write-only URL and lists deliveries", async () => {
+  const configured = budget({}, {
+    notifications: { inApp: true, webhook: true, webhookTarget: "https://hooks.example.com", webhookSecretConfigured: true },
+    lastAlert: { period: "2026-11", threshold: 100, alertedAt: "2026-11-20T00:00:00Z" },
+    deliveries: [{ id: "n1", channel: "webhook", period: "2026-11", threshold: 100, status: "pending", attempts: 2,
+      lastError: "HTTP 503", createdAt: "2026-11-20T00:00:00Z", deliveredAt: null, nextAttemptAt: "2026-11-20T00:04:00Z" }],
+  });
+  vi.mocked(listBudgets).mockResolvedValue([configured]);
+  vi.mocked(updateBudget).mockResolvedValue({ ...configured, webhookSigningSecret: "mcwh_rotated" });
+  render(<BudgetsSettingsModule />);
+  const card = await screen.findByLabelText("Budget Team");
+  expect(card).toHaveTextContent("Notifications: in-app, webhook to https://hooks.example.com · last alert 100% for 2026-11");
+  fireEvent.click(within(card).getByText("Recent notifications (1)"));
+  const deliveries = within(card).getByRole("table", { name: "Team recent notifications" });
+  expect(deliveries).toHaveTextContent("Retrying");
+  expect(deliveries).toHaveTextContent("HTTP 503");
+
+  fireEvent.click(within(card).getByRole("button", { name: "Edit" }));
+  expect(screen.getByLabelText("Webhook URL")).toHaveAttribute("placeholder", expect.stringContaining("https://hooks.example.com"));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Rotate signing secret" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
+  await waitFor(() => expect(updateBudget).toHaveBeenCalledWith("budget-1", expect.objectContaining({
+    notifications: { inApp: true, webhook: true, rotateWebhookSecret: true } })));
+  expect(await screen.findByRole("region", { name: "Webhook signing secret" })).toHaveTextContent("mcwh_rotated");
+});
+
+it("shows no banner for budgets with in-app alerts turned off", async () => {
+  vi.mocked(listBudgets).mockResolvedValue([budget({}, {
+    notifications: { inApp: false, webhook: false, webhookTarget: null, webhookSecretConfigured: false } })]);
+  render(<BudgetAlertBanner />);
+  await waitFor(() => expect(listBudgets).toHaveBeenCalled());
+  await new Promise(resolve => setTimeout(resolve, 0));
   expect(screen.queryByRole("status")).not.toBeInTheDocument();
 });

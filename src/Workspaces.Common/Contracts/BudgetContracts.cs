@@ -1,14 +1,33 @@
 namespace Workspaces.Common.Contracts;
 
 public sealed record CreateBudgetRequest(string OrganizationId, string Name, decimal MonthlyAmount, string? Currency = null,
-    IReadOnlyList<int>? Thresholds = null, IReadOnlyList<string>? ProviderAccountIds = null);
+    IReadOnlyList<int>? Thresholds = null, IReadOnlyList<string>? ProviderAccountIds = null,
+    BudgetNotificationSettingsRequest? Notifications = null);
 
 public sealed record UpdateBudgetRequest(long Revision, string Name, decimal MonthlyAmount,
-    IReadOnlyList<int>? Thresholds = null, IReadOnlyList<string>? ProviderAccountIds = null);
+    IReadOnlyList<int>? Thresholds = null, IReadOnlyList<string>? ProviderAccountIds = null,
+    BudgetNotificationSettingsRequest? Notifications = null);
+
+// Null fields keep the current value. WebhookUrl "" removes the webhook. The full URL is write-only.
+public sealed record BudgetNotificationSettingsRequest(bool? InApp = null, bool? Webhook = null, string? WebhookUrl = null,
+    bool RotateWebhookSecret = false);
 
 public sealed record BudgetResponse(string Id, string OrganizationId, string Name, string Currency, decimal MonthlyAmount,
     IReadOnlyList<int> Thresholds, IReadOnlyList<string> ProviderAccountIds, long Revision, DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt, BudgetProjectionResponse Projection);
+    DateTimeOffset UpdatedAt, BudgetProjectionResponse Projection, BudgetNotificationSettingsResponse Notifications,
+    BudgetLastAlertResponse? LastAlert, IReadOnlyList<BudgetNotificationDeliveryResponse> Deliveries)
+{
+    // Returned once, only by the create or update call that generated or rotated the secret.
+    public string? WebhookSigningSecret { get; init; }
+}
+
+// WebhookTarget is only the scheme, host and port so query-string tokens in the URL are never echoed back.
+public sealed record BudgetNotificationSettingsResponse(bool InApp, bool Webhook, string? WebhookTarget, bool WebhookSecretConfigured);
+
+public sealed record BudgetLastAlertResponse(string Period, int Threshold, DateTimeOffset AlertedAt);
+
+public sealed record BudgetNotificationDeliveryResponse(string Id, string Channel, string Period, int Threshold, string Status,
+    int Attempts, string? LastError, DateTimeOffset CreatedAt, DateTimeOffset? DeliveredAt, DateTimeOffset? NextAttemptAt);
 
 // Every amount is an estimate derived from recorded rates; provider-reported charges are not available yet.
 public sealed record BudgetProjectionResponse(string Period, bool Estimate, bool Complete, decimal ProjectedHourly,

@@ -76,9 +76,31 @@ month at its recorded hourly rate. It adds each retained volume's recorded
 monthly storage rate and groups the total by provider account. Workspaces priced
 in another currency are excluded and listed separately. Missing pricing marks
 the estimate incomplete, and pricing older than the operator's limit is marked
-stale. The first time a threshold is crossed in a calendar month (UTC), the API
-records a `budget.threshold_crossed` audit event. The dashboard then shows a
-dismissible notice.
+stale. Viewing budgets never records anything.
+
+The worker checks budgets in the background (every five minutes by default) and
+notifies once per threshold per calendar month (UTC). If several thresholds are
+crossed at once, one notification names the highest and lists all of them in
+`crossedThresholds`. Changing the amount, thresholds or scope starts a new alert
+baseline; changing only the name or notification settings does not. Each budget
+chooses its channels:
+
+- **In-app** (on by default): a `budget.threshold_crossed` audit event and a
+  dismissible dashboard notice.
+- **Signed webhook**: a JSON `POST` to a public HTTPS URL. The full URL is
+  write-only; the dashboard shows only its origin. A signing secret is shown
+  once when the webhook is created or the secret is rotated. Each request has
+  `X-Municode-Event: budget.threshold_crossed`, `X-Municode-Delivery` (a stable
+  ID for de-duplication), `X-Municode-Timestamp` (Unix seconds) and
+  `X-Municode-Signature: sha256=<hex>`, where the hex is
+  `HMAC-SHA256(secret, "<timestamp>.<raw body>")`. Compare in constant time and
+  reject stale timestamps. Any 2xx response counts as delivered; other results
+  are retried with exponential backoff and then marked failed. Redirects are not
+  followed, and targets that resolve to private or loopback addresses are
+  refused.
+
+Email notifications are not available yet. **Recent notifications** on each
+budget card shows delivery status, attempts and the last error.
 
 ## Removing a checkout
 

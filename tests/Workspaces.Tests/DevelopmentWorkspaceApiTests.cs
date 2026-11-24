@@ -723,8 +723,9 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
 
         public Task<StoredSecretReference> PutAsync(SecretStoreWriteRequest request, CancellationToken ct)
         {
-            var path = OpenBaoSecretStore.ProviderPathFor("dev", request.OrganizationId,
-                request.ProviderAccountId!, request.CredentialGeneration!);
+            var path = request.IntegrationId is not null
+                ? OpenBaoSecretStore.IntegrationPathFor("dev", request.OrganizationId, request.IntegrationId, request.CredentialGeneration!)
+                : OpenBaoSecretStore.ProviderPathFor("dev", request.OrganizationId, request.ProviderAccountId!, request.CredentialGeneration!);
             Values.Add(path, request.Value);
             return Task.FromResult(new StoredSecretReference("openbao", path, "1"));
         }

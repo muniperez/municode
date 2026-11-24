@@ -14,6 +14,14 @@ public sealed class Budget
     public string? AlertPeriod { get; set; }
     public int? AlertThresholdPercent { get; set; }
     public DateTimeOffset? AlertedAt { get; set; }
+    // Notification channels. Delivery is informational and never changes resources or budget state.
+    public bool InAppAlertsEnabled { get; set; } = true;
+    public bool WebhookEnabled { get; set; }
+    public string? WebhookUrl { get; set; }
+    // Reference to the HMAC signing secret in the secret store; the secret itself is never stored here.
+    public string? WebhookSecretProvider { get; set; }
+    public string? WebhookSecretPath { get; set; }
+    public string? WebhookSecretVersion { get; set; }
     public string CreatedBy { get; set; } = default!;
     public long Revision { get; set; } = 1;
     public DateTimeOffset CreatedAt { get; set; }

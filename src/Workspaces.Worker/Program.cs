@@ -10,6 +10,7 @@ using Workspaces.Common.Providers.DigitalOcean;
 using Workspaces.Common.Providers.Hetzner;
 using Workspaces.Common.Providers.Vultr;
 using Workspaces.Common.Services;
+using Workspaces.Worker.Budgets;
 using Workspaces.Worker.DevelopmentWorkspaces;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -41,5 +42,6 @@ services.AddHttpClient(nameof(OpenBaoTokenRenewalService)).RemoveAllLoggers()
         OpenBaoHttpHandler.Create(provider.GetRequiredService<IOptions<OpenBaoSecretStoreOptions>>().Value));
 services.AddHostedService<OpenBaoTokenRenewalService>();
 services.AddDevelopmentWorkspaceWorker(configuration);
+services.AddBudgetAlertWorker(configuration);
 
 await builder.Build().RunAsync();
