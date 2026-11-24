@@ -5,8 +5,12 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { DevelopmentWorkspace } from "@/models/controlPlane";
+import { WorkspaceDeleteDialog, workspaceDeleteAvailable } from "./WorkspaceDeleteEnvironment";
+import { permanentDeletion } from "./workspaceCollection";
 import { message, phaseLabel, type WorkspaceRefresh } from "./workspaceVmLabels";
 
 type Props = {
@@ -14,13 +18,23 @@ type Props = {
   organizationId: string;
   // Reports refresh failures after an accepted mutation instead of throwing.
   refreshAfterMutation: WorkspaceRefresh;
+  // False once permanent deletion is requested.
   canManage: boolean;
+  // The member's role allows management; deletion stays retryable after a failed attempt.
+  canManageRole: boolean;
   onRefreshStatus: () => void;
   refreshing: boolean;
 };
 
-export function WorkspaceEnvironmentActions({ item, organizationId, refreshAfterMutation, canManage, onRefreshStatus, refreshing }: Props) {
+export function WorkspaceEnvironmentActions({
+  item, organizationId, refreshAfterMutation, canManage, canManageRole, onRefreshStatus, refreshing,
+}: Props) {
   const vms = item.vms ?? [];
+  const deletion = permanentDeletion(item);
+  const canDelete = canManageRole && deletion !== "deleted";
+  const deleteAvailable = workspaceDeleteAvailable(vms, deletion === "failed", deletion === "deleting");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const deleteRequested = useRef(false);
   const [stopConfirmation, setStopConfirmation] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
@@ -32,8 +46,8 @@ export function WorkspaceEnvironmentActions({ item, organizationId, refreshAfter
   const stopSnapshot = JSON.stringify(vms.map(vm => [vm.id, vm.generation, vm.phase, vm.gitStatus]).sort());
   const stopOpen = canManage && stopConfirmation === stopSnapshot;
   // Radix reports menu close focus asynchronously, so read the latest state rather than a stale closure.
-  const latest = useRef({ canManage, stopSnapshot, hasVms: vms.length > 0 });
-  latest.current = { canManage, stopSnapshot, hasVms: vms.length > 0 };
+  const latest = useRef({ canManage, stopSnapshot, hasVms: vms.length > 0, canDelete, deleteAvailable });
+  latest.current = { canManage, stopSnapshot, hasVms: vms.length > 0, canDelete, deleteAvailable };
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { setStopConfirmation(null); setStopError(null); }, [stopSnapshot, canManage]);
 
@@ -56,6 +70,10 @@ export function WorkspaceEnvironmentActions({ item, organizationId, refreshAfter
         <Button ref={trigger} variant="outline">Workspace actions<ChevronDown aria-hidden="true" className="ml-1 h-4 w-4" /></Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" onCloseAutoFocus={() => {
+        if (deleteRequested.current) {
+          deleteRequested.current = false;
+          if (latest.current.canDelete && latest.current.deleteAvailable) setDeleteOpen(true);
+        }
         if (!stopRequested.current) return;
         stopRequested.current = false;
         setStopError(null);
@@ -64,8 +82,16 @@ export function WorkspaceEnvironmentActions({ item, organizationId, refreshAfter
         <DropdownMenuItem disabled={refreshing} onSelect={onRefreshStatus}>Refresh status</DropdownMenuItem>
         {canManage && <DropdownMenuItem disabled={!vms.length || stopping} onSelect={() => { stopRequested.current = true; }}>
           Stop all VMs</DropdownMenuItem>}
+        {canDelete && <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem disabled={!deleteAvailable} className="text-destructive focus:text-destructive"
+            onSelect={() => { deleteRequested.current = true; }}>Delete workspace</DropdownMenuItem>
+        </>}
       </DropdownMenuContent>
     </DropdownMenu>
+    {canDelete && <WorkspaceDeleteDialog item={item} organizationId={organizationId} available={deleteAvailable}
+      open={deleteOpen} onOpenChange={setDeleteOpen} refresh={() => refreshAfterMutation()}
+      onCloseAutoFocus={event => { event.preventDefault(); trigger.current?.focus(); }} />}
     <Dialog open={stopOpen} onOpenChange={open => {
       if (stopping || open) return;
       setStopError(null);

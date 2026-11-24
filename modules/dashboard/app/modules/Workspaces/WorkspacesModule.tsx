@@ -137,7 +137,7 @@ function OrganizationWorkspaces({ organizationId, workspaceId, canManage }: {
   return <PageScaffold title={workspaceId ? item?.name ?? "Workspace" : "Workspaces"}
     breadcrumbs={workspaceId ? [{ label: "Workspaces", to: "/workspaces" }, { label: item?.name ?? "Workspace" }] : undefined}
     actions={workspaceId && item ? <WorkspaceEnvironmentActions key={item.id} item={item} organizationId={organizationId}
-      refreshAfterMutation={refreshAfterMutation} canManage={canManage && !permanentDeletion(item)}
+      refreshAfterMutation={refreshAfterMutation} canManage={canManage && !permanentDeletion(item)} canManageRole={canManage}
       onRefreshStatus={checkStatus} refreshing={loading} /> : undefined}>
     {!workspaceId && <>
       <div className="flex flex-wrap items-center justify-between gap-2">
