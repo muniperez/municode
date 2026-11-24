@@ -13,10 +13,13 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 import scratch_mounts as sm
+import disk_usage as du
+import runtime as rt
 
 ARTIFACTS = HERE.parents[1] / ".local/artifacts/scratch-mounts"
 ARTIFACTS.mkdir(parents=True, exist_ok=True)
@@ -199,6 +202,389 @@ class ScratchMountTests(unittest.TestCase):
                     Path(full).read_bytes() if os.path.isfile(full) else None
                 result[os.path.relpath(full, path)] = (info.st_mode, info.st_mtime_ns, content)
         return result
+
+    def deletion_request(self, path):
+        info = path.stat()
+        return dict(workspace=str(self.ws), path=["repos", *path.relative_to(self.repos).parts],
+                    expect=dict(dev=info.st_dev, ino=info.st_ino), jobId="checkout-delete-1",
+                    vmId="fixture-vm", generation=3)
+
+    def test_confirmed_checkout_delete_unmounts_only_owned_target_and_serializes_remounts(self):
+        app = self.repo("app", ["node_modules/"], files=["package.json"])
+        other = self.repo("other", ["node_modules/"], files=["package.json"],
+                          tracked=["src/keep.txt"])
+        self.apply()
+        other_mount = str(other / "node_modules")
+        request = self.deletion_request(app)
+        prepared = self.helper.prepare_delete(request)
+        self.assertTrue(prepared["ready"], prepared)
+        self.assertEqual(1, prepared["unmountedMounts"])
+        self.assertEqual([(str(app / "node_modules"), False)], self.sys.umounts)
+        self.apply(self.make_helper())
+        self.assertNotIn(str(app / "node_modules"), self.mounted())
+        self.assertIn(other_mount, self.mounted())
+        self.assertFalse(self.helper.finish_delete(request)["released"])
+        with patch.object(du, "CODING_UID", os.getuid()):
+            result = du.delete(str(self.ws), request["path"], request["expect"], chain=prepared["chain"])
+        self.assertEqual("succeeded", result["outcome"])
+        self.assertTrue(self.helper.finish_delete(request)["released"])
+        self.assertEqual("x", (other / "src/keep.txt").read_text())
+        self.assertIn(other_mount, self.mounted())
+        self.assertFalse(app.exists())
+
+    def test_checkout_delete_accepts_empty_trusted_trash_after_normal_relocation(self):
+        app = self.repo("app", ["node_modules/"], files=["package.json", "node_modules/cache.js"])
+        self.apply()
+        trash = self.ws / sm.TRASH
+        trash.mkdir(mode=0o700, exist_ok=True)
+        self.sys.own(trash)
+        request = self.deletion_request(app)
+        prepared = self.helper.prepare_delete(request)
+        self.assertTrue(prepared["ready"], prepared)
+        self.assertEqual([], list(trash.iterdir()))
+        with patch.object(du, "CODING_UID", os.getuid()):
+            result = du.delete(str(self.ws), request["path"], request["expect"], chain=prepared["chain"])
+        self.assertEqual("succeeded", result["outcome"])
+        self.assertTrue(self.helper.finish_delete(request)["released"])
+        self.assertTrue(trash.is_dir())
+
+    def test_checkout_delete_inspects_only_related_trusted_relocation_state(self):
+        app = self.repo("app", [], files=["package.json"])
+        other = self.repo("other", [], tracked=["keep.txt"])
+        self.apply()
+        trash = self.ws / sm.TRASH
+        trash.mkdir(mode=0o700)
+        self.sys.own(trash)
+        token = trash / ("r-" + "c" * 32)
+        token.mkdir(mode=0o700)
+        self.sys.own(token)
+        (token / "data").mkdir()
+        (token / "data/keep").write_text("unrelated volume copy")
+        journal = dict(phase="copying", repoId=sm.repo_id(("other",), other.stat().st_ino),
+                       target=["other", "node_modules"], leaf=["node_modules"],
+                       staging=".staging-" + "d" * 32)
+        request = self.deletion_request(app)
+        for phase in ("copying", "unsupported"):
+            journal["phase"] = phase
+            (token / "journal.json").write_text(json.dumps(journal))
+            self.sys.own(token / "journal.json")
+            before = self.tree(trash)
+            self.assertTrue(self.helper.prepare_delete(request)["ready"])
+            self.assertEqual(before, self.tree(trash))
+            marker = self.helper.delete_marker(request)
+            os.unlink(marker)
+        journal.update(phase="copying", repoId=sm.repo_id(("app",), app.stat().st_ino),
+                       target=["app", "node_modules"])
+        (token / "journal.json").write_text(json.dumps(journal))
+        before = self.tree(trash)
+        self.assertEqual("scratch_delete_unsupported", self.helper.prepare_delete(request)["refused"])
+        self.assertEqual(before, self.tree(trash))
+        self.assertTrue((other / "keep.txt").exists())
+        self.assertTrue((app / "package.json").exists())
+
+    def test_ambiguous_checkout_launch_reconciles_marker_before_reporting_success(self):
+        for mismatched in (False, True):
+            with self.subTest(mismatched=mismatched):
+                app = self.repo("app-" + str(mismatched), ["node_modules/"], files=["package.json"])
+                self.apply()
+                request = self.deletion_request(app)
+                request["jobId"] += "-" + str(mismatched)
+
+                def launch(unit, payload, output):
+                    prepared = self.helper.prepare_delete(payload)
+                    self.assertTrue(prepared["ready"], prepared)
+                    with patch.object(du, "CODING_UID", os.getuid()):
+                        result = du.delete(str(self.ws), payload["path"], payload["expect"],
+                                           chain=prepared["chain"])
+                    Path(output).write_text(json.dumps(result))
+                    raise rt.Blocked("Synthetic lost launch acknowledgement")
+
+                def finish(record):
+                    reconciliation = dict(request)
+                    if mismatched:
+                        reconciliation["jobId"] = "different-job"
+                    return self.helper.finish_delete(reconciliation)
+
+                adapter = SimpleNamespace(filesystem_jobs_supported=lambda: True,
+                                          filesystem_launch=launch, filesystem_running=lambda unit: False,
+                                          filesystem_finish=finish)
+                config = dict(vmId=request["vmId"], generation=request["generation"], kind="ephemeral",
+                              uid=2000, gid=2000, workspace=str(self.ws), ignoredDataAcknowledged=True,
+                              repositories=[])
+                runtime = rt.Runtime(config, self.root / ("state-" + str(mismatched)), adapter=adapter,
+                                     git=rt.Git(allow_local=True, verification_dir=self.root / "verify"),
+                                     resources=SimpleNamespace(invalidate=lambda: None))
+                runtime.s["phase"] = "Ready"
+                result = runtime.handle(dict(request, action="fs-job-start", mode="delete",
+                                             operationId="fixture-delete"))["result"]
+                record = json.loads((runtime.root / "fsjobs" / (request["jobId"] + ".json")).read_text())
+                self.assertTrue(record["launchAmbiguous"])
+                self.assertNotIn("preparation", record)
+                self.assertEqual(mismatched, result["remountSuppressed"])
+                self.assertEqual("partially_deleted" if mismatched else "succeeded", result["outcome"])
+                self.assertEqual(mismatched, os.path.exists(self.helper.delete_marker(request)))
+                if not mismatched:
+                    fresh = self.repo(app.name, ["node_modules/"], files=["package.json"])
+                    self.apply()
+                    self.assertIn(str(fresh / "node_modules"), self.mounted())
+
+    def test_checkout_delete_preflight_denies_active_unreadable_busy_and_foreign_mounts(self):
+        app = self.repo("app", ["node_modules/"], files=["package.json"])
+        self.apply()
+        request = self.deletion_request(app)
+        for unreadable, procs in ((0, {str(app / "package.json")}), (1, set())):
+            self.sys.unreadable, self.sys.procs = unreadable, procs
+            self.assertEqual("checkout_in_use", self.helper.prepare_delete(request)["refused"])
+        self.sys.unreadable, self.sys.procs = 0, set()
+        self.sys.busy[str(app / "node_modules")] = 9
+        with patch.object(sm.time, "sleep"):
+            self.assertEqual("mount_busy", self.helper.prepare_delete(request)["refused"])
+        self.assertEqual([], self.sys.umounts)
+        self.sys.busy[str(app / "node_modules")] = 0
+        source = self.leaf(app / "node_modules")
+        self.sys.own(source, os.getuid() + 1)
+        self.assertEqual("scratch_delete_unsupported", self.helper.prepare_delete(request)["refused"])
+        self.sys.own(source, os.getuid())
+        self.sys.entries.append(dict(id=999, parent=2, device="0:2", root="/unrelated",
+                                     mountPoint=str(app / "foreign")))
+        self.assertEqual("separate_mount", self.helper.prepare_delete(request)["refused"])
+        self.assertTrue((app / "package.json").exists())
+        self.assertEqual([], self.sys.umounts)
+
+    def test_checkout_delete_cancellation_before_and_after_unmount_fails_closed(self):
+        app = self.repo("app", ["node_modules/", "dist/"], files=["package.json"])
+        (app / "dist").mkdir()
+        self.apply()
+        request = self.deletion_request(app)
+        stopping = self.make_helper(stop=lambda: True)
+        self.assertEqual("cancelled", stopping.prepare_delete(request)["refused"])
+        self.assertEqual([], self.sys.umounts)
+        interrupted = self.make_helper(stop=lambda: bool(self.sys.umounts))
+        result = interrupted.prepare_delete(request)
+        self.assertEqual(("cancelled", 0, 1, True),
+                         (result["outcome"], result["removedEntries"], result["unmountedMounts"],
+                          result["remountSuppressed"]))
+        count = len(self.sys.binds)
+        self.apply(self.make_helper())
+        self.assertEqual(count, len(self.sys.binds))
+        self.assertTrue((app / "package.json").exists())
+        self.assertFalse(self.helper.finish_delete(request)["released"])
+        shutil.rmtree(app / ".git")  # A cancelled coding job may already have removed Git metadata.
+        retry = dict(request, jobId="checkout-delete-retry")
+        prepared = self.helper.prepare_delete(retry)
+        self.assertTrue(prepared["ready"], prepared)
+        with patch.object(du, "CODING_UID", os.getuid()):
+            deleted = du.delete(str(self.ws), retry["path"], retry["expect"], chain=prepared["chain"])
+        self.assertEqual("succeeded", deleted["outcome"])
+        self.assertTrue(self.helper.finish_delete(retry)["released"])
+
+    def test_checkout_delete_identity_changes_keep_inhibition_and_preserve_moved_tree(self):
+        app = self.repo("app", ["node_modules/"], files=["package.json"])
+        self.apply()
+        request = self.deletion_request(app)
+        wrong = dict(request, expect=dict(dev=request["expect"]["dev"], ino=0))
+        self.assertEqual("target_changed", self.helper.prepare_delete(wrong)["refused"])
+        original = self.sys.umount
+
+        def move_after_unmount(*args, **kwargs):
+            original(*args, **kwargs)
+            app.rename(self.repos / "moved")
+            app.mkdir()
+            (app / "replacement").write_text("keep")
+
+        with patch.object(self.sys, "umount", side_effect=move_after_unmount):
+            result = self.helper.prepare_delete(request)
+        self.assertEqual("failed", result["outcome"])
+        self.assertEqual({"target_changed": 1}, result["errors"])
+        self.assertEqual(1, result["unmountedMounts"])
+        self.assertFalse(self.helper.finish_delete(request)["released"])
+        self.assertTrue((self.repos / "moved/package.json").exists())
+        self.assertEqual("keep", (app / "replacement").read_text())
+        binds = len(self.sys.binds)
+        self.apply(self.make_helper())
+        self.assertEqual(binds, len(self.sys.binds))
+        replacement = self.deletion_request(app)
+        self.assertEqual({"target_changed": 1}, self.helper.prepare_delete(replacement)["errors"])
+        (app / "replacement").unlink()
+        app.rmdir()
+        (self.repos / "moved").rename(app)
+        for stale in (dict(request, generation=4), dict(request, vmId="other-vm")):
+            self.assertEqual({"target_changed": 1}, self.helper.prepare_delete(stale)["errors"])
+        self.assertTrue((app / "package.json").exists())
+
+    def test_partial_legacy_marker_blocks_only_its_target_and_pending_writes_are_ignored(self):
+        app = self.repo("app", ["node_modules/"], files=["package.json"], tracked=["keep"])
+        other = self.repo("other", ["node_modules/"], files=["package.json"], tracked=["keep"])
+        request = self.deletion_request(app)
+        marker = Path(self.helper.delete_marker(request))
+        marker.write_text('{"target":')
+        marker.chmod(0o600)
+        (marker.parent / ".delete-interrupted.pending").write_text('{"target":')
+        status = self.apply(self.make_helper())
+        self.assertNotIn(str(app / "node_modules"), self.mounted())
+        self.assertIn(str(other / "node_modules"), self.mounted())
+        self.assertEqual("scratch_delete_unsupported", self.helper.prepare_delete(request)["refused"])
+        self.assertFalse(self.helper.finish_delete(request)["released"])
+        self.assertTrue(any(event == "delete-marker-invalid" for event, _ in self.events))
+        self.assertEqual("x", (app / "keep").read_text())
+        self.assertEqual("x", (other / "keep").read_text())
+        self.assertEqual("active", status["state"])
+
+    def test_marker_replacement_interruption_preserves_complete_old_or_new_state(self):
+        app = self.repo("app", ["node_modules/"], files=["package.json"], tracked=["keep"])
+        self.apply()
+        request = self.deletion_request(app)
+        self.helper.prepare_delete(request)
+        marker = Path(self.helper.delete_marker(request))
+        old = marker.read_bytes()
+        retry = dict(request, jobId="checkout-delete-retry")
+
+        def partial(value, stream, **kwargs):
+            stream.write('{"target":')
+            stream.flush()
+            raise KeyboardInterrupt("interrupted write")
+
+        with patch.object(sm.json, "dump", side_effect=partial):
+            with self.assertRaises(KeyboardInterrupt):
+                self.helper.prepare_delete(retry)
+        self.assertEqual(old, marker.read_bytes())
+        self.apply(self.make_helper())
+        self.assertNotIn(str(app / "node_modules"), self.mounted())
+        replace = os.replace
+
+        def interrupted_replace(*args, **kwargs):
+            replace(*args, **kwargs)
+            raise KeyboardInterrupt("interrupted after atomic replacement")
+
+        with patch.object(sm.os, "replace", side_effect=interrupted_replace):
+            with self.assertRaises(KeyboardInterrupt):
+                self.helper.prepare_delete(retry)
+        self.assertEqual(retry["jobId"], json.loads(marker.read_text())["jobId"])
+        prepared = self.make_helper().prepare_delete(retry)
+        self.assertEqual(1, prepared["unmountedMounts"])
+        self.assertTrue(prepared["ready"])
+        self.assertEqual("x", (app / "keep").read_text())
+
+    def test_interrupted_first_marker_write_never_detaches_and_legacy_markers_replay(self):
+        app = self.repo("app", ["node_modules/"], files=["package.json"], tracked=["keep"])
+        self.apply()
+        request = self.deletion_request(app)
+        dump = sm.json.dump
+
+        def partial(value, stream, **kwargs):
+            stream.write("{")
+            raise KeyboardInterrupt("interrupted first write")
+
+        with patch.object(sm.json, "dump", side_effect=partial):
+            with self.assertRaises(KeyboardInterrupt):
+                self.helper.prepare_delete(request)
+        self.assertFalse(Path(self.helper.delete_marker(request)).exists())
+        self.assertEqual([], self.sys.umounts)
+        prepared = self.make_helper().prepare_delete(request)
+        marker = Path(self.helper.delete_marker(request))
+        legacy = json.loads(marker.read_text())
+        legacy.pop("mounts")
+        with marker.open("w") as stream:
+            dump(legacy, stream)
+        self.assertTrue(self.make_helper().prepare_delete(request)["ready"])
+        wrong = dict(request, generation=4)
+        result = self.make_helper().prepare_delete(wrong)
+        self.assertEqual({"target_changed": 1}, result["errors"])
+        self.assertTrue(result["remountSuppressed"])
+        self.assertEqual(0, result["removedEntries"])
+        self.assertEqual("x", (app / "keep").read_text())
+        self.assertEqual(1, prepared["unmountedMounts"])
+
+    def test_preparation_replays_same_id_after_timeout_or_death_immediately_after_detach(self):
+        for interruption in ("timeout", "death", "cancel", "busy"):
+            with self.subTest(interruption=interruption):
+                app = self.repo("app-" + interruption, ["node_modules/"], files=["package.json"],
+                                tracked=["keep"])
+                other = self.repo("other-" + interruption, ["node_modules/"], files=["package.json"],
+                                  tracked=["keep"])
+                self.apply()
+                request = self.deletion_request(app)
+                request["jobId"] += "-" + interruption
+                launches = []
+
+                def prepare(payload):
+                    try:
+                        return self.make_helper(stop=lambda: payload.get("cancelled", False)).prepare_delete(payload)
+                    except subprocess.TimeoutExpired as error:
+                        raise rt.Blocked("Checkout mount preparation response unavailable") from error
+
+                def launch(unit, payload, output):
+                    launches.append(unit)
+                    with patch.object(du, "CODING_UID", os.getuid()):
+                        result = du.delete(str(self.ws), payload["path"], payload["expect"],
+                                           chain=payload["chain"])
+                    Path(output).write_text(json.dumps(result))
+
+                adapter = SimpleNamespace(filesystem_jobs_supported=lambda: True,
+                                          filesystem_prepare=prepare, filesystem_launch=launch,
+                                          filesystem_running=lambda unit: False,
+                                          filesystem_finish=lambda record: self.helper.finish_delete(request))
+                config = dict(vmId=request["vmId"], generation=request["generation"], kind="ephemeral",
+                              uid=2000, gid=2000, workspace=str(self.ws),
+                              ignoredDataAcknowledged=True, repositories=[])
+                state = self.root / ("state-" + interruption)
+
+                def runtime():
+                    result = rt.Runtime(config, state, adapter=adapter,
+                                        git=rt.Git(allow_local=True, verification_dir=self.root / "verify"),
+                                        resources=SimpleNamespace(invalidate=lambda: None))
+                    result.s["phase"] = "Ready"
+                    return result
+
+                start = dict(request, action="fs-job-start", mode="delete", operationId="fixture-delete")
+                original = self.sys.umount
+
+                def die_after_detach(*args, **kwargs):
+                    original(*args, **kwargs)
+                    if interruption == "timeout":
+                        raise subprocess.TimeoutExpired("scratch helper", 30)
+                    raise KeyboardInterrupt("helper process died")
+
+                with patch.object(self.sys, "umount", side_effect=die_after_detach):
+                    with self.assertRaises((rt.Blocked, KeyboardInterrupt)):
+                        runtime().handle(start)
+                record = json.loads((state / "fsjobs" / (request["jobId"] + ".json")).read_text())
+                self.assertEqual("preparing", record["stage"])
+                self.assertNotIn("preparation", record)
+                self.assertEqual([], launches)
+                self.assertEqual("x", (app / "keep").read_text())
+                self.apply(self.make_helper())
+                self.assertNotIn(str(app / "node_modules"), self.mounted())
+                self.assertIn(str(other / "node_modules"), self.mounted())
+                restarted = runtime()
+                with self.assertRaises(rt.Blocked):
+                    restarted.handle(dict(start, expect=dict(dev=request["expect"]["dev"], ino=0)))
+                restarted.s["fenceOperation"] = "stopping"
+                with self.assertRaises(rt.Blocked):
+                    restarted.handle(start)
+                restarted.s.pop("fenceOperation")
+                if interruption in ("cancel", "busy"):
+                    if interruption == "busy":
+                        self.sys.procs = {str(app / "keep")}
+                    result = restarted.handle(dict(start, action="fs-job-cancel" if interruption == "cancel"
+                                                   else "fs-job-status"))["result"]
+                    self.assertEqual("cancelled" if interruption == "cancel" else "failed", result["outcome"])
+                    self.assertEqual({"cancelled" if interruption == "cancel" else "checkout_in_use": 1},
+                                     result["errors"])
+                    self.assertEqual((0, 1, True), (result["removedEntries"], result["unmountedMounts"],
+                                                  result["remountSuppressed"]))
+                    self.assertEqual([], launches)
+                    self.assertEqual("x", (app / "keep").read_text())
+                    self.assertEqual("x", (other / "keep").read_text())
+                    self.sys.procs = set()
+                    continue
+                result = restarted.handle(dict(start, action="fs-job-status") if interruption == "death" else start)
+                self.assertEqual("succeeded", result["result"]["outcome"])
+                self.assertEqual(1, result["result"]["unmountedMounts"])
+                self.assertEqual(result, runtime().handle(start))
+                self.assertEqual(1, len(launches))
+                self.assertEqual("x", (other / "keep").read_text())
+                self.assertIn(str(other / "node_modules"), self.mounted())
 
     def test_ignored_outputs_mount_from_scratch_and_other_dirs_stay_untouched(self):
         app = self.repo("my app", ["node_modules/", "bin/", "obj/", "dist", "build/", "logs/"],

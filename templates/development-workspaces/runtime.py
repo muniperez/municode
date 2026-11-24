@@ -1003,6 +1003,17 @@ class Linux:
         return Path(FS_HELPER).is_file() and shutil.which("systemd-run") is not None
 
     def filesystem_launch(self, unit, payload, output):
+        preparation = None
+        if payload["mode"] == "delete" and payload["path"][0] == "repos":
+            require(payload.get("vmId") == self.config["vmId"] and
+                    payload.get("generation") == self.config["generation"] and
+                    payload["workspace"] == str(self.workspace), "Stale folder job identity")
+            if "chain" not in payload:
+                preparation = self.filesystem_prepare(payload)
+                if not preparation.get("ready"):
+                    atomic_json(output, preparation)
+                    return preparation
+                payload = dict(payload, chain=preparation["chain"])
         writable = []
         if payload["mode"] == "delete":
             # Only the user data roots become writable; every other path stays read-only.
@@ -1023,6 +1034,35 @@ class Linux:
              # The service manager opens the root-only output file before dropping privileges.
              "--property=StandardOutput=truncate:" + str(output), "--property=StandardError=null",
              "--", "/usr/bin/python3", "-I", "-B", FS_HELPER, json.dumps(payload, sort_keys=True)])
+        return preparation
+
+    def filesystem_prepare(self, payload):
+        require(payload.get("vmId") == self.config["vmId"] and
+                payload.get("generation") == self.config["generation"] and
+                payload["workspace"] == str(self.workspace), "Stale folder job identity")
+        return self.filesystem_scratch("prepare-delete", payload)
+
+    def filesystem_scratch(self, command, payload):
+        request = dict(payload, uid=self.config["uid"], gid=self.config["gid"])
+        try:
+            result = subprocess.run(["/usr/bin/python3", "-I", "-B", SCRATCH_HELPER, command,
+                                     "--delete-request", json.dumps(request, sort_keys=True)],
+                                    capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as error:
+            raise Blocked("Checkout mount preparation response unavailable") from error
+        require(result.returncode == 0, "Checkout mount preparation failed")
+        try:
+            value = json.loads(result.stdout)
+        except ValueError as error:
+            raise Blocked("Checkout mount preparation response unavailable") from error
+        require(isinstance(value, dict), "Checkout mount preparation response unavailable")
+        return value
+
+    def filesystem_finish(self, record):
+        payload = dict(workspace=str(self.workspace), path=record["path"], jobId=record["jobId"],
+                       vmId=self.config["vmId"], generation=self.config["generation"],
+                       expect=record["expect"])
+        return self.filesystem_scratch("finish-delete", payload)
 
     def filesystem_running(self, unit):
         return self.task_running(dict(unit=unit))
@@ -1446,10 +1486,13 @@ class Runtime:
                 require(len(path) >= 2 and path[0] in FS_DELETE_ROOTS and expect is not None,
                         "Only identified folders inside repos, home or artifacts can be deleted")
             if record is not None:
-                # Idempotent replay: never launch a job ID twice, even after an ambiguous launch.
+                # Only preparation is replayable; an ambiguous deletion-unit launch is not.
                 require((record["mode"], record["path"], record.get("expect")) == (mode, path, expect),
                         "Folder job ID was reused with another request")
-                return self.filesystem_state(record, output)
+                require(record.get("vmId", self.c["vmId"]) == self.c["vmId"] and
+                        record.get("generation", self.c["generation"]) == self.c["generation"],
+                        "Stale folder job identity")
+                return self.filesystem_resume(record, output)
             require(self.s["phase"] == "Ready" and not self.s.get("fenceOperation") and
                     not self.s.get("freezeCompleted") and not self.s.get("filesystemReadOnly"),
                     "Folder jobs require a running dev environment that is not stopping")
@@ -1458,20 +1501,68 @@ class Runtime:
             require(not any(self.adapter.filesystem_running(other["unit"])
                             for other in self.filesystem_records()), "Another folder job is running")
             record = dict(jobId=job_id, mode=mode, path=path, expect=expect,
-                          unit=self.filesystem_unit(job_id), startedAt=self.clock())
+                          unit=self.filesystem_unit(job_id), startedAt=self.clock(),
+                          vmId=self.c["vmId"], generation=self.c["generation"])
+            if mode == "delete" and path[0] == "repos" and \
+                    callable(getattr(self.adapter, "filesystem_prepare", None)):
+                record["stage"] = "preparing"
             atomic_json(record_path, record)
             output.unlink(missing_ok=True)
-            payload = dict(mode=mode, workspace=self.c["workspace"], path=path, expect=expect)
+            if record.get("stage") == "preparing":
+                return self.filesystem_resume(record, output)
+            payload = dict(mode=mode, workspace=self.c["workspace"], path=path, expect=expect,
+                           jobId=job_id, vmId=self.c["vmId"], generation=self.c["generation"])
             try:
-                self.adapter.filesystem_launch(record["unit"], payload, output)
+                preparation = self.adapter.filesystem_launch(record["unit"], payload, output)
+                if preparation is not None:
+                    record["preparation"] = preparation
+                    atomic_json(record_path, record)
             except Blocked:
                 record["launchAmbiguous"] = True
                 atomic_json(record_path, record)
             return self.filesystem_state(record, output)
         if record is None:
             return dict(type="FilesystemJob", jobId=job_id, state="not_found")
+        require(record.get("vmId", self.c["vmId"]) == self.c["vmId"] and
+                record.get("generation", self.c["generation"]) == self.c["generation"],
+                "Stale folder job identity")
+        if record.get("stage") == "preparing":
+            return self.filesystem_resume(record, output, cancelled=action == "fs-job-cancel")
         if action == "fs-job-cancel" and self.adapter.filesystem_running(record["unit"]):
             self.adapter.filesystem_stop(record["unit"])
+        return self.filesystem_state(record, output)
+
+    def filesystem_resume(self, record, output, cancelled=False):
+        if record.get("stage") != "preparing":
+            return self.filesystem_state(record, output)
+        require(self.s["phase"] == "Ready" and not self.s.get("fenceOperation") and
+                not self.s.get("freezeCompleted") and not self.s.get("filesystemReadOnly"),
+                "Folder jobs require a running dev environment that is not stopping")
+        self.require_workspace()
+        require(not any(other["jobId"] != record["jobId"] and
+                        self.adapter.filesystem_running(other["unit"])
+                        for other in self.filesystem_records()), "Another folder job is running")
+        require(not self.adapter.filesystem_running(record["unit"]), "Folder preparation unit is running")
+        payload = dict(mode=record["mode"], workspace=self.c["workspace"], path=record["path"],
+                       expect=record["expect"], jobId=record["jobId"], vmId=self.c["vmId"],
+                       generation=self.c["generation"], cancelled=cancelled)
+        preparation = self.adapter.filesystem_prepare(payload)
+        record["preparation"] = preparation
+        if not preparation.get("ready"):
+            atomic_json(output, preparation)
+            record["stage"] = "completed"
+            atomic_json(output.with_suffix(".json"), record)
+            return self.filesystem_state(record, output)
+        require(not cancelled, "Cancelled checkout preparation unexpectedly succeeded")
+        payload["chain"] = preparation["chain"]
+        # Persist before systemd-run: process death after this point must never launch twice.
+        record["stage"] = "launching"
+        atomic_json(output.with_suffix(".json"), record)
+        try:
+            self.adapter.filesystem_launch(record["unit"], payload, output)
+        except Blocked:
+            record["launchAmbiguous"] = True
+            atomic_json(output.with_suffix(".json"), record)
         return self.filesystem_state(record, output)
 
     def filesystem_state(self, record, output):
@@ -1487,6 +1578,24 @@ class Runtime:
             if record["mode"] == "delete":
                 # The next status reports freed space instead of a cached sample.
                 self.resources.invalidate()
+                preparation = record.get("preparation") or {}
+                if preparation.get("inhibited"):
+                    value["unmountedMounts"] = preparation.get("unmountedMounts", 0)
+                    value["remountSuppressed"] = True
+                    if value.get("refused") and value["unmountedMounts"]:
+                        code = value.pop("refused")
+                        value.update(mode="delete", path=record["path"],
+                                     outcome="cancelled" if code == "cancelled" else "failed",
+                                     removedEntries=0, removedBytes=0, errors={code: 1})
+                if value.get("outcome") == "succeeded" and record["path"][0] == "repos":
+                    # Launch can succeed before its acknowledgement/preparation is persisted.
+                    finish = getattr(self.adapter, "filesystem_finish", None)
+                    if finish is not None:
+                        value["remountSuppressed"] = not finish(record).get("released", False)
+                    if value.get("remountSuppressed"):
+                        value["outcome"] = "partially_deleted"
+                        value.setdefault("errors", {})["target_changed" if finish is not None
+                                                       else "io_error"] = 1
             return dict(result, state="completed", result=value)
         except (OSError, ValueError, Blocked):
             return dict(result, state="lost")
