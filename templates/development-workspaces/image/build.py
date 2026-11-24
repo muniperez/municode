@@ -20,6 +20,21 @@ from runtime import Blocked, atomic_json, require, run
 from copilot_provider import probe as probe_copilot
 
 
+def cloud_image_serial(path=Path("/etc/cloud/build.info")):
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        # Provider stock images (for example Vultr's) omit it; boot the verified pinned image instead.
+        raise Blocked("Builder lacks /etc/cloud/build.info; it was not booted from the pinned "
+                      "Ubuntu cloud image") from None
+    build = {}
+    for line in text.splitlines():
+        match = re.fullmatch(r"([a-zA-Z0-9_]+)\s*[:=]\s*([^#]+?)\s*", line)
+        if match:
+            build[match[1]] = match[2].strip("'\"")
+    return build.get("serial")
+
+
 def builder_guard(acknowledgement):
     require(acknowledgement == "DESTROY-DISPOSABLE-IMAGE-BUILDER",
             "Explicit disposable-image-builder acknowledgement required")
@@ -29,12 +44,7 @@ def builder_guard(acknowledgement):
     require(os.geteuid() == 0 and os.uname().machine == "x86_64", "Root linux/amd64 builder required")
     require('VERSION_ID="24.04"' in Path("/etc/os-release").read_text(), "Ubuntu 24.04 required")
     manifest = json.loads((HERE / "manifest.lock.json").read_text())
-    build = {}
-    for line in Path("/etc/cloud/build.info").read_text().splitlines():
-        match = re.fullmatch(r"([a-zA-Z0-9_]+)\s*[:=]\s*([^#]+?)\s*", line)
-        if match:
-            build[match[1]] = match[2].strip("'\"")
-    require(build.get("serial") == manifest["os"]["cloudImageSerial"],
+    require(cloud_image_serial() == manifest["os"]["cloudImageSerial"],
             "Builder cloud-image serial does not match the pinned Ubuntu image")
     require(not Path("/etc/workspaces-workspace/runtime.json").exists(), "Already enrolled runtime")
     require(not os.path.ismount("/workspace") and
