@@ -30,6 +30,9 @@ ACTIVATION_TIMEOUT = 240
 ACTIVATION_FILE = "connect-activation.json"
 IN_FLIGHT = ("pending", "restarting")
 TRACE_FILE = Path(BASE) / "userdata/logs/server.trace.ndjson"
+# Match the trace retention defaults in the pinned T3 CLI.
+TRACE_MAX_BYTES = 10 * 1024 * 1024
+TRACE_ROTATIONS = 10
 
 
 def command(action):
@@ -172,6 +175,16 @@ def trace_position():
         return None
 
 
+def trace_record_is_current(line, started_ns):
+    try:
+        record = json.loads(line)
+    except (ValueError, RecursionError):
+        return False
+    timestamp = record.get("startTimeUnixNano") if isinstance(record, dict) else None
+    return (isinstance(timestamp, str) and len(timestamp) <= 20 and timestamp.isascii()
+            and timestamp.isdecimal() and int(timestamp) >= started_ns)
+
+
 def relay_start_diagnostics(started_at, position):
     # Never copy log lines, exception messages, process arguments or environment values.
     events = {
@@ -190,30 +203,40 @@ def relay_start_diagnostics(started_at, position):
     errors = ("CloudLinkAuthorizationMissingError", "CloudLinkEndpointUnavailableError",
               "CloudLinkInternalError", "CloudLinkOriginInvalidError", "RelayRequestError",
               "SecretStoreReadError", "SecretStorePersistError")
-    result = {}
-    try:
-        with os.fdopen(os.open(TRACE_FILE, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
-            info = os.fstat(stream.fileno())
-            require(stat.S_ISREG(info.st_mode), "Regular trace file required")
-            if info.st_mtime < started_at:
-                result["trace"] = "no_current_trace"
-                text = ""
-            else:
-                result["trace"] = "read"
+    markers = (*events, *errors, "T3 Connect relay returned HTTP")
+    started_ns = int(started_at * 1_000_000_000)
+    result = {"trace": "unavailable"}
+    found_events, found_errors, exit_codes, http_statuses = set(), set(), set(), set()
+    for index in range(TRACE_ROTATIONS + 1):
+        path = TRACE_FILE.with_name(f"{TRACE_FILE.name}.{index}") if index else TRACE_FILE
+        try:
+            with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+                info = os.fstat(stream.fileno())
+                require(stat.S_ISREG(info.st_mode), "Regular trace file required")
+                if info.st_mtime < started_at:
+                    if result["trace"] == "unavailable":
+                        result["trace"] = "no_current_trace"
+                    continue
                 offset = position[1] if position and position[0] == info.st_ino and position[1] <= info.st_size else 0
-                stream.seek(max(offset, info.st_size - 262144))
-                text = stream.read(262144).decode("utf-8", errors="replace")
-        result.update(events=sorted(code for phrase, code in events.items() if phrase in text),
-                      errors=sorted(code for code in errors if code in text))
-        result["relayExitCodes"] = sorted({
-            int(code) for line in text.splitlines() if "Relay client exited; restarting" in line
-            for code in re.findall(r'["\\]*exitCode["\\]*\s*:\s*(-?[0-9]{1,3})\b', line)
-        })
-        result["relayHttpStatuses"] = sorted({
-            int(code) for code in re.findall(r"T3 Connect relay returned HTTP ([45][0-9]{2})\b", text)
-        })
-    except (OSError, Blocked):
-        result["trace"] = "unavailable"
+                offset = max(offset, info.st_size - TRACE_MAX_BYTES)
+                stream.seek(offset)
+                text = stream.read(info.st_size - offset).decode("utf-8", errors="replace")
+        except (OSError, Blocked):
+            continue
+        result["trace"] = "read"
+        for line in text.splitlines():
+            if not any(marker in line for marker in markers) or not trace_record_is_current(line, started_ns):
+                continue
+            found_events.update(code for phrase, code in events.items() if phrase in line)
+            found_errors.update(code for code in errors if code in line)
+            if "Relay client exited; restarting" in line:
+                exit_codes.update(int(code) for code in
+                                  re.findall(r'["\\]*exitCode["\\]*\s*:\s*(-?[0-9]{1,3})\b', line))
+            http_statuses.update(int(code) for code in
+                                 re.findall(r"T3 Connect relay returned HTTP ([45][0-9]{2})\b", line))
+    if result["trace"] != "unavailable":
+        result.update(events=sorted(found_events), errors=sorted(found_errors),
+                      relayExitCodes=sorted(exit_codes), relayHttpStatuses=sorted(http_statuses))
     try:
         properties = run(["systemctl", "show", "workspaces-t3.service",
                           "-p", "ExecMainStatus", "-p", "ExecMainCode"], timeout=5)

@@ -252,20 +252,36 @@ class ConnectTests(unittest.TestCase):
     def test_unprovisioned_link_times_out_with_allowlisted_diagnostics_not_raw_status(self):
         queued = self.queue_activation()
         now = [time.time()]
+        trace = self.root / "server.trace.ndjson"
+        trace.touch()
         status = self.approved_status(cloudUserId="private-account",
                                       relayUrl="https://example.invalid/private")
         def run(argv, **kwargs):
+            if argv == ["systemctl", "restart", "workspaces-t3.service"]:
+                started_ns = int(queued["startedAt"] * 1_000_000_000)
+                quota_failure = dict(type="effect-span", name="environment.cloud.reconcileDesiredLinkWith",
+                    startTimeUnixNano=str(started_ns + 1_000_000_000), exit=dict(
+                        detail="Unlink an unused environment in T3 Connect", errorType="RelayRequestError",
+                        private="private-relay-output"))
+                with trace.open("a") as stream:
+                    stream.write(json.dumps(quota_failure) + "\n")
+                    stream.write(json.dumps(dict(message="unrelated", padding="x" * 300_000)) + "\n")
+                trace.rename(trace.with_suffix(".ndjson.1"))
+                trace.touch()
+                trace.with_suffix(".ndjson.2").write_text(json.dumps(dict(type="effect-span",
+                    startTimeUnixNano=str(started_ns - 1_000_000_000),
+                    exit=dict(detail="Failed to start relay client"))) + "\n")
+                return ""
             return json.dumps(status) if argv == connect.command("status") else "active"
-        with patch.object(connect, "run", side_effect=run), \
+        with patch.object(connect, "TRACE_FILE", trace), patch.object(connect, "run", side_effect=run), \
                 patch.object(connect.time, "time", side_effect=lambda: now[0]), \
-                patch.object(connect.time, "sleep", side_effect=lambda _: now.__setitem__(0, now[0] + 30)), \
-                patch.object(connect, "relay_start_diagnostics",
-                             return_value=dict(events=["account_link_limit", "link_reconcile_failed"])):
+                patch.object(connect.time, "sleep", side_effect=lambda _: now.__setitem__(0, now[0] + 30)):
             connect.activate(self.config, self.root)
         result = self.activation()
         self.assertEqual((result["state"], result["reason"]), ("failed", "link_not_provisioned"))
         self.assertTrue(result["diagnostics"]["relayClientPinned"])
-        self.assertIn("account_link_limit", result["diagnostics"]["events"])
+        self.assertEqual(result["diagnostics"]["events"], ["account_link_limit"])
+        self.assertEqual(result["diagnostics"]["errors"], ["RelayRequestError"])
         self.assertNotIn("private", json.dumps(result))
         with patch.object(connect.subprocess, "run", side_effect=OSError("synthetic status failure")):
             self.assertEqual(connect.Enrollment(self.config, self.root).status()["activation"], result)
@@ -310,13 +326,13 @@ class ConnectTests(unittest.TestCase):
 
     def test_relay_diagnostics_only_include_new_allowlisted_events_and_exit_codes(self):
         trace = self.root / "trace.ndjson"
-        trace.write_text('{"message":"Failed to start relay client","private":"old-output"}\n')
+        trace.write_text('{"startTimeUnixNano":"1","message":"Failed to start relay client","private":"old-output"}\n')
         with patch.object(connect, "TRACE_FILE", trace):
             position = connect.trace_position()
             with trace.open("a") as stream:
-                stream.write('{"message":"Relay client exited; restarting","exitCode":7,"private":"new-output"}\n')
-                stream.write('{"message":"T3 Connect relay returned HTTP 403","private":"authenticated-url"}\n')
-                stream.write('{"message":"Unlink an unused environment in T3 Connect","private":"account-output"}\n')
+                stream.write('{"startTimeUnixNano":"2","message":"Relay client exited; restarting","exitCode":7,"private":"new-output"}\n')
+                stream.write('{"startTimeUnixNano":"2","message":"T3 Connect relay returned HTTP 403","private":"authenticated-url"}\n')
+                stream.write('{"startTimeUnixNano":"2","message":"Unlink an unused environment in T3 Connect","private":"account-output"}\n')
             with patch.object(connect, "run", return_value="ExecMainStatus=0\nExecMainCode=1\nPrivate=value"), \
                     patch.object(connect.Path, "iterdir", return_value=[]):
                 result = connect.relay_start_diagnostics(0, position)
