@@ -18,7 +18,7 @@ export type BudgetContributor = {
   pricingStatus: "current" | "stale" | "unknown"; pricingUpdatedAt?: string | null; lines: BudgetPriceLine[];
 };
 export type BudgetExcludedWorkspace = { workspaceId: string; workspaceName: string; currency: string; reason: string };
-/** Every amount is an estimate from recorded rates; provider-reported charges are not available yet. */
+/** Every amount is an estimate from recorded rates; provider-reported charges are never mixed in (see Budget.providerCharges). */
 export type BudgetProjection = {
   period: string; estimate: boolean; complete: boolean; projectedHourly: number; projectedMonthly: number; percentOfBudget: number;
   crossedThreshold: number | null; overBudget: boolean; providerChargesAvailable: boolean;
@@ -39,11 +39,23 @@ export type BudgetNotificationDelivery = {
   status: "pending" | "delivered" | "failed" | "cancelled"; attempts: number; lastError: string | null;
   createdAt: string; deliveredAt: string | null; nextAttemptAt: string | null;
 };
+export type BudgetProviderChargeStatus = "available" | "stale" | "failed" | "unsupported" | "not_retrieved";
+/** Month-to-date charges a provider reported for a whole provider account. amount is null, never zero, when nothing was reported. */
+export type BudgetProviderCharge = {
+  providerAccountId: string; providerName: string; providerType: string; status: BudgetProviderChargeStatus;
+  amount: number | null; currency: string | null; asOf: string | null; attemptedAt: string | null; source: string | null; message: string;
+};
+/** Totals are per currency; different currencies are never summed or converted. */
+export type BudgetProviderCharges = {
+  period: string; complete: boolean; accounts: BudgetProviderCharge[];
+  totals: { currency: string; amount: number; accountCount: number }[]; notes: string[];
+};
 export type Budget = {
   id: string; organizationId: string; name: string; currency: string; monthlyAmount: number; thresholds: number[];
   providerAccountIds: string[]; revision: number; createdAt: string; updatedAt: string; projection: BudgetProjection;
   notifications: BudgetNotificationSettings; lastAlert: { period: string; threshold: number; alertedAt: string } | null;
   deliveries: BudgetNotificationDelivery[];
+  providerCharges?: BudgetProviderCharges | null;
   /** Only present on the create/update response that generated or rotated the signing secret. */
   webhookSigningSecret?: string | null;
 };

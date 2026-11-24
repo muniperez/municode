@@ -1834,6 +1834,73 @@ namespace Workspaces.Common.Migrations.Sqlite
                     b.ToTable("provider_accounts", (string)null);
                 });
 
+            modelBuilder.Entity("Workspaces.Common.Models.ProviderCharge", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<decimal?>("Amount")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("amount");
+
+                    b.Property<DateTimeOffset?>("AsOf")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("as_of");
+
+                    b.Property<DateTimeOffset>("AttemptedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("attempted_at");
+
+                    b.Property<string>("Currency")
+                        .HasMaxLength(3)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("currency");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_error");
+
+                    b.Property<string>("OrganizationId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("organization_id");
+
+                    b.Property<string>("Period")
+                        .IsRequired()
+                        .HasMaxLength(7)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("period");
+
+                    b.Property<string>("ProviderAccountId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_account_id");
+
+                    b.Property<DateTimeOffset?>("RetrievedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("retrieved_at");
+
+                    b.Property<string>("Source")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("source");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("status");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationId", "ProviderAccountId", "Period")
+                        .IsUnique();
+
+                    b.ToTable("provider_charges", (string)null);
+                });
+
             modelBuilder.Entity("Workspaces.Common.Models.ProviderCredentialCleanup", b =>
                 {
                     b.Property<string>("Id")
@@ -2216,6 +2283,16 @@ namespace Workspaces.Common.Migrations.Sqlite
                         .IsRequired();
 
                     b.Navigation("Organization");
+                });
+
+            modelBuilder.Entity("Workspaces.Common.Models.ProviderCharge", b =>
+                {
+                    b.HasOne("Workspaces.Common.Models.ProviderAccount", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId", "ProviderAccountId")
+                        .HasPrincipalKey("OrganizationId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Workspaces.Common.Models.ProviderPlan", b =>

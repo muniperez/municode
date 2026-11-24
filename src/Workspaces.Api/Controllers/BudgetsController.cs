@@ -13,13 +13,13 @@ namespace Workspaces.Api.Controllers;
 // Informational budgets: any member reads, owner/admin manage. Never consulted by workspace lifecycle endpoints.
 [ApiController, Authorize, Route("api/budgets")]
 public sealed class BudgetsController(WorkspaceDbContext db, ControlPlaneAuthorization authorization,
-    BudgetService budgets, AuditEventService audit) : ControllerBase
+    BudgetService budgets, ProviderChargeService charges, AuditEventService audit) : ControllerBase
 {
     [HttpGet]
     public async Task<IResult> List(string organizationId, CancellationToken ct)
     {
         if (!await CanAsync(organizationId, OrganizationAction.ReadBudgets, ct)) return EndpointResults.Forbidden();
-        return Results.Ok(await budgets.ListAsync(organizationId, ct));
+        return Results.Ok(await charges.AttachAsync(organizationId, await budgets.ListAsync(organizationId, ct), ct));
     }
 
     [HttpPost]
@@ -36,7 +36,7 @@ public sealed class BudgetsController(WorkspaceDbContext db, ControlPlaneAuthori
                 await tx.CommitAsync(ct);
             }
             return Results.Created($"/api/budgets/{change.Budget.Id}",
-                await budgets.ProjectAsync(change.Budget, change.WebhookSigningSecret, ct));
+                await charges.AttachAsync(await budgets.ProjectAsync(change.Budget, change.WebhookSigningSecret, ct), ct));
         });
     }
 
@@ -47,7 +47,8 @@ public sealed class BudgetsController(WorkspaceDbContext db, ControlPlaneAuthori
             var change = await budgets.UpdateAsync(budget, request, ct);
             await SaveAuditAsync(budget, "budget.updated", ct);
             return change;
-        }, async change => Results.Ok(await budgets.ProjectAsync(change.Budget, change.WebhookSigningSecret, ct)), ct);
+        }, async change => Results.Ok(await charges.AttachAsync(
+            await budgets.ProjectAsync(change.Budget, change.WebhookSigningSecret, ct), ct)), ct);
 
     [HttpDelete("{id}")]
     public async Task<IResult> Delete(string id, CancellationToken ct) =>

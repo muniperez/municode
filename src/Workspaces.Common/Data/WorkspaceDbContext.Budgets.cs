@@ -39,5 +39,6 @@ public partial class WorkspaceDbContext
             entity.Property(x => x.LastError).HasMaxLength(256);
             entity.HasOne<Budget>().WithMany().HasForeignKey(x => x.BudgetId).OnDelete(DeleteBehavior.Cascade);
         });
+        ConfigureProviderCharges(modelBuilder);
     }
 }

@@ -1839,6 +1839,73 @@ namespace Workspaces.Common.Migrations.Postgres
                     b.ToTable("provider_accounts", (string)null);
                 });
 
+            modelBuilder.Entity("Workspaces.Common.Models.ProviderCharge", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("text")
+                        .HasColumnName("id");
+
+                    b.Property<decimal?>("Amount")
+                        .HasColumnType("numeric")
+                        .HasColumnName("amount");
+
+                    b.Property<DateTimeOffset?>("AsOf")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("as_of");
+
+                    b.Property<DateTimeOffset>("AttemptedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("attempted_at");
+
+                    b.Property<string>("Currency")
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)")
+                        .HasColumnName("currency");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("last_error");
+
+                    b.Property<string>("OrganizationId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("organization_id");
+
+                    b.Property<string>("Period")
+                        .IsRequired()
+                        .HasMaxLength(7)
+                        .HasColumnType("character varying(7)")
+                        .HasColumnName("period");
+
+                    b.Property<string>("ProviderAccountId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("provider_account_id");
+
+                    b.Property<DateTimeOffset?>("RetrievedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("retrieved_at");
+
+                    b.Property<string>("Source")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("source");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("status");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationId", "ProviderAccountId", "Period")
+                        .IsUnique();
+
+                    b.ToTable("provider_charges", (string)null);
+                });
+
             modelBuilder.Entity("Workspaces.Common.Models.ProviderCredentialCleanup", b =>
                 {
                     b.Property<string>("Id")
@@ -2221,6 +2288,16 @@ namespace Workspaces.Common.Migrations.Postgres
                         .IsRequired();
 
                     b.Navigation("Organization");
+                });
+
+            modelBuilder.Entity("Workspaces.Common.Models.ProviderCharge", b =>
+                {
+                    b.HasOne("Workspaces.Common.Models.ProviderAccount", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId", "ProviderAccountId")
+                        .HasPrincipalKey("OrganizationId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Workspaces.Common.Models.ProviderPlan", b =>

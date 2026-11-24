@@ -286,6 +286,18 @@ relays. If email is disabled or incomplete, the worker queues no email and
 cancels already queued email. SMTP failures follow the same retry settings as
 webhooks and record only the SMTP status code.
 
+The worker also records provider-reported month-to-date charges for provider
+accounts in organizations that have at least one budget. It calls only
+read-only billing endpoints with each account's existing credential and stores
+only the aggregated amount, currency, source and retrieval time. Tune it with
+`BudgetAlerts:ProviderCharges`: `Enabled` (default `true`), `RefreshMinutes`
+(60, at least 15) and `StaleAfterMinutes` (180). Set `StaleAfterMinutes` for the
+API too; the API uses it to mark old amounts as stale. Failed refreshes record
+only an HTTP status code or a fixed description, never the provider's response.
+They are retried at the next refresh interval and never affect resources.
+DigitalOcean tokens need the `billing:read` scope, and Vultr API keys need
+billing access; without them the budget card shows the refresh as failed.
+
 For a failed startup, inspect only service status and sanitized logs; bearer
 capabilities can occur in gateway requests. Do not paste request URLs, tokens,
 OpenBao values, bootstrap material or worker private keys into support output.

@@ -309,6 +309,66 @@ public sealed partial class DevelopmentWorkspaceApiTests
     }
 
     [Fact]
+    public async Task ProviderReportedChargesAreListedApartFromTheProjectionByCurrencyAndFreshness()
+    {
+        using var owner = Client(token);
+        var now = DateTimeOffset.UtcNow;
+        var period = now.UtcDateTime.ToString("yyyy-MM", System.Globalization.CultureInfo.InvariantCulture);
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<WorkspaceDbContext>();
+            foreach (var (id, type) in new[] { ("do", CloudProvider.DigitalOcean), ("vultr", CloudProvider.Vultr),
+                ("do-failed", CloudProvider.DigitalOcean), ("do-new", CloudProvider.DigitalOcean) })
+                db.ProviderAccounts.Add(new ProviderAccount { Id = id, OrganizationId = "org", Name = id, ProviderType = type,
+                    CredentialPath = "sensitive/" + id, CredentialGeneration = "synthetic" });
+            await db.SaveChangesAsync();
+            db.ProviderCharges.AddRange(
+                Charge("do", period, 12.5m, "USD", now),
+                Charge("vultr", period, 7.25m, "EUR", now.AddHours(-10)),
+                Charge("do-failed", period, 3m, "USD", now.AddHours(-1)),
+                Charge("do-new", now.UtcDateTime.AddMonths(-1).ToString("yyyy-MM", System.Globalization.CultureInfo.InvariantCulture),
+                    99m, "USD", now.AddMonths(-1)));
+            await db.SaveChangesAsync();
+            await db.ProviderCharges.Where(x => x.ProviderAccountId == "do-failed").ExecuteUpdateAsync(x => x
+                .SetProperty(c => c.Status, ProviderCharge.Failed)
+                .SetProperty(c => c.LastError, "HTTP 403: the provider credential cannot read billing data"));
+        }
+
+        var all = await CreateBudget(owner, new("org", "All", 50m));
+        await ListBudgets(owner);
+        Assert.False(all.Projection.ProviderChargesAvailable);
+        var charges = all.ProviderCharges!;
+        Assert.Equal(period, charges.Period);
+        Assert.False(charges.Complete);
+        var byAccount = charges.Accounts.ToDictionary(x => x.ProviderAccountId);
+        Assert.Equal(("available", 12.5m, "USD"), (byAccount["do"].Status, byAccount["do"].Amount, byAccount["do"].Currency));
+        Assert.Equal(("stale", 7.25m, "EUR"), (byAccount["vultr"].Status, byAccount["vultr"].Amount, byAccount["vultr"].Currency));
+        Assert.Equal(("failed", 3m), (byAccount["do-failed"].Status, byAccount["do-failed"].Amount));
+        Assert.Contains("HTTP 403", byAccount["do-failed"].Message, StringComparison.Ordinal);
+        // A previous month's amount is never shown as this month's, and missing data is null, not zero.
+        Assert.Equal(("not_retrieved", null), (byAccount["do-new"].Status, byAccount["do-new"].Amount));
+        Assert.Equal(("unsupported", null, "hetzner"), (byAccount["account"].Status, byAccount["account"].Amount,
+            byAccount["account"].ProviderType));
+        Assert.StartsWith("Provider-reported charges not available", byAccount["account"].Message, StringComparison.Ordinal);
+        Assert.Equal(new BudgetProviderChargeTotalResponse[] { new("EUR", 7.25m, 1), new("USD", 15.5m, 2) }, charges.Totals);
+        Assert.Contains(charges.Notes, x => x.Contains("never converted or summed", StringComparison.Ordinal));
+
+        var scoped = await CreateBudget(owner, new("org", "Droplets", 50m, ProviderAccountIds: ["do"]));
+        Assert.True(scoped.ProviderCharges!.Complete);
+        Assert.Equal(new BudgetProviderChargeTotalResponse("USD", 12.5m, 1), Assert.Single(scoped.ProviderCharges.Totals));
+
+        await using var check = factory.Services.CreateAsyncScope();
+        // Reading budgets never retrieves or records charges.
+        Assert.Equal(4, await check.ServiceProvider.GetRequiredService<WorkspaceDbContext>().ProviderCharges.CountAsync());
+
+        static ProviderCharge Charge(string account, string period, decimal amount, string currency, DateTimeOffset at) => new()
+        {
+            Id = "charge-" + account, OrganizationId = "org", ProviderAccountId = account, Period = period, Amount = amount,
+            Currency = currency, Source = "synthetic", AsOf = at, RetrievedAt = at, AttemptedAt = at
+        };
+    }
+
+    [Fact]
     public async Task BudgetsValidateAuditAndUseRevisions()
     {
         using var owner = Client(token);

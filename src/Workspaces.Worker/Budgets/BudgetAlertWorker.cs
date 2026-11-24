@@ -23,6 +23,9 @@ public static class BudgetAlertWorkerExtensions
             .ConfigurePrimaryHttpMessageHandler(provider =>
                 HttpBudgetWebhookSender.CreateHandler(provider.GetRequiredService<IOptions<BudgetAlertWorkerOptions>>().Value));
         services.AddHostedService<BudgetAlertWorker>();
+        services.Configure<ProviderChargesOptions>(configuration.GetSection(ProviderChargesOptions.SectionName));
+        services.AddScoped<ProviderChargesCollector>();
+        services.AddHostedService<ProviderChargesWorker>();
         return services;
     }
 }
