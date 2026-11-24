@@ -249,6 +249,69 @@ class NativeScratchFixtureTests(unittest.TestCase):
                 ])
 
 
+class NativeProviderProbeTests(unittest.TestCase):
+    COPILOT = dict(driver="acpRegistry", enabled=True, config={
+        "source": "local", "commandPath": "/usr/local/bin/copilot", "commandArgs": ["--acp", "--stdio"]})
+
+    def run_probe(self, instances, unusable=(), agents=None):
+        ARTIFACTS.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ARTIFACTS) as directory:
+            settings = Path(directory) / "settings.json"
+            settings.write_text(json.dumps({"providerInstances": instances}))
+            calls = []
+
+            def command(argv, **kwargs):
+                calls.append(argv)
+                if "test" in argv:
+                    if argv[-1] in unusable:
+                        raise native.ProbeError("COMMAND_FAILED")
+                    return ""
+                if argv[-1] == "configure":
+                    return json.dumps({"state": "AlreadyConfigured", "agents": agents or {
+                        "antigravity": "AlreadyConfigured", "muse": "AlreadyConfigured"}})
+                return json.dumps({"state": "Compatible", "version": "1.0.114", "authentication": "NotChecked"})
+            probe = native.Native.__new__(native.Native)
+            with patch.object(native, "Path", side_effect=lambda value: settings if value.endswith(
+                    "settings.json") else Path(value)), patch.object(native, "command", side_effect=command):
+                return probe.copilot_provider(), calls
+
+    def seeded(self):
+        return {"workspaces-copilot": self.COPILOT,
+                **{instance_id: dict(driver=driver, enabled=True, config={"binaryPath": executable})
+                   for instance_id, (driver, executable) in native.SEEDED_AGENT_PROVIDERS.items()}}
+
+    def test_copilot_probe_requires_every_seeded_agent_with_an_executable_binary_as_coding(self):
+        self.assertEqual(sorted(native.SEEDED_AGENT_PROVIDERS), ["workspaces-antigravity", "workspaces-muse"])
+        result, calls = self.run_probe(self.seeded())
+        self.assertEqual(result["agentProvidersSeeded"], ["workspaces-antigravity", "workspaces-muse"])
+        checked = [argv[-1] for argv in calls if "test" in argv]
+        self.assertEqual(sorted(checked), ["/opt/workspaces-antigravity/agy_acp_server.par", "/usr/local/bin/muse"])
+        self.assertTrue(all(argv[:2] == ["setpriv", "--reuid=2000"] for argv in calls))
+        self.assertIn("copilot-stdio-provider-setup", native.REQUIRED_PROBES)
+        self.assertEqual(len(native.REQUIRED_PROBES), 24)
+
+    def test_copilot_probe_rejects_missing_disabled_or_unusable_agent_providers(self):
+        for instance_id in native.SEEDED_AGENT_PROVIDERS:
+            for change in ("missing", "disabled", "binaryPath"):
+                with self.subTest(instance_id=instance_id, change=change):
+                    instances = self.seeded()
+                    if change == "missing":
+                        del instances[instance_id]
+                    elif change == "disabled":
+                        instances[instance_id]["enabled"] = False
+                    else:
+                        instances[instance_id]["config"] = {"binaryPath": "/elsewhere"}
+                    with self.assertRaisesRegex(native.ProbeError, "AGENT_PROVIDER_NOT_SEEDED"):
+                        self.run_probe(instances)
+            with self.subTest(instance_id=instance_id, change="unusable"):
+                executable = native.SEEDED_AGENT_PROVIDERS[instance_id][1]
+                with self.assertRaisesRegex(native.ProbeError, "AGENT_PROVIDER_BINARY_UNUSABLE") as caught:
+                    self.run_probe(self.seeded(), unusable=(executable,))
+                self.assertEqual(caught.exception.evidence, {"instanceId": instance_id})
+        with self.assertRaisesRegex(native.ProbeError, "AGENT_PROVIDER_NOT_SEEDED"):
+            self.run_probe(self.seeded(), agents={"antigravity": "AlreadyConfigured", "muse": "BinaryUnusable"})
+
+
 class ImageTests(unittest.TestCase):
     def test_native_qualification_issues_clone_and_browse_scopes_but_keeps_readonly_fixture(self):
         expected = {"terminal:operate", "orchestration:operate", "terminal:read",
@@ -1200,3 +1263,20 @@ class AgentInstallTests(unittest.TestCase):
         with patch.object(builder.urllib.request, "urlopen", return_value=io.BytesIO(b"muse")), \
                 self.assertRaisesRegex(builder.Blocked, "size mismatch"):
             builder.install_muse(lock, self.root, destination, wrapper)
+
+    def test_agent_install_directories_are_root_owned_and_traversable_under_restrictive_umask(self):
+        lock = json.loads(json.dumps(self.lock))
+        lock["muse"].update(sha256=hashlib.sha256(b"muse").hexdigest(), size=4)
+        muse, wrapper = self.root / "muse", self.root / "muse-wrapper"
+        previous = os.umask(0o077)
+        try:
+            antigravity = self.antigravity({"agy_acp_server.par": b"par", "localharness_external": b"ext!"})
+            with patch.object(builder.urllib.request, "urlopen", return_value=io.BytesIO(b"muse")):
+                builder.install_muse(lock, self.root, muse, wrapper)
+        finally:
+            os.umask(previous)
+        for path in (antigravity, antigravity / "agy_acp_server.par", antigravity / "localharness_external",
+                     muse, muse / "muse", wrapper):
+            with self.subTest(path=path.name):
+                self.assertEqual(path.stat().st_mode & 0o777, 0o755)
+                builder.os.chown.assert_any_call(path, 0, 0)

@@ -1,9 +1,12 @@
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
@@ -67,6 +70,7 @@ class CopilotProviderTests(unittest.TestCase):
     def test_installed_agents_are_seeded_once_and_user_choices_are_kept(self):
         executable = self.root / "muse"
         executable.write_text("#!/bin/sh\n")
+        executable.chmod(0o755)
         agents = [dict(provider.AGENTS[1], executable=str(executable)),
                   dict(provider.AGENTS[0], executable=str(self.root / "agy"))]
         self.write_settings({"providerInstances": {
@@ -89,7 +93,7 @@ class CopilotProviderTests(unittest.TestCase):
 
     def test_occupied_agent_id_is_reported_without_blocking_t3(self):
         self.write_settings({"providerInstances": {"workspaces-muse": dict(driver="codex")}})
-        result = provider.configure(self.settings, [provider.AGENTS[1]])
+        result = provider.configure(self.settings, self.agents()[1:])
         self.assertEqual(result["state"], "Configured")
         self.assertEqual(result["agents"], {"muse": "InstanceIdOccupied"})
         self.assertEqual(json.loads(self.settings.read_text())["providerInstances"]["workspaces-muse"], dict(driver="codex"))
@@ -100,8 +104,7 @@ class CopilotProviderTests(unittest.TestCase):
                             for agent in provider.AGENTS))
 
     def test_refuses_collision_invalid_settings_and_symlink_without_replacing(self):
-        for content in ('{"providerInstances":{"workspaces-copilot":{"driver":"codex"}}}',
-                        '{"providerInstances":[]}', '[]', '{invalid'):
+        for content in ('{"providerInstances":[]}', '[]', '{invalid'):
             with self.subTest(content=content):
                 self.settings.parent.mkdir(parents=True, exist_ok=True)
                 self.settings.write_text(content)
@@ -112,6 +115,79 @@ class CopilotProviderTests(unittest.TestCase):
         link.symlink_to(self.settings)
         with self.assertRaisesRegex(Blocked, "symlink"):
             provider.configure(link, agents=[])
+
+    def agents(self):
+        agents = []
+        for agent in provider.AGENTS:
+            directory = self.root / agent["driver"]
+            directory.mkdir()
+            executable = directory / Path(agent["executable"]).name
+            executable.write_text("#!/bin/sh\n")
+            executable.chmod(0o755)
+            agents.append(dict(agent, executable=str(executable)))
+        return agents
+
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses directory permissions")
+    def test_unreadable_agent_directory_fails_only_that_provider(self):
+        antigravity, muse = self.agents()
+        Path(antigravity["executable"]).parent.chmod(0)
+        self.addCleanup(Path(antigravity["executable"]).parent.chmod, 0o755)
+        lines = []
+        result = provider.configure(self.settings, [antigravity, muse], log=lines.append)
+        self.assertEqual((result["state"], result["agents"]),
+                         ("Configured", {"antigravity": "BinaryUnusable", "muse": "Configured"}))
+        self.assertIn("Permission denied", result["providers"]["workspaces-antigravity"]["detail"])
+        self.assertTrue(provider.failed(result))
+        self.assertEqual(sorted(json.loads(self.settings.read_text())["providerInstances"]),
+                         ["workspaces-copilot", "workspaces-muse"])
+        self.assertEqual(lines[0], "T3 provider workspaces-copilot (acpRegistry): seeded")
+        self.assertRegex(lines[1], r"^T3 provider workspaces-antigravity \(antigravity\): error, cannot "
+                                   r"inspect .*agy_acp_server\.par \(Permission denied\)$")
+        self.assertEqual(lines[2], "T3 provider workspaces-muse (muse): seeded")
+
+    def test_missing_and_non_executable_binaries_are_reported_per_provider(self):
+        antigravity, muse = self.agents()
+        Path(antigravity["executable"]).unlink()
+        Path(muse["executable"]).chmod(0o644)
+        lines = []
+        result = provider.configure(self.settings, [antigravity, muse], log=lines.append)
+        self.assertEqual(result["agents"], {"antigravity": "MissingBinary", "muse": "BinaryUnusable"})
+        self.assertEqual(lines[1], "T3 provider workspaces-antigravity (antigravity): skipped, "
+                                   "missing binary " + antigravity["executable"])
+        self.assertEqual(lines[2], "T3 provider workspaces-muse (muse): error, " + muse["executable"] +
+                                   " is not executable by this user")
+        self.assertEqual(list(json.loads(self.settings.read_text())["providerInstances"]), ["workspaces-copilot"])
+        self.assertTrue(provider.failed(result))
+        self.assertFalse(provider.failed(provider.configure(self.settings, [antigravity])))
+
+    def test_occupied_copilot_id_does_not_block_agents(self):
+        self.write_settings({"providerInstances": {"workspaces-copilot": dict(driver="codex")}})
+        lines = []
+        result = provider.configure(self.settings, self.agents(), log=lines.append)
+        self.assertEqual((result["state"], result["agents"]),
+                         ("InstanceIdOccupied", {"antigravity": "Configured", "muse": "Configured"}))
+        self.assertNotIn("instanceId", result)
+        self.assertEqual(lines[0], "T3 provider workspaces-copilot (acpRegistry): error, instance ID is "
+                                   "occupied; rename it in Settings → Providers")
+        instances = json.loads(self.settings.read_text())["providerInstances"]
+        self.assertEqual(instances["workspaces-copilot"], dict(driver="codex"))
+        self.assertEqual(sorted(instances), ["workspaces-antigravity", "workspaces-copilot", "workspaces-muse"])
+        self.assertTrue(provider.failed(result))
+
+    def test_main_writes_one_journal_line_per_provider_and_fails_visibly(self):
+        agents = self.agents()
+        Path(agents[1]["executable"]).chmod(0o644)
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.object(provider, "AGENTS", tuple(agents)), patch.object(provider.os, "geteuid", return_value=2000), \
+                patch.object(provider.os, "umask"), \
+                patch.object(sys, "argv", ["copilot_provider.py", "configure", "--base-dir", str(self.root / "t3")]), \
+                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), \
+                self.assertRaises(SystemExit) as exited:
+            provider.main()
+        self.assertEqual(exited.exception.code, 1)
+        self.assertEqual([line.split(":")[1].strip() for line in stderr.getvalue().splitlines()],
+                         ["seeded", "seeded", "error, " + agents[1]["executable"] + " is not executable by this user"])
+        self.assertEqual(json.loads(stdout.getvalue())["agents"], {"antigravity": "Configured", "muse": "BinaryUnusable"})
 
     def executable(self, response):
         executable = self.root / "copilot"
