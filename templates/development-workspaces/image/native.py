@@ -88,6 +88,9 @@ def check(condition, code):
         raise ProbeError(code)
 
 
+JAVASCRIPT_TYPES = {"text/javascript", "application/javascript"}
+
+
 class T3RendererDocument(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -96,15 +99,42 @@ class T3RendererDocument(HTMLParser):
     def handle_starttag(self, tag, attributes):
         attrs = dict(attributes)
         if tag == "script" and attrs.get("type") == "module" and attrs.get("src"):
-            self.assets.append(("moduleScripts", attrs["src"], {"text/javascript", "application/javascript"}))
+            self.assets.append(("moduleScripts", attrs["src"], JAVASCRIPT_TYPES))
         elif tag == "link" and attrs.get("href"):
             relations = (attrs.get("rel") or "").split()
             if "stylesheet" in relations:
                 self.assets.append(("stylesheets", attrs["href"], {"text/css"}))
             elif "modulepreload" in relations:
-                self.assets.append(("modulePreloads", attrs["href"], {"text/javascript", "application/javascript"}))
+                self.assets.append(("modulePreloads", attrs["href"], JAVASCRIPT_TYPES))
         elif tag == "img" and attrs.get("id") == "boot-shell-logo":
             self.assets.append(("splashLogos", attrs.get("src"), {"image/png"}))
+
+
+VITE_PRELOAD_DEPENDENCIES = re.compile(r"__vite__mapDeps=\(i,m=__vite__mapDeps,d=\(m\.f\|\|\(m\.f=\[([^\]]*)\]")
+
+
+def t3_renderer_reference(reference):
+    # Never follow external URLs or query-bearing references from the served renderer.
+    check(isinstance(reference, str) and bool(reference) and
+          not any(character in reference for character in ("\\", ":", "?", "#")) and
+          not reference.startswith("//"),
+          "T3_RENDERER_REFERENCE")
+    return urljoin("/", reference)
+
+
+def t3_entry_dependencies(source):
+    # The browser preloads this whole Vite list before mounting the app, so a single missing chunk keeps the splash.
+    match = VITE_PRELOAD_DEPENDENCIES.search(source)
+    if match is None:
+        return []
+    dependencies = re.findall(r'"([^"\\]*)"', match.group(1))
+    check(len(dependencies) <= 1024, "T3_RENDERER_ENTRYPOINTS")
+    result = []
+    for dependency in dependencies:
+        path = t3_renderer_reference(dependency)
+        check(path.endswith((".js", ".css")), "T3_RENDERER_REFERENCE")
+        result.append(path)
+    return result
 
 
 def t3_renderer_evidence():
@@ -129,19 +159,31 @@ def t3_renderer_evidence():
         document.feed(body.decode("utf-8"))
     except UnicodeError:
         raise ProbeError("T3_RENDERER_DOCUMENT_ENCODING") from None
-    counts = dict(moduleScripts=0, stylesheets=0, modulePreloads=0, splashLogos=0)
+    counts = dict(moduleScripts=0, stylesheets=0, modulePreloads=0, splashLogos=0, entryDependencies=0)
     for kind, reference, _ in document.assets:
-        # Never follow external URLs or query-bearing references from the served document.
-        check(isinstance(reference, str) and bool(reference) and
-              not any(character in reference for character in ("\\", ":", "?", "#")) and
-              not reference.startswith("//"),
-              "T3_RENDERER_REFERENCE")
+        t3_renderer_reference(reference)
         counts[kind] += 1
     check(counts["moduleScripts"] > 0 and counts["splashLogos"] == 1 and
           len(document.assets) <= 128, "T3_RENDERER_ENTRYPOINTS")
-    for _, reference, mime_types in document.assets:
-        check(bool(request(urljoin("/", reference), "ASSET", mime_types, 1)),
-              "T3_RENDERER_ASSET_EMPTY")
+    dependencies = []
+    for kind, reference, mime_types in document.assets:
+        path = t3_renderer_reference(reference)
+        if kind != "moduleScripts":
+            check(bool(request(path, "ASSET", mime_types, 1)), "T3_RENDERER_ASSET_EMPTY")
+            continue
+        source = request(path, "ASSET", mime_types, 1024 * 1024 + 1)
+        check(bool(source), "T3_RENDERER_ASSET_EMPTY")
+        check(len(source) <= 1024 * 1024, "T3_RENDERER_ENTRY_SIZE")
+        try:
+            dependencies.extend(t3_entry_dependencies(source.decode("utf-8")))
+        except UnicodeError:
+            raise ProbeError("T3_RENDERER_ENTRY_ENCODING") from None
+    unique = list(dict.fromkeys(dependencies))
+    check(len(unique) <= 1024, "T3_RENDERER_ENTRYPOINTS")
+    for path in unique:
+        mime_types = {"text/css"} if path.endswith(".css") else JAVASCRIPT_TYPES
+        check(bool(request(path, "DEPENDENCY", mime_types, 1)), "T3_RENDERER_DEPENDENCY_EMPTY")
+        counts["entryDependencies"] += 1
     return {**counts, "browserUiVerified": False}
 
 

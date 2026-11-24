@@ -64,7 +64,10 @@ public sealed class GatewayControlPlane : IGatewayControlPlane, IDisposable
         request.Headers.Add("X-Workspaces-Gateway-Credential", options.ServiceCredential);
         request.Content = JsonContent.Create(new DevelopmentWorkspaceGatewayReceiptRequest(host, receipt));
         using var response = await client.SendAsync(request, ct);
-        return response.IsSuccessStatusCode ? await response.Content.ReadFromJsonAsync<T>(ct) : default;
+        if (response.IsSuccessStatusCode) return await response.Content.ReadFromJsonAsync<T>(ct);
+        // Only an explicit control-plane rejection denies the receipt; any other failure is unavailability, not a 401.
+        if (response.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden) return default;
+        throw new HttpRequestException("Workspace gateway control plane is unavailable.", null, response.StatusCode);
     }
 
     private bool TryControlPlaneOrigin(out Uri origin)

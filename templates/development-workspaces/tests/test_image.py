@@ -34,9 +34,12 @@ native = load("generic_native_qualification", "native.py")
 
 
 class NativeRendererTests(unittest.TestCase):
+    ENTRY = (b'const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/app.js","assets/app.css"])))'
+             b'=>i.map(i=>d[i]);import("./app.js");')
+
     @contextmanager
-    def renderer(self, script_status=200, script_type="text/javascript", script_body=b"export {};",
-                 script_url="/assets/main.js"):
+    def renderer(self, script_status=200, script_type="text/javascript", script_body=ENTRY,
+                 script_url="/assets/main.js", dependency=(200, "text/javascript", b"export {};")):
         requests = []
         html = ('<img id="boot-shell-logo" src="/apple-touch-icon.png">'
                 f'<script type="module" src="{script_url}"></script>'
@@ -45,6 +48,8 @@ class NativeRendererTests(unittest.TestCase):
             "/": (200, "text/html; charset=utf-8", html),
             "/assets/main.js": (script_status, script_type, script_body),
             "/assets/main.css": (200, "text/css", b"body {}"),
+            "/assets/app.js": dependency,
+            "/assets/app.css": (200, "text/css", b"main {}"),
             "/apple-touch-icon.png": (200, "image/png", b"\x89PNG\r\n\x1a\n"),
         }
 
@@ -115,13 +120,32 @@ class NativeRendererTests(unittest.TestCase):
         self.assertIn("renderer", result)
         self.assertEqual(result["renderer"], {
             "moduleScripts": 1, "stylesheets": 1, "modulePreloads": 0, "splashLogos": 1,
-            "browserUiVerified": False,
+            "entryDependencies": 2, "browserUiVerified": False,
         })
         self.assertEqual({path for path, _ in requests},
-                         {"/", "/assets/main.js", "/assets/main.css", "/apple-touch-icon.png"})
+                         {"/", "/assets/main.js", "/assets/main.css", "/apple-touch-icon.png",
+                          "/assets/app.js", "/assets/app.css"})
         for _, headers in requests:
             self.assertNotIn("Authorization", headers)
             self.assertNotIn("Cookie", headers)
+
+    def test_missing_entry_preload_dependency_does_not_qualify(self):
+        # Vite preloads every listed chunk before mounting; one HTML-fallback or missing chunk leaves the splash.
+        for dependency in ((200, "text/html", b"<html>sensitive-body</html>"),
+                           (404, "text/javascript", b"missing"),
+                           (200, "text/javascript", b"")):
+            with self.subTest(dependency=dependency[:2]), self.renderer(dependency=dependency):
+                with self.assertRaisesRegex(native.ProbeError, "T3_RENDERER_DEPENDENCY") as caught:
+                    self.qualify()
+                self.assertNotIn("sensitive-body", str(caught.exception))
+                self.assertNotIn("/assets/app.js", str(caught.exception))
+
+    def test_external_entry_dependency_is_rejected_without_requesting_it(self):
+        entry = b'const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["https://external.example/x.js"])))'
+        with self.renderer(script_body=entry) as requests, \
+                self.assertRaisesRegex(native.ProbeError, "T3_RENDERER_REFERENCE"):
+            self.qualify()
+        self.assertEqual([path for path, _ in requests], ["/", "/apple-touch-icon.png", "/assets/main.js"])
 
     def test_external_renderer_reference_is_rejected_without_requesting_it(self):
         with self.renderer(script_url="https://external.example/private.js") as requests, \

@@ -417,6 +417,13 @@ revision and runtime SHA-256. Retain the installed manifest and native report be
 version and protocol in the qualified image registration's `T3Version` and
 `T3EnvironmentProtocol`. Protocol 2 is currently supported.
 
+Native qualification also loads the installed renderer from guest loopback: the
+document, its module scripts, stylesheets and splash logo, and every chunk in the entry
+module's Vite preload list must return 200 with the expected MIME type and a nonempty
+body. A missing chunk served as the HTML fallback keeps the browser on the splash
+screen, so it blocks the candidate. This checks delivery only (`browserUiVerified: false`);
+it is not a browser rendering pass.
+
 For hosted acceptance, start a disposable workspace on that exact registered
 image. Follow the [T3 Connect runtime contract](../../docs/setup/runtime.md#runtime-interfaces) to verify the
 authenticated gateway, WebSocket, owner enrollment, relay and desktop discovery.
