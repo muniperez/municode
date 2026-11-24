@@ -312,9 +312,13 @@ hard-coded or promised before authentication. Its only environment override is t
 
 Setup preserves unrelated settings, Codex, native Copilot credentials, and T3 threads.
 Reapplying it leaves an existing local Copilot ACP instance (including a custom ID, home,
-or disabled state) untouched instead of duplicating it. A conflicting managed ID or invalid
-settings produces a sanitized setup error in the service journal; the pre-start failure
-does not prevent Codex/T3 from starting. Repair the settings or ID before retrying setup.
+or disabled state) untouched instead of duplicating it. Invalid settings produce a sanitized
+setup error in the service journal. Otherwise each provider is decided on its own and logs one
+`T3 provider <id> (<driver>): …` line to the journal (`journalctl -u workspaces-t3`): `seeded`,
+`already configured as <id>`, `skipped, missing binary <path>`, or `error, <reason>`. A
+conflicting managed ID or an unusable agent binary fails only that provider; the others are
+still seeded, and setup exits nonzero so the failure is visible. No pre-start failure prevents
+Codex/T3 from starting. Repair the settings or ID before retrying setup.
 Do not run `configure` against a live T3 settings writer: use the managed service's next
 start, after safely stopping active work. Existing workspaces require an explicit prepared
 image rollout preserving their workspace volume; this recipe does not patch running hosts.
@@ -390,9 +394,15 @@ records the IDs, names and versions shown by the API, CLI and dashboard.
 
 T3 0.1.9 supports all of these natively. Its `antigravity` and `muse` drivers are disabled
 by default, so `copilot_provider.py configure` adds an enabled instance for each one whose
-pinned executable exists. Any existing instance of the same driver, including a disabled
-one, is the user's choice and is left alone. An occupied instance ID is reported in the
-setup result without blocking T3. The Claude Code build verifies `claude --version`.
+pinned executable is a regular file the `coding` user can execute. A missing executable is
+skipped and logged with its path; an unreadable install directory or non-executable binary is
+logged as an error for that agent only. Any existing instance of the same driver, including a
+disabled one, is the user's choice and is left alone. An occupied instance ID is reported in the
+setup result without blocking T3 or the other providers. The build creates
+`/opt/workspaces-antigravity` and `/opt/workspaces-muse` root-owned with mode 0755 regardless
+of its umask, like `/opt/workspaces-copilot`. The `copilot-stdio-provider-setup` native probe
+requires the Copilot, Antigravity and Muse instances to be enabled in T3 settings and their
+binaries to be executable by `coding`. The Claude Code build verifies `claude --version`.
 Antigravity and Muse are verified by digest and size only, because their version commands
 need a signed-in home.
 

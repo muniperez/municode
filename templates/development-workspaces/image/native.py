@@ -46,6 +46,11 @@ UNITS = (T3_UNIT, "workspaces-workspace.service",
 SCRATCH_HELPER = Path("/opt/workspaces-workspace/scratch_mounts.py")
 SCRATCH_FIXTURE = Path("/workspace/repos/native-scratch")
 SCRATCH_OUTPUTS = ("node_modules", "bin", "obj", "dist")
+# Every T3 provider instance the image seeds before T3 starts, by instance ID: (driver, executable).
+SEEDED_AGENT_PROVIDERS = {
+    "workspaces-antigravity": ("antigravity", "/opt/workspaces-antigravity/agy_acp_server.par"),
+    "workspaces-muse": ("muse", "/usr/local/bin/muse"),
+}
 UNIT_HASHES = {
     "workspaces-t3.service": "e95ea598bd9f0be88441dabdfd10ee026dd0c623c805611825a81a73688ef6a2",
     "workspaces-workspace.service": "72b4ad78746e1ece5aaf2b9d7099d871eabb46c756e4115ca4cc96791e941cec",
@@ -1030,19 +1035,32 @@ class Native:
         settings_path = Path("/workspace/t3/userdata/settings.json")
         before = settings_path.read_bytes()
         settings = json.loads(before)
-        provider = settings.get("providerInstances", {}).get("workspaces-copilot", {})
+        instances = settings.get("providerInstances", {})
+        provider = instances.get("workspaces-copilot", {})
         check(provider.get("driver") == "acpRegistry" and provider.get("enabled") is True and
               provider.get("config") == {"source": "local", "commandPath": "/usr/local/bin/copilot",
                                          "commandArgs": ["--acp", "--stdio"]},
               "COPILOT_LOCAL_PROVIDER_NOT_SEEDED")
+        as_coding = ["setpriv", "--reuid=2000", "--regid=2000", "--clear-groups",
+                     "env", "-i", "PATH=/usr/local/bin:/usr/bin:/bin", "HOME=/workspace/home"]
+        for instance_id, (driver, executable) in SEEDED_AGENT_PROVIDERS.items():
+            agent = instances.get(instance_id, {})
+            check(agent.get("driver") == driver and agent.get("enabled") is True and
+                  agent.get("config") == {"binaryPath": executable}, "AGENT_PROVIDER_NOT_SEEDED")
+            try:
+                command(as_coding + ["test", "-f", executable, "-a", "-x", executable], cwd="/workspace")
+            except ProbeError:
+                raise ProbeError("AGENT_PROVIDER_BINARY_UNUSABLE", {"instanceId": instance_id}) from None
         for action in ("configure", "probe"):
-            result = json.loads(command([
-                "setpriv", "--reuid=2000", "--regid=2000", "--clear-groups",
-                "env", "-i", "PATH=/usr/local/bin:/usr/bin:/bin", "HOME=/workspace/home",
+            result = json.loads(command(as_coding + [
                 "python3", "-B", "/opt/workspaces-workspace/copilot_provider.py", action],
                 cwd="/workspace"))
             check(result.get("state") == ("AlreadyConfigured" if action == "configure" else "Compatible"),
                   "COPILOT_CODING_USER_SETUP_FAILED")
+            if action == "configure":
+                check(result.get("agents") == {driver: "AlreadyConfigured"
+                                               for driver, _ in SEEDED_AGENT_PROVIDERS.values()},
+                      "AGENT_PROVIDER_NOT_SEEDED")
             if action == "probe":
                 check(result.get("version") == "1.0.114" and
                       result.get("authentication") == "NotChecked", "COPILOT_WRONG_ACP_VERSION")
@@ -1050,6 +1068,7 @@ class Native:
               settings["providerInstances"], "COPILOT_REAPPLY_CHANGED_PROVIDER_INSTANCES")
         return {"stdioInitializeAsCodingUser": True, "version": "1.0.114",
                 "providerSeededBeforeT3Start": True, "providerReapplyIdempotent": True,
+                "agentProvidersSeeded": sorted(SEEDED_AGENT_PROVIDERS),
                 "authenticatedPromptAndFollowupQualified": False}
 
     def storage_tiers(self):

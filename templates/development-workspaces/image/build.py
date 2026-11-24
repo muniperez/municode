@@ -168,7 +168,15 @@ def install_copilot(lock, cache):
 
 def write_wrapper(path, environment, executable):
     path.write_text("#!/bin/sh\nexport " + environment + "\nexec " + executable + ' "$@"\n')
+    os.chown(path, 0, 0)
     path.chmod(0o755)
+
+
+def make_agent_directory(destination):
+    # mkdir's mode is masked by the builder's umask; T3 runs as coding and must traverse it.
+    destination.mkdir()
+    os.chown(destination, 0, 0)
+    destination.chmod(0o755)
 
 
 def install_claude(lock, tools, wrapper=Path("/usr/local/bin/claude")):
@@ -187,7 +195,7 @@ def install_antigravity(lock, cache, destination=Path("/opt/workspaces-antigravi
     artifact = cache / "antigravity.zip"
     download(item, artifact)
     verify_size(item, artifact)
-    destination.mkdir(mode=0o755)
+    make_agent_directory(destination)
     # Copy only the pinned regular members by exact name; never extract archive paths or links.
     with zipfile.ZipFile(artifact) as archive:
         entries = {entry.filename: entry for entry in archive.infolist()}
@@ -207,7 +215,7 @@ def install_antigravity(lock, cache, destination=Path("/opt/workspaces-antigravi
 
 def install_muse(lock, cache, destination=Path("/opt/workspaces-muse"), wrapper=Path("/usr/local/bin/muse")):
     item = lock["muse"]
-    destination.mkdir(mode=0o755)
+    make_agent_directory(destination)
     binary = destination / "muse"
     download(item, binary)
     verify_size(item, binary)

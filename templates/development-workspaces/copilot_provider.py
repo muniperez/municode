@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import selectors
+import stat
 import subprocess
 import sys
 import time
@@ -14,6 +15,10 @@ from runtime import Blocked, atomic_json, require
 VERSION = "1.0.114"
 EXECUTABLE = "/usr/local/bin/copilot"
 INSTANCE_ID = "workspaces-copilot"
+COPILOT = dict(instanceId=INSTANCE_ID, driver="acpRegistry", displayName="GitHub Copilot CLI",
+               executable=EXECUTABLE,
+               environment=[dict(name="COPILOT_AUTO_UPDATE", value="false", sensitive=False)],
+               config=dict(source="local", commandPath=EXECUTABLE, commandArgs=["--acp", "--stdio"]))
 # T3 drivers that are disabled by default; seeded only when the image installed their pinned executable.
 # Claude Code needs no instance: T3 enables its default claudeAgent instance and finds `claude` on PATH.
 AGENTS = (
@@ -25,6 +30,7 @@ AGENTS = (
 )
 SIGN_IN = ("Run copilot login --device-code as coding (HOME=/workspace/home) in an "
            "unrecorded management terminal, then retry the provider in Settings → Providers.")
+FAILED_STATES = ("InstanceIdOccupied", "BinaryUnusable")
 
 
 def is_copilot(instance):
@@ -42,13 +48,75 @@ def is_copilot(instance):
                     for argument in arguments))
 
 
+def binary_state(executable):
+    """Classify a pinned executable for the current user without ever raising."""
+    try:
+        info = os.stat(executable)
+    except (FileNotFoundError, NotADirectoryError):
+        return "MissingBinary", None
+    except OSError as error:
+        return "BinaryUnusable", "cannot inspect " + executable + " (" + (error.strerror or "error") + ")"
+    if not stat.S_ISREG(info.st_mode):
+        return "BinaryUnusable", executable + " is not a regular file"
+    if not os.access(executable, os.X_OK):
+        return "BinaryUnusable", executable + " is not executable by this user"
+    return "Present", None
+
+
 def installed_agents():
-    return [agent for agent in AGENTS if Path(agent["executable"]).is_file()]
+    return [agent for agent in AGENTS if binary_state(agent["executable"])[0] == "Present"]
 
 
-def configure(settings_path, agents=None):
-    """Called only by ExecStartPre, under the same UID/HOME as the T3 service."""
-    agents = installed_agents() if agents is None else agents
+def existing_instance(provider, instances):
+    # Any instance of the driver, even a disabled one, is the user's choice; never add a second.
+    for instance_id, instance in instances.items():
+        if provider is COPILOT:
+            if is_copilot(instance):
+                return instance_id
+        elif isinstance(instance, dict) and instance.get("driver") == provider["driver"]:
+            return instance_id
+    return None
+
+
+def seed(provider, instances):
+    """Decide one provider in isolation; returns (state, instanceId, detail)."""
+    existing = existing_instance(provider, instances)
+    if existing is not None:
+        return "AlreadyConfigured", existing, None
+    # Copilot is a required image component that the build verifies; agents are optional.
+    state, detail = ("Present", None) if provider is COPILOT else binary_state(provider["executable"])
+    if state == "MissingBinary":
+        return state, None, provider["executable"]
+    if state != "Present":
+        return state, None, detail
+    if provider["instanceId"] in instances:
+        return "InstanceIdOccupied", None, "rename it in Settings → Providers"
+    instances[provider["instanceId"]] = dict(
+        driver=provider["driver"], displayName=provider["displayName"], enabled=True,
+        environment=json.loads(json.dumps(provider["environment"])),
+        config=json.loads(json.dumps(provider.get("config") or dict(binaryPath=provider["executable"]))))
+    return "Configured", provider["instanceId"], None
+
+
+def report_line(provider, state, instance_id, detail):
+    label = provider["instanceId"] + " (" + provider["driver"] + ")"
+    if state == "Configured":
+        return "T3 provider " + label + ": seeded"
+    if state == "AlreadyConfigured":
+        return "T3 provider " + label + ": already configured as " + instance_id
+    if state == "MissingBinary":
+        return "T3 provider " + label + ": skipped, missing binary " + detail
+    return "T3 provider " + label + ": error, " + ("instance ID is occupied; " if state ==
+                                                    "InstanceIdOccupied" else "") + detail
+
+
+def configure(settings_path, agents=None, log=None):
+    """Called only by ExecStartPre, under the same UID/HOME as the T3 service.
+
+    Each provider is decided independently, so one unusable binary or occupied ID never stops
+    the others from being seeded. Settings that cannot be read still block every provider.
+    """
+    providers = (COPILOT, *(AGENTS if agents is None else agents))
     settings_path = Path(settings_path)
     require(not settings_path.is_symlink(), "Copilot setup refuses symlinked T3 settings")
     try:
@@ -58,39 +126,34 @@ def configure(settings_path, agents=None):
     require(isinstance(settings, dict), "T3 settings must be an object")
     instances = settings.get("providerInstances", {})
     require(isinstance(instances, dict), "T3 providerInstances must be an object")
-    # Keep user overrides, disabled providers, Codex settings and thread IDs intact.
-    existing = next((instance_id for instance_id, instance in instances.items() if is_copilot(instance)), None)
-    if existing is not None:
-        result = dict(state="AlreadyConfigured", instanceId=existing)
-    else:
-        require(INSTANCE_ID not in instances,
-                "Provider ID workspaces-copilot is occupied; rename it in Settings → Providers")
-        instances[INSTANCE_ID] = dict(
-            driver="acpRegistry", displayName="GitHub Copilot CLI", enabled=True,
-            environment=[dict(name="COPILOT_AUTO_UPDATE", value="false", sensitive=False)],
-            config=dict(source="local", commandPath=EXECUTABLE, commandArgs=["--acp", "--stdio"]))
-        result = dict(state="Configured", instanceId=INSTANCE_ID)
-    changed = existing is None
-    if agents:
-        result["agents"] = {}
-    for agent in agents:
-        # Any instance of the driver, even a disabled one, is the user's choice; never add a second.
-        if any(isinstance(instance, dict) and instance.get("driver") == agent["driver"]
-               for instance in instances.values()):
-            state = "AlreadyConfigured"
-        elif agent["instanceId"] in instances:
-            state = "InstanceIdOccupied"
-        else:
-            instances[agent["instanceId"]] = dict(
-                driver=agent["driver"], displayName=agent["displayName"], enabled=True,
-                environment=list(agent["environment"]), config=dict(binaryPath=agent["executable"]))
-            state, changed = "Configured", True
-        result["agents"][agent["driver"]] = state
+    result = dict(providers={})
+    changed = False
+    for provider in providers:
+        state, instance_id, detail = seed(provider, instances)
+        changed = changed or state == "Configured"
+        result["providers"][provider["instanceId"]] = dict(
+            driver=provider["driver"], state=state,
+            **({"instanceId": instance_id} if instance_id else {}),
+            **({"detail": detail} if detail else {}))
+        if log is not None:
+            log(report_line(provider, state, instance_id, detail))
     if changed:
         settings["providerInstances"] = instances
         settings_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         atomic_json(settings_path, settings)
+    copilot = result["providers"].get(INSTANCE_ID)
+    if copilot is not None:
+        result.update(state=copilot["state"], **({"instanceId": copilot["instanceId"]}
+                                                  if "instanceId" in copilot else {}))
+    agent_states = {entry["driver"]: entry["state"] for instance_id, entry in result["providers"].items()
+                    if instance_id != INSTANCE_ID}
+    if agent_states:
+        result["agents"] = agent_states
     return result
+
+
+def failed(result):
+    return any(entry["state"] in FAILED_STATES for entry in result["providers"].values())
 
 
 def probe(executable=EXECUTABLE, expected_version=VERSION, timeout=30, environment=None):
@@ -155,9 +218,15 @@ def main():
     os.umask(0o077)
     try:
         require(os.geteuid() == 2000, "Run Copilot provider setup as the coding user (UID 2000)")
-        result = configure(Path(args.base_dir) / "userdata/settings.json") \
-            if args.action == "configure" else probe()
+        if args.action == "configure":
+            # stderr reaches the service journal; stdout stays the machine-readable result.
+            result = configure(Path(args.base_dir) / "userdata/settings.json",
+                               log=lambda line: print(line, file=sys.stderr, flush=True))
+        else:
+            result = probe()
         print(json.dumps(result, sort_keys=True))
+        if args.action == "configure" and failed(result):
+            sys.exit(1)
     except Blocked as error:
         print(json.dumps(dict(state="SetupRequired", reason=str(error), signIn=SIGN_IN)), file=sys.stderr)
         sys.exit(1)
