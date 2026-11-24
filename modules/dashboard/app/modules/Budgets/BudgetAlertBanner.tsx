@@ -25,7 +25,8 @@ export function BudgetAlertBanner() {
     const controller = new AbortController();
     listBudgets(organizationId, controller.signal).then(budgets => {
       const dismissed = dismissedAlerts(organizationId);
-      setAlerts(budgets.filter(budget => budget.projection.crossedThreshold !== null && !dismissed.includes(alertKey(budget))));
+      setAlerts(budgets.filter(budget => budget.notifications.inApp && budget.projection.crossedThreshold !== null
+        && !dismissed.includes(alertKey(budget))));
     }).catch(() => {});
     return () => controller.abort();
   }, [organizationId]);

@@ -260,6 +260,16 @@ a new exact archive, stop accepted work, back up, install into a new root, and
 switch only after migrations and health checks pass. Do not overwrite an active
 release or reuse its installation ID on another host.
 
+The worker evaluates budgets and delivers budget webhooks. Tune it with the
+`BudgetAlerts` configuration section: `Enabled` (default `true`),
+`EvaluationIntervalSeconds` (300), `DeliveryPollSeconds` (30),
+`MaxDeliveryAttempts` (6), `RetryBaseSeconds` (60), `RetryMaxSeconds` (3600),
+`WebhookTimeoutSeconds` (10) and `DeliveryBatchSize` (25). Webhook targets must
+resolve to public addresses. `AllowPrivateWebhookTargets` relaxes the worker's
+resolved-address check for isolated test installations only; the API still
+rejects private and loopback literals. Webhook signing secrets live in the secret store,
+never in PostgreSQL.
+
 For a failed startup, inspect only service status and sanitized logs; bearer
 capabilities can occur in gateway requests. Do not paste request URLs, tokens,
 OpenBao values, bootstrap material or worker private keys into support output.

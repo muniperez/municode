@@ -17,7 +17,7 @@ public sealed partial class DevelopmentWorkspaceApiTests
     private const string Budgets = "/api/budgets";
 
     [Fact]
-    public async Task ExceededBudgetNeverBlocksCreateOrStartAndAlertsOncePerThreshold()
+    public async Task ExceededBudgetNeverBlocksCreateOrStartAndBackgroundEvaluationAlertsOncePerThreshold()
     {
         using var owner = Client(token);
         var budget = await CreateBudget(owner, new("org", "Team", 100m, null, [1, 50, 100]));
@@ -25,13 +25,30 @@ public sealed partial class DevelopmentWorkspaceApiTests
         Assert.False(budget.Projection.ProviderChargesAvailable);
         Assert.Equal(0m, budget.Projection.ProjectedMonthly);
         Assert.Null(budget.Projection.CrossedThreshold);
+        Assert.Equal(new BudgetNotificationSettingsResponse(true, false, null, false), budget.Notifications);
 
         var workspace = await Create(owner);
         var listed = await ListBudgets(owner);
+        await ListBudgets(owner);
         Assert.Equal(2m, listed.Single().Projection.ProjectedMonthly);
         Assert.Equal(1, listed.Single().Projection.CrossedThreshold);
+        // Reading budgets is side-effect free; only the background evaluation records alerts.
+        Assert.Null(listed.Single().LastAlert);
+        Assert.Empty(await BudgetAlertsAsync());
+        Assert.Equal(1, await EvaluateBudgetsConcurrentlyAsync());
+        Assert.Equal(0, await EvaluateBudgetsConcurrentlyAsync());
+        var alerted = (await ListBudgets(owner)).Single();
+        Assert.Equal(1, alerted.LastAlert!.Threshold);
+        var delivery = Assert.Single(alerted.Deliveries);
+        Assert.Equal(("in_app", 1, "delivered"), (delivery.Channel, delivery.Threshold, delivery.Status));
 
-        await UpdateBudget(owner, listed.Single(), 1m);
+        // Changing only notification channels keeps the alert baseline, so nothing is re-sent.
+        var renamed = await PutBudget(owner, alerted.Id, new(alerted.Revision, "Team renamed", 100m, alerted.Thresholds,
+            alerted.ProviderAccountIds, new(InApp: true)));
+        Assert.Equal(1, renamed.LastAlert!.Threshold);
+        Assert.Equal(0, await EvaluateBudgetsConcurrentlyAsync());
+
+        await UpdateBudget(owner, renamed, 1m);
         await CreateNamed(owner, "Over budget");
         var started = await owner.PostAsync($"{Root}/{workspace.Id}/start?organizationId=org", null);
         Assert.True(started.IsSuccessStatusCode, await started.Content.ReadAsStringAsync());
@@ -43,22 +60,96 @@ public sealed partial class DevelopmentWorkspaceApiTests
         Assert.True(over.Projection.OverBudget);
         Assert.True(over.Projection.Complete);
         Assert.Equal(.1m + 4m / 720m, over.Projection.ProjectedHourly, 4);
+        Assert.Null(over.LastAlert);
         var contributor = over.Projection.Contributors.First();
         Assert.Equal((workspace.Id, 1, 72m, 2m, "current"), (contributor.WorkspaceId, contributor.ReservedVmCount,
             contributor.ComputeMonthly, contributor.StorageMonthly, contributor.PricingStatus));
         Assert.Equal("cx-test", Assert.Single(contributor.Skus));
         Assert.Contains(over.Projection.Assumptions, x => x.Contains("never blocks", StringComparison.Ordinal));
-        await ListBudgets(owner);
+        Assert.Single(await BudgetAlertsAsync());
+        Assert.Equal(1, await EvaluateBudgetsConcurrentlyAsync());
+        Assert.Equal(0, await EvaluateBudgetsConcurrentlyAsync());
 
         await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<WorkspaceDbContext>();
         var vm = await db.DevelopmentWorkspaceVms.SingleAsync(x => x.WorkspaceId == workspace.Id);
         Assert.True(vm.ComputeReserved);
         Assert.Equal("running", vm.DesiredState);
-        var alerts = await db.AuditEvents.Where(x => x.Action == "budget.threshold_crossed").ToListAsync();
+        var alerts = await BudgetAlertsAsync();
         Assert.Equal([1, 100], alerts.Select(x => JsonDocument.Parse(x.Details!).RootElement.GetProperty("threshold").GetInt32()).Order());
         Assert.All(alerts, x => Assert.Equal(BudgetService.AlertActor, x.Actor));
-        Assert.Contains(workspace.Id, alerts.Single(x => x.Details!.Contains("\"threshold\":100")).Details);
+        var details = JsonDocument.Parse(alerts.Single(x => x.Details!.Contains("\"threshold\":100")).Details!).RootElement;
+        Assert.Equal([1, 50, 100], details.GetProperty("crossedThresholds").EnumerateArray().Select(x => x.GetInt32()));
+        Assert.Equal(workspace.Id, details.GetProperty("contributors")[0].GetProperty("workspaceId").GetString());
+        Assert.NotEmpty(details.GetProperty("assumptions").EnumerateArray());
+        Assert.Equal(2, await db.BudgetNotifications.CountAsync(x => x.Channel == "in_app" && x.Status == "delivered"));
+        Assert.False(await db.BudgetNotifications.AnyAsync(x => x.Channel == "webhook"));
+    }
+
+    [Fact]
+    public async Task BudgetWebhookSettingsValidateTargetsAndRevealSigningSecretsOnlyOnce()
+    {
+        using var owner = Client(token);
+        await AssertBudgetError(await owner.PostAsJsonAsync(Budgets, new CreateBudgetRequest("org", "Hooks", 10m,
+            Notifications: new(Webhook: true))), 400, "budget_webhook_url_required");
+        foreach (var url in new[] { "http://hooks.example.com/budget", "https://127.0.0.1/budget", "https://10.1.2.3/budget",
+                     "https://[::1]/budget", "https://169.254.169.254/latest", "https://user:pass@hooks.example.com/budget",
+                     "https://localhost/budget", "https://hooks.example.com/budget#fragment", "not a url" })
+            await AssertBudgetError(await owner.PostAsJsonAsync(Budgets, new CreateBudgetRequest("org", "Hooks", 10m,
+                Notifications: new(Webhook: true, WebhookUrl: url))), 400, "budget_webhook_url_invalid");
+
+        var created = await CreateBudget(owner, new("org", "Hooks", 10m, Notifications:
+            new(InApp: false, Webhook: true, WebhookUrl: "https://hooks.example.com/budget?token=sensitive-token")));
+        var secret = created.WebhookSigningSecret!;
+        Assert.StartsWith("mcwh_", secret);
+        Assert.Equal(new BudgetNotificationSettingsResponse(false, true, "https://hooks.example.com", true), created.Notifications);
+        Assert.Equal(secret, Assert.Single(factory.Secrets.Values).Value);
+        var listed = await owner.GetStringAsync($"{Budgets}?organizationId=org");
+        Assert.DoesNotContain("sensitive-token", listed);
+        Assert.DoesNotContain(secret, listed);
+        Assert.DoesNotContain("webhookSigningSecret\":\"", listed);
+
+        var kept = await PutBudget(owner, created.Id, new(created.Revision, "Hooks", 10m));
+        Assert.Null(kept.WebhookSigningSecret);
+        Assert.Equal(created.Notifications, kept.Notifications);
+        var rotated = await PutBudget(owner, created.Id, new(kept.Revision, "Hooks", 10m, Notifications: new(RotateWebhookSecret: true)));
+        Assert.StartsWith("mcwh_", rotated.WebhookSigningSecret);
+        Assert.NotEqual(secret, rotated.WebhookSigningSecret);
+        Assert.Equal(rotated.WebhookSigningSecret, Assert.Single(factory.Secrets.Values).Value);
+        var paused = await PutBudget(owner, created.Id, new(rotated.Revision, "Hooks", 10m, Notifications: new(Webhook: false)));
+        Assert.Equal(new BudgetNotificationSettingsResponse(false, false, "https://hooks.example.com", true), paused.Notifications);
+        var removed = await PutBudget(owner, created.Id, new(paused.Revision, "Hooks", 10m, Notifications: new(WebhookUrl: "")));
+        Assert.Equal(new BudgetNotificationSettingsResponse(false, false, null, false), removed.Notifications);
+        Assert.Empty(factory.Secrets.Values);
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<WorkspaceDbContext>();
+        var audit = string.Join('\n', await db.AuditEvents.Where(x => x.Action.StartsWith("budget.")).Select(x => x.Details).ToListAsync());
+        Assert.DoesNotContain("sensitive-token", audit);
+        Assert.DoesNotContain(secret, audit);
+    }
+
+    private async Task<List<AuditEvent>> BudgetAlertsAsync()
+    {
+        await using var scope = factory.Services.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<WorkspaceDbContext>().AuditEvents.AsNoTracking()
+            .Where(x => x.Action == BudgetService.ThresholdCrossedEvent).ToListAsync();
+    }
+
+    // Separate scopes use separate connections, so evaluators genuinely race for the same thresholds.
+    private async Task<int> EvaluateBudgetsConcurrentlyAsync()
+    {
+        var scopes = Enumerable.Range(0, 4).Select(_ => factory.Services.CreateAsyncScope()).ToList();
+        try
+        {
+            var claimed = await Task.WhenAll(scopes.Select(scope => Task.Run(() =>
+                scope.ServiceProvider.GetRequiredService<BudgetService>().EvaluateAlertsAsync("org", default))));
+            return claimed.Sum();
+        }
+        finally
+        {
+            foreach (var scope in scopes) await scope.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -190,6 +281,13 @@ public sealed partial class DevelopmentWorkspaceApiTests
     {
         var response = await client.PutAsJsonAsync($"{Budgets}/{budget.Id}",
             new UpdateBudgetRequest(budget.Revision, budget.Name, amount, budget.Thresholds, budget.ProviderAccountIds));
+        Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
+        return (await response.Content.ReadFromJsonAsync<BudgetResponse>())!;
+    }
+
+    private static async Task<BudgetResponse> PutBudget(HttpClient client, string id, UpdateBudgetRequest request)
+    {
+        var response = await client.PutAsJsonAsync($"{Budgets}/{id}", request);
         Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
         return (await response.Content.ReadFromJsonAsync<BudgetResponse>())!;
     }

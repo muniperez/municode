@@ -10,7 +10,7 @@ import { Disclosure } from "@/core/components/Disclosure";
 import { EmptyState } from "@/core/components/EmptyState";
 import { PageScaffold } from "@/core/components/PageScaffold";
 import { useAuth } from "@/core/auth/AuthProvider";
-import { createBudget, deleteBudget, listBudgets, updateBudget, type Budget } from "@/api/budgetsApi";
+import { createBudget, deleteBudget, listBudgets, updateBudget, type Budget, type BudgetNotificationInput } from "@/api/budgetsApi";
 import { listProviders, type ProviderAccount } from "@/api/providersApi";
 import { formatPrice } from "@/modules/Workspaces/WorkspaceCostEstimate";
 
@@ -29,6 +29,7 @@ export function BudgetsSettingsModule() {
   const [providers, setProviders] = useState<ProviderAccount[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Budget | "new" | null>(null);
+  const [revealed, setRevealed] = useState<{ name: string; secret: string } | null>(null);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     if (!organizationId) return;
@@ -62,7 +63,20 @@ export function BudgetsSettingsModule() {
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     {canManage && editing !== null && organizationId && <BudgetForm organizationId={organizationId}
       budget={editing === "new" ? null : editing} providers={providers}
-      onCancel={() => setEditing(null)} onSaved={async () => { setEditing(null); await load(); }} />}
+      onCancel={() => setEditing(null)} onSaved={async saved => {
+        setEditing(null);
+        if (saved.webhookSigningSecret) setRevealed({ name: saved.name, secret: saved.webhookSigningSecret });
+        await load();
+      }} />}
+    {revealed && <Card role="region" aria-label="Webhook signing secret">
+      <CardHeader><CardTitle>Webhook signing secret for {revealed.name}</CardTitle>
+        <CardDescription>Copy it now; it is not shown again. Verify each delivery's X-Municode-Signature header with it.</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-wrap items-center gap-2">
+        <code className="break-all rounded bg-muted px-2 py-1 text-xs">{revealed.secret}</code>
+        <Button size="sm" variant="outline" onClick={() => setRevealed(null)}>Done</Button>
+      </CardContent>
+    </Card>}
     {budgets === null && !error && <p className="text-sm text-muted-foreground">Loading budgets…</p>}
     {budgets?.length === 0 && <EmptyState title="No budgets yet">
       {canManage ? "Create a monthly budget to compare estimated spend with your thresholds." : "No budgets have been set for this organization."}
@@ -95,6 +109,8 @@ function BudgetCard({ budget, canManage, providers, onEdit, onDeleted, onError }
           {!projection.complete && <Badge variant="outline">Incomplete estimate</Badge>}
         </CardTitle>
         <CardDescription>{money(budget.monthlyAmount)} per month · {scope} · alerts at {budget.thresholds.map(x => `${x}%`).join(", ")}</CardDescription>
+        <CardDescription>Notifications: {channels(budget)}
+          {budget.lastAlert ? ` · last alert ${budget.lastAlert.threshold}% for ${budget.lastAlert.period}` : ""}</CardDescription>
       </div>
       {canManage && <div className="flex gap-2">
         <Button variant="outline" size="sm" onClick={onEdit}>Edit</Button>
@@ -141,6 +157,19 @@ function BudgetCard({ budget, canManage, providers, onEdit, onDeleted, onError }
       {projection.excluded.length > 0 && <Disclosure label={`Excluded workspaces (${projection.excluded.length})`}>
         <ul className="list-disc space-y-1 pl-5">{projection.excluded.map(item => <li key={item.workspaceId}>{item.workspaceName}: {item.reason}</li>)}</ul>
       </Disclosure>}
+      {budget.deliveries.length > 0 && <Disclosure label={`Recent notifications (${budget.deliveries.length})`}>
+        <Table aria-label={`${budget.name} recent notifications`}>
+          <TableHeader><TableRow><TableHead>Channel</TableHead><TableHead>Threshold</TableHead>
+            <TableHead>Status</TableHead><TableHead>Attempts</TableHead><TableHead>Details</TableHead></TableRow></TableHeader>
+          <TableBody>{budget.deliveries.map(item => <TableRow key={item.id}>
+            <TableCell>{item.channel === "in_app" ? "In-app" : "Webhook"}</TableCell>
+            <TableCell>{item.threshold}% · {item.period}</TableCell>
+            <TableCell>{deliveryStatus[item.status]}</TableCell>
+            <TableCell>{item.attempts}</TableCell>
+            <TableCell>{item.lastError ?? ""}{item.nextAttemptAt ? `${item.lastError ? " · " : ""}next try ${new Date(item.nextAttemptAt).toLocaleString()}` : ""}</TableCell>
+          </TableRow>)}</TableBody>
+        </Table>
+      </Disclosure>}
       <Disclosure label="How this estimate is calculated">
         <ul className="list-disc space-y-1 pl-5 text-muted-foreground">{projection.assumptions.map(item => <li key={item}>{item}</li>)}</ul>
       </Disclosure>
@@ -148,35 +177,56 @@ function BudgetCard({ budget, canManage, providers, onEdit, onDeleted, onError }
   </Card>;
 }
 
+const deliveryStatus = { pending: "Retrying", delivered: "Delivered", failed: "Failed", cancelled: "Cancelled" } as const;
+
+function channels(budget: Budget) {
+  const enabled = [budget.notifications.inApp ? "in-app" : null,
+    budget.notifications.webhook ? `webhook to ${budget.notifications.webhookTarget}` : null].filter(Boolean);
+  return enabled.length ? enabled.join(", ") : "off";
+}
+
 function BudgetForm({ organizationId, budget, providers, onCancel, onSaved }: {
   organizationId: string; budget: Budget | null; providers: ProviderAccount[];
-  onCancel: () => void; onSaved: () => Promise<void> | void;
+  onCancel: () => void; onSaved: (saved: Budget) => Promise<void> | void;
 }) {
   const [name, setName] = useState(budget?.name ?? "");
   const [amount, setAmount] = useState(budget ? String(budget.monthlyAmount) : "");
   const [currency, setCurrency] = useState(budget?.currency ?? "USD");
   const [thresholds, setThresholds] = useState((budget?.thresholds ?? [50, 80, 100]).join(", "));
   const [scope, setScope] = useState<string[]>(budget?.providerAccountIds ?? []);
+  const [inApp, setInApp] = useState(budget?.notifications.inApp ?? true);
+  const [webhook, setWebhook] = useState(budget?.notifications.webhook ?? false);
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [removeWebhook, setRemoveWebhook] = useState(false);
+  const [rotate, setRotate] = useState(false);
+  const target = budget?.notifications.webhookTarget ?? null;
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault();
     const parsed = thresholds.split(",").map(x => x.trim()).filter(Boolean).map(Number);
     if (parsed.some(x => !Number.isInteger(x))) { setError("Thresholds must be whole percentages, for example 50, 80, 100."); return; }
-    const input = { name, monthlyAmount: Number(amount), thresholds: parsed, providerAccountIds: scope };
+    const url = webhookUrl.trim();
+    if (webhook && !removeWebhook && !url && !target) { setError("Enter an HTTPS webhook URL or turn off webhook notifications."); return; }
+    const notifications: BudgetNotificationInput = { inApp, webhook: webhook && !removeWebhook };
+    if (url && !removeWebhook) notifications.webhookUrl = url;
+    else if (removeWebhook) notifications.webhookUrl = "";
+    if (rotate && !removeWebhook) notifications.rotateWebhookSecret = true;
+    const input = { name, monthlyAmount: Number(amount), thresholds: parsed, providerAccountIds: scope, notifications };
     setSaving(true);
     setError(null);
     try {
-      if (budget) await updateBudget(budget.id, { ...input, revision: budget.revision });
-      else await createBudget({ ...input, organizationId, currency });
-      await onSaved();
+      const saved = budget
+        ? await updateBudget(budget.id, { ...input, revision: budget.revision })
+        : await createBudget({ ...input, organizationId, currency });
+      await onSaved(saved);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Budget could not be saved.");
     } finally { setSaving(false); }
   }
   return <Card>
     <CardHeader><CardTitle>{budget ? `Edit ${budget.name}` : "Create budget"}</CardTitle>
-      <CardDescription>Alerts are informational: they are recorded in the audit log and shown here, and never block or stop workspaces.</CardDescription>
+      <CardDescription>Alerts are informational: they are checked in the background every few minutes, sent once per threshold per month, and never block or stop workspaces.</CardDescription>
     </CardHeader>
     <CardContent>
       <form className="grid gap-4" onSubmit={event => void submit(event)}>
@@ -199,6 +249,34 @@ function BudgetForm({ organizationId, budget, providers, onCancel, onSaved }: {
             {provider.name} <span className="text-muted-foreground">({provider.providerType})</span>
           </label>)}
         </fieldset>}
+        <fieldset className="grid gap-2"><legend className="text-sm font-medium">Notifications</legend>
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox aria-label="In-app alerts" checked={inApp} onCheckedChange={checked => setInApp(checked === true)} />
+            In-app alerts (dashboard banner and activity log)
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox aria-label="Signed webhook" checked={webhook && !removeWebhook} disabled={removeWebhook}
+              onCheckedChange={checked => setWebhook(checked === true)} />
+            Signed webhook
+          </label>
+          {webhook && !removeWebhook && <div className="grid gap-2 pl-6"><Label htmlFor="budget-webhook-url">Webhook URL</Label>
+            <Input id="budget-webhook-url" type="url" inputMode="url" maxLength={2048} value={webhookUrl}
+              placeholder={target ? `Sending to ${target}; leave blank to keep the current URL` : "https://hooks.example.com/budgets"}
+              onChange={event => setWebhookUrl(event.target.value)} />
+            <p className="text-xs text-muted-foreground">Public HTTPS only. Each delivery is signed with HMAC-SHA256; a new signing secret is shown once after saving.</p>
+          </div>}
+          {budget?.notifications.webhookSecretConfigured && <div className="grid gap-2 pl-6">
+            {!removeWebhook && <label className="flex items-center gap-2 text-sm">
+              <Checkbox aria-label="Rotate signing secret" checked={rotate} onCheckedChange={checked => setRotate(checked === true)} />
+              Rotate signing secret
+            </label>}
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox aria-label="Remove webhook" checked={removeWebhook} onCheckedChange={checked => setRemoveWebhook(checked === true)} />
+              Remove webhook URL and signing secret
+            </label>
+          </div>}
+          <p className="text-xs text-muted-foreground">Email notifications are not available yet.</p>
+        </fieldset>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         <div className="flex gap-2">
           <Button type="submit" disabled={saving}>{budget ? "Save budget" : "Create budget"}</Button>

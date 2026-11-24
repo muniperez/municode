@@ -278,6 +278,10 @@ namespace Workspaces.Common.Migrations.Sqlite
                         .HasColumnType("TEXT")
                         .HasColumnName("currency");
 
+                    b.Property<bool>("InAppAlertsEnabled")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("in_app_alerts_enabled");
+
                     b.Property<decimal>("MonthlyAmount")
                         .HasColumnType("TEXT")
                         .HasColumnName("monthly_amount");
@@ -312,12 +316,118 @@ namespace Workspaces.Common.Migrations.Sqlite
                         .HasColumnType("TEXT")
                         .HasColumnName("updated_at");
 
+                    b.Property<bool>("WebhookEnabled")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("webhook_enabled");
+
+                    b.Property<string>("WebhookSecretPath")
+                        .HasMaxLength(512)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("webhook_secret_path");
+
+                    b.Property<string>("WebhookSecretProvider")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("webhook_secret_provider");
+
+                    b.Property<string>("WebhookSecretVersion")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("webhook_secret_version");
+
+                    b.Property<string>("WebhookUrl")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("webhook_url");
+
                     b.HasKey("Id");
 
                     b.HasIndex("OrganizationId", "Name")
                         .IsUnique();
 
                     b.ToTable("budgets", (string)null);
+                });
+
+            modelBuilder.Entity("Workspaces.Common.Models.BudgetNotification", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("attempts");
+
+                    b.Property<string>("BudgetId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("budget_id");
+
+                    b.Property<long>("BudgetRevision")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("budget_revision");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("channel");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTimeOffset?>("DeliveredAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("delivered_at");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_error");
+
+                    b.Property<DateTimeOffset?>("NextAttemptAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("next_attempt_at");
+
+                    b.Property<string>("OrganizationId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("organization_id");
+
+                    b.Property<string>("PayloadJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("payload_json");
+
+                    b.Property<string>("Period")
+                        .IsRequired()
+                        .HasMaxLength(7)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("period");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("status");
+
+                    b.Property<int>("Threshold")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("threshold");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Status", "Channel");
+
+                    b.HasIndex("BudgetId", "BudgetRevision", "Period", "Threshold", "Channel")
+                        .IsUnique();
+
+                    b.ToTable("budget_notifications", (string)null);
                 });
 
             modelBuilder.Entity("Workspaces.Common.Models.CliLoginSession", b =>
@@ -1924,6 +2034,15 @@ namespace Workspaces.Common.Migrations.Sqlite
                     b.HasOne("Workspaces.Common.Models.Organization", null)
                         .WithMany()
                         .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Workspaces.Common.Models.BudgetNotification", b =>
+                {
+                    b.HasOne("Workspaces.Common.Models.Budget", null)
+                        .WithMany()
+                        .HasForeignKey("BudgetId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

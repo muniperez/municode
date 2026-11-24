@@ -17,11 +17,26 @@ export type BudgetProjection = {
   providers: BudgetProviderProjection[]; contributors: BudgetContributor[]; excluded: BudgetExcludedWorkspace[];
   warnings: string[]; assumptions: string[];
 };
+/** The full webhook URL is write-only; only its scheme, host and port are returned. */
+export type BudgetNotificationSettings = { inApp: boolean; webhook: boolean; webhookTarget: string | null; webhookSecretConfigured: boolean };
+export type BudgetNotificationDelivery = {
+  id: string; channel: "in_app" | "webhook"; period: string; threshold: number;
+  status: "pending" | "delivered" | "failed" | "cancelled"; attempts: number; lastError: string | null;
+  createdAt: string; deliveredAt: string | null; nextAttemptAt: string | null;
+};
 export type Budget = {
   id: string; organizationId: string; name: string; currency: string; monthlyAmount: number; thresholds: number[];
   providerAccountIds: string[]; revision: number; createdAt: string; updatedAt: string; projection: BudgetProjection;
+  notifications: BudgetNotificationSettings; lastAlert: { period: string; threshold: number; alertedAt: string } | null;
+  deliveries: BudgetNotificationDelivery[];
+  /** Only present on the create/update response that generated or rotated the signing secret. */
+  webhookSigningSecret?: string | null;
 };
-export type BudgetInput = { name: string; monthlyAmount: number; thresholds: number[]; providerAccountIds: string[] };
+/** Omitted fields keep their current value; webhookUrl "" removes the webhook. */
+export type BudgetNotificationInput = { inApp?: boolean; webhook?: boolean; webhookUrl?: string; rotateWebhookSecret?: boolean };
+export type BudgetInput = {
+  name: string; monthlyAmount: number; thresholds: number[]; providerAccountIds: string[]; notifications?: BudgetNotificationInput;
+};
 
 export function listBudgets(organizationId: string, signal?: AbortSignal) {
   return apiRequest<Budget[]>(`/api/budgets?${new URLSearchParams({ organizationId })}`, { signal });
