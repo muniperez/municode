@@ -25,6 +25,7 @@ public partial class WorkspaceDbContext
             entity.HasIndex(x => new { x.ProviderAccountId, x.ProviderVolumeId }).IsUnique();
             entity.Property(x => x.Revision).IsConcurrencyToken();
             entity.Property(x => x.Name).HasMaxLength(128);
+            entity.Property(x => x.StorageLayout).HasDefaultValue(1);
             entity.HasOne<Organization>().WithMany().HasForeignKey(x => x.OrganizationId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<ProviderAccount>().WithMany().HasForeignKey(x => new { x.OrganizationId, x.ProviderAccountId })
                 .HasPrincipalKey(x => new { x.OrganizationId, x.Id }).OnDelete(DeleteBehavior.Restrict);

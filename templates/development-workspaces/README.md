@@ -940,13 +940,16 @@ rejects unknown fields.
   outputs are rebuilt.
 * Limits: 512 mounts, depth 12 and 100,000 scanned directories per pass.
 
-### Repository checkpoints and local checkouts (inactive)
+### Repository checkpoints and local checkouts (off by default)
 
-`repo_checkpoint.py` and storage layout 2 are the first slices of #105, which moves live
-checkouts to the VM disk and checkpoints them to the retained volume. The image installs
-both, but the worker never requests layout 2 yet, so existing workspaces, layouts and
-scratch behavior do not change. The stop-path checkpoint, periodic saves, status
-reporting, backup changes and migration are later PRs.
+`repo_checkpoint.py` and storage layout 2 implement #105, which moves live checkouts to the
+VM disk and checkpoints them to the retained volume. The image installs both. The worker
+requests layout 2 only for primary volumes it creates while
+`DevelopmentWorkspaceWorker:LocalCheckouts` is `true` (default `false`). The layout is stored on
+the workspace, so flipping the option never converts an existing volume. Existing
+workspaces, layouts and scratch behavior do not change. Periodic saves, status reporting,
+backup changes and migration are later PRs. Keep the option off in production until
+periodic saves land, because until then the first save happens at stop (see below).
 
 The engine copies a source tree (by default `/workspace/repos`) to a root-owned store at
 `/workspace/.workspaces-checkpoints` (mode 0700):
@@ -1029,7 +1032,32 @@ With `"storageLayout": 2` in the runtime configuration (primary only):
 * Status, tasks and folder jobs verify the checkout mount as part of the retained mount.
   Folder size and delete jobs work on the checkout filesystem directly, with no scratch
   preparation. Every other mount below it is still refused.
-* Stop (`quiesce`) and off-host restore are refused until the stop-path checkpoint lands.
+* Stop (`quiesce`) saves a final checkpoint after T3 and the work services have stopped
+  and the final T3 proof is taken, while the volume is still writable. Only then does it
+  remount `/workspace/repos` and `/workspace` read-only and unmount. The receipt carries
+  `storageLayout: 2` and the checkpoint (ID, manifest hash, operation and binding). The
+  worker detaches the volume or deletes the VM only if that checkpoint belongs to this stop
+  operation, this VM and generation, and this volume and filesystem. It checks the receipt
+  again before deleting compute.
+* If the save fails, nothing is remounted or unmounted. The stop is refused with
+  `checkout_checkpoint_failed` and the worker resumes the VM, so its files stay usable. A
+  retry of the same stop verifies the saved checkpoint instead of saving again, and refuses
+  if a newer checkpoint replaced it. Resume and cancel forget the stop checkpoint.
+* A worker management command times out after 75 seconds, but the runtime keeps working
+  and replays the outcome to the same operation. If a layout 2 `quiesce` times out, the
+  worker keeps the VM running, reports `workspace_checkpoint_in_progress` and retries the
+  same step.
+* Off-host restore is refused until the backup changes land.
+
+Measured on an aarch64 VM (local ext4, warm cache):
+
+| Tree | First save | Unchanged save | Restore on a new VM | First save after restore |
+| --- | --- | --- | --- | --- |
+| 3 real repos, 4,838 files, 77 MB | 2.5 s | 0.06 s | 0.19 s | 0.21 s |
+| 60,002 files, 324 MB | 41 s | 0.74 s | 2.8 s | 5.1 s |
+
+Restore runs in bootstrap (600 s limit) and is far below it. A first full save of a large
+tree on a slower network volume can exceed 75 s, which the retry above covers.
 
 Run the engine checks with:
 

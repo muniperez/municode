@@ -16,6 +16,9 @@ public sealed class DevelopmentWorkspace
     public string VolumeStatus { get; set; } = "pending";
     public string VolumeFilesystem { get; set; } = "ext4";
     public string? VolumeFilesystemUuid { get; set; }
+    // 1: checkouts live on the retained volume. 2: checkouts live on the VM disk and are
+    // checkpointed to the volume; fixed when the volume is created.
+    public int StorageLayout { get; set; } = 1;
     public string? VolumeAttachedVmId { get; set; }
     public DateTimeOffset? LastBackupAt { get; set; }
     public string? BackupStatus { get; set; }
