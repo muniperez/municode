@@ -17,8 +17,6 @@ import { SetupModule } from "./modules/Setup/SetupModule";
 import { WorkspacesModule } from "./modules/Workspaces/WorkspacesModule";
 
 export const routes: RouteObject[] = [
-  { path: "/settings/github/callback", element: <GitHubCallbackModule /> },
-  { path: "/settings/github/installed", element: <GitHubCallbackModule /> },
   { path: "/setup", element: <SetupModule /> },
   {
     element: <AuthLayout />,
@@ -52,6 +50,8 @@ export const routes: RouteObject[] = [
       },
       { path: "/settings/team", element: <TeamSettingsModule /> },
       { path: "/settings/github", element: <GitHubSettingsModule /> },
+      { path: "/settings/github/callback", element: <GitHubCallbackModule /> },
+      { path: "/settings/github/installed", element: <GitHubCallbackModule /> },
     ],
   },
   { path: "*", element: <Navigate to="/workspaces" replace /> },
