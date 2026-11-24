@@ -60,7 +60,7 @@ def download(item, target):
 RUNTIME_FILES = ("runtime.py", "bootstrap.py", "issue-t3-session.py", "git-credential.py",
                  "t3_connect.py", "t3-connect.html", "t3-connect.js", "t3-connect.css",
                  "copilot_provider.py", "disk_usage.py", "t3_project_defaults.py",
-                 "storage_tiers.py", "scratch_mounts.py")
+                 "storage_tiers.py", "scratch_mounts.py", "repo_checkpoint.py")
 SYSTEMD_FILES = ("workspaces-workspace.service", "workspaces-workspace-mount.service",
                  "workspaces-t3.service", "workspaceswork.slice",
                  "workspaces-t3-connect.service", "workspaces-t3-connect-activate.service",
