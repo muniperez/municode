@@ -16,7 +16,7 @@ public sealed class DevelopmentWorkspacesController(
     public async Task<IResult> List([FromQuery] string organizationId, CancellationToken ct)
     {
         if (!await CanAsync(organizationId, OrganizationAction.ReadWorkspaces, ct)) return EndpointResults.Forbidden();
-        return Results.Ok((await workspaces.ListAsync(organizationId, ct)).Select(workspaces.ToResponse));
+        return Results.Ok(await workspaces.ToStartupResponsesAsync(await workspaces.ListAsync(organizationId, ct), ct));
     }
 
     [HttpGet("selections")]

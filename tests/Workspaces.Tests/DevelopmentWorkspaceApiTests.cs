@@ -99,7 +99,7 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task DetailReportsAllowlistedStartupStageAndOperationStatusOfCurrentOperationEvenWhenBlocked()
+    public async Task DetailAndListReportAllowlistedStartupStageAndOperationStatusOfCurrentOperationEvenWhenBlocked()
     {
         using var owner = Client(token);
         var workspace = await Create(owner);
@@ -128,12 +128,21 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
         Assert.Equal("blocked", blocked.Phase);
         Assert.Equal("checking_readiness", blocked.StartupStage);
         Assert.Equal("pending", blocked.StartupOperationStatus);
+        var list = $"{Root}?organizationId=org";
+        var rawList = await owner.GetStringAsync(list);
+        Assert.DoesNotContain("synthetic-private-evidence", rawList);
+        Assert.DoesNotContain(operation.Id, rawList);
+        var listed = Assert.Single(Assert.Single((await owner.GetFromJsonAsync<DevelopmentWorkspaceResponse[]>(list))!).Vms!);
+        Assert.Equal("pending", listed.StartupOperationStatus);
+        Assert.Equal("checking_readiness", listed.StartupStage);
 
         operation.Status = "failed";
         await db.SaveChangesAsync();
         var failed = Assert.Single((await owner.GetFromJsonAsync<DevelopmentWorkspaceResponse>(detail))!.Vms!);
         Assert.Equal("failed", failed.StartupOperationStatus);
         Assert.Equal("checking_readiness", failed.StartupStage);
+        Assert.Equal("failed", Assert.Single(Assert.Single(
+            (await owner.GetFromJsonAsync<DevelopmentWorkspaceResponse[]>(list))!).Vms!).StartupOperationStatus);
 
         machine.Generation++;
         await db.SaveChangesAsync();

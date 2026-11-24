@@ -1,4 +1,5 @@
-import type { DevelopmentWorkspace } from "@/models/controlPlane";
+import type { DevelopmentWorkspace, DevelopmentWorkspaceVm } from "@/models/controlPlane";
+import { vmStartup } from "./WorkspaceVmStartup";
 
 export function primaryVm(workspace: DevelopmentWorkspace) {
   return workspace.vms?.find(vm => vm.id === workspace.primaryVmId && vm.kind === "primary")
@@ -23,24 +24,31 @@ export function workspacePhase(phase?: string | null) {
   return { value: "unavailable", label: "Unavailable" };
 }
 
+// A blocked VM whose original start is still being retried is reconciling, not failed.
+export function vmState(vm: DevelopmentWorkspaceVm) {
+  return vmStartup(vm).reconciling ? { value: "starting", label: "Starting" } : workspacePhase(vm.phase);
+}
+
 export function primaryState(workspace: DevelopmentWorkspace) {
   const deletion = permanentDeletion(workspace);
   if (deletion === "deleting") return { value: "stopping", label: "Deleting environment" };
   if (deletion === "failed") return { value: "attention", label: "Deletion failed" };
-  return workspacePhase(primaryVm(workspace)?.phase);
+  const primary = primaryVm(workspace);
+  return primary ? vmState(primary) : workspacePhase(undefined);
 }
 
 export function ephemeralSummary(workspace: DevelopmentWorkspace) {
   if (!Array.isArray(workspace.vms)) return { state: "unavailable", label: "Unavailable" };
   const siblings = workspace.vms.filter(vm => vm.kind === "ephemeral");
   if (!siblings.length) return { state: "none", label: "None" };
-  const unavailable = siblings.filter(vm => workspacePhase(vm.phase).value === "unavailable").length;
+  const unavailable = siblings.filter(vm => vmState(vm).value === "unavailable").length;
   const unknown = unavailable ? ` · ${unavailable} unavailable` : "";
-  const attention = siblings.filter(vm => workspacePhase(vm.phase).value === "attention" || Boolean(vm.errorCode)).length;
+  const attention = siblings.filter(vm => vmState(vm).value === "attention"
+    || (Boolean(vm.errorCode) && !vmStartup(vm).reconciling)).length;
   if (attention) return { state: "attention", label: `${attention} needs attention${unknown}` };
   const running = siblings.filter(vm => vm.phase === "ready").length;
   if (running) return { state: "running", label: `${running} running${unknown}${siblings.length > running ? ` · ${siblings.length} total` : ""}` };
-  const transitioning = siblings.filter(vm => ["starting", "stopping"].includes(workspacePhase(vm.phase).value)).length;
+  const transitioning = siblings.filter(vm => ["starting", "stopping"].includes(vmState(vm).value)).length;
   if (transitioning) return { state: "transitioning", label: `${transitioning} starting or stopping${unknown}` };
   if (unavailable) return { state: "unavailable", label: "Unavailable" };
   return { state: "stopped", label: `${siblings.length} stopped` };
