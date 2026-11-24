@@ -27,7 +27,9 @@ jobs:
       - name: Verify release contracts
         run: |
           git check-ignore .local/artifacts/probe
-          python3 -B -m unittest discover -s scripts/delivery -p 'test_*.py' -v
+          caddy_image=$(python3 -c 'import json; print(json.load(open("packaging/release.json"))["images"]["caddy"])')
+          docker pull "$caddy_image"
+          WORKSPACES_TEST_CADDY=1 python3 -B -m unittest discover -s scripts/delivery -p 'test_*.py' -v
           secrets="$PWD/.local/artifacts/compose-smoke/secrets"
           mkdir -p "$secrets/ssh" "$secrets/bootstrap" "$secrets/openbao-approle"
           for file in postgres-admin-password app-db-password kratos-db-password \
