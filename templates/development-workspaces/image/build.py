@@ -74,7 +74,8 @@ RUNTIME_FILES = ("runtime.py", "bootstrap.py", "issue-t3-session.py", "git-crede
 SYSTEMD_FILES = ("workspaces-workspace.service", "workspaces-workspace-mount.service",
                  "workspaces-t3.service", "workspaceswork.slice",
                  "workspaces-t3-connect.service", "workspaces-t3-connect-activate.service",
-                 "workspaces-scratch-mounts.service", "workspaces-scratch-watch.service")
+                 "workspaces-scratch-mounts.service", "workspaces-scratch-watch.service",
+                 "workspaces-repos-checkpoint.service", "workspaces-repos-checkpoint.timer")
 PINNED_EXECUTABLE_FILES = (
     "/opt/workspaces-node/bin/node", "/opt/workspaces-dotnet/dotnet",
     "/opt/workspaces-tools/node_modules/@openai/codex/bin/codex.js",
@@ -355,7 +356,8 @@ def install(source_revision, builder):
 def generalize():
     # Guard is applied by main before either install or this destructive operation.
     os.chdir("/")
-    for unit in ("workspaces-scratch-watch.service", "workspaces-scratch-mounts.service",
+    for unit in ("workspaces-repos-checkpoint.timer", "workspaces-repos-checkpoint.service",
+                 "workspaces-scratch-watch.service", "workspaces-scratch-mounts.service",
                  "workspaces-workspace-mount.service",
                  "workspaces-workspace.service", "workspaces-t3.service",
                  "workspaces-t3-connect.service", "workspaces-t3-connect-activate.service"):

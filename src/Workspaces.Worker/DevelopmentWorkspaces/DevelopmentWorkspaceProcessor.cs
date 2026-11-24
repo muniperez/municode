@@ -395,7 +395,13 @@ public sealed partial class DevelopmentWorkspaceProcessor(
                 owner = new { organizationId = workspace.OrganizationId, workspaceId = workspace.Id,
                     providerAccountId = workspace.ProviderAccountId, location = workspace.Region, providerVolumeId = workspace.ProviderVolumeId }
             };
-            if (workspace.StorageLayout == 2) config["storageLayout"] = 2;
+            if (workspace.StorageLayout == 2)
+            {
+                config["storageLayout"] = 2;
+                // Only sent when changed, so the default stays compatible with earlier layout 2 images.
+                if (options.Value.CheckpointIntervalSeconds != DevelopmentWorkspaceWorkerOptions.DefaultCheckpointIntervalSeconds)
+                    config["checkpointIntervalSeconds"] = options.Value.CheckpointIntervalSeconds;
+            }
             if (options.Value.BackupRecipient is not null)
                 config["backup"] = new { transport = "management-ssh-stream", recipient = options.Value.BackupRecipient,
                     keyRecoveryId = options.Value.BackupRecoveryId, destinationIdentity = options.Value.BackupDestinationIdentity,

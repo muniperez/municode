@@ -538,6 +538,10 @@ namespace Workspaces.Common.Migrations.Sqlite
                         .HasColumnType("TEXT")
                         .HasColumnName("backup_status");
 
+                    b.Property<string>("CheckpointStatus")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("checkpoint_status");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("TEXT")
                         .HasColumnName("created_at");
@@ -568,6 +572,10 @@ namespace Workspaces.Common.Migrations.Sqlite
                     b.Property<DateTimeOffset?>("LastBackupAt")
                         .HasColumnType("TEXT")
                         .HasColumnName("last_backup_at");
+
+                    b.Property<DateTimeOffset?>("LastCheckpointAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_checkpoint_at");
 
                     b.Property<string>("Name")
                         .IsRequired()

@@ -319,6 +319,11 @@ public sealed partial class CliApplication
                 : "Idle stop: timeout unavailable.");
         _console.WriteLine($"Primary retained storage: {workspace.VolumeSizeGb} GB; {workspace.VolumeStatus ?? "status unavailable"}; storage charges continue while stopped.");
         _console.WriteLine($"Estimated storage: {workspace.EstimatedMonthlyStorage:F2} {workspace.Currency}/month; rates {(workspace.PricingUpdatedAt?.ToString("O") ?? "timestamp unavailable")}");
+        if (workspace.StorageLayout == 2)
+            _console.WriteLine($"Checkouts: on the VM disk; last saved to retained storage {workspace.LastCheckpointAt?.ToString("O") ?? "never"} ({workspace.CheckpointStatus ?? "status unavailable"}).");
+        _console.WriteLine(workspace.LastBackupAt is { } backup
+            ? $"Off-host backup: last verified {backup:O} ({workspace.BackupStatus ?? "status unavailable"})."
+            : $"Off-host backup: none verified ({workspace.BackupStatus ?? "status unavailable"}).");
         if (workspace.Agents is { Count: > 0 } agents)
             _console.WriteLine("Agents: " + string.Join(", ", agents.Select(x => $"{x.Name} {x.Version}")));
         foreach (var vm in workspace.Vms ?? []) WriteWorkspaceVm(vm);

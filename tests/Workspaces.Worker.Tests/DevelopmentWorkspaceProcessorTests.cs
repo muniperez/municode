@@ -1534,6 +1534,52 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HeartbeatRecordsLocalCheckoutCheckpointFreshnessForTheApi()
+    {
+        var (workspace, vm, _) = await Seed("session");
+        vm.ProviderServerId = "server-owned"; vm.IpAddress = "198.51.100.10";
+        workspace.StorageLayout = 2;
+        await db.SaveChangesAsync();
+        double Seconds(TimeSpan ago) => (clock.GetUtcNow() - ago).ToUnixTimeMilliseconds() / 1000.0;
+        var saved = Seconds(TimeSpan.FromMinutes(2));
+        runtime.CheckpointStatus = new { state = "Fresh", completedAt = saved, intervalSeconds = 300 };
+        Assert.True(await Processor().ProcessNextAsync(default));
+        var response = lifecycle.ToResponse((await lifecycle.GetAsync(workspace.Id, "org", default))!);
+        Assert.Equal((2, "Fresh"), (response.StorageLayout, response.CheckpointStatus));
+        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds((long)(saved * 1000)), response.LastCheckpointAt);
+
+        // A failed save keeps the last good checkpoint time; an older report never moves it back.
+        runtime.CheckpointStatus = new { state = "Failed", completedAt = Seconds(TimeSpan.FromHours(1)),
+            reason = "Checkpoint destination is full" };
+        await Processor().MonitorVmAsync(await CurrentVm(vm.Id), default);
+        var stored = await CurrentWorkspace(workspace.Id);
+        Assert.Equal(("Failed", response.LastCheckpointAt), (stored.CheckpointStatus, stored.LastCheckpointAt));
+
+        // An unreadable store or a missing report keeps the last known status.
+        runtime.CheckpointStatus = new { state = "Unavailable" };
+        await Processor().MonitorVmAsync(await CurrentVm(vm.Id), default);
+        Assert.Equal("Failed", (await CurrentWorkspace(workspace.Id)).CheckpointStatus);
+
+        // A guest clock slightly ahead is clamped to the worker's time.
+        runtime.CheckpointStatus = new { state = "Fresh", completedAt = Seconds(TimeSpan.FromMinutes(-2)) };
+        await Processor().MonitorVmAsync(await CurrentVm(vm.Id), default);
+        stored = await CurrentWorkspace(workspace.Id);
+        Assert.Equal(("Fresh", clock.GetUtcNow()), (stored.CheckpointStatus, stored.LastCheckpointAt));
+    }
+
+    [Fact]
+    public async Task HeartbeatIgnoresCheckpointReportsForCheckoutsOnTheRetainedVolume()
+    {
+        var (workspace, vm, _) = await Seed("session");
+        vm.ProviderServerId = "server-owned"; vm.IpAddress = "198.51.100.10";
+        await db.SaveChangesAsync();
+        runtime.CheckpointStatus = new { state = "Fresh", completedAt = clock.GetUtcNow().ToUnixTimeMilliseconds() / 1000.0 };
+        Assert.True(await Processor().ProcessNextAsync(default));
+        var response = lifecycle.ToResponse((await lifecycle.GetAsync(workspace.Id, "org", default))!);
+        Assert.Equal((1, null, null), (response.StorageLayout, response.CheckpointStatus, response.LastCheckpointAt));
+    }
+
+    [Fact]
     public void ResourceSamplesKeepStorageTierRolesAndScratchBindMountCounts()
     {
         var observedAt = clock.GetUtcNow().ToUnixTimeMilliseconds() / 1000.0;
@@ -1869,6 +1915,7 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         public bool FailFilesystemStart { get; set; }
         public int QuiesceTimeouts { get; set; }
         public Func<WorkspaceRuntimeTarget, string, object?>? Checkpoint { get; set; }
+        public object? CheckpointStatus { get; set; }
         public Task<JsonElement> CallAsync(WorkspaceRuntimeTarget target, string operationId, string action, object? arguments, CancellationToken ct)
         {
             ArgumentException.ThrowIfNullOrEmpty(operationId);
@@ -1889,6 +1936,7 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
                 if (Inventory is not null) result["workInventory"] = new { state = Inventory, reason = InventoryReason };
                 if (Resources is not null) result["resources"] = Resources;
                 if (Capabilities is not null) result["capabilities"] = Capabilities;
+                if (CheckpointStatus is not null) result["checkpoint"] = CheckpointStatus;
                 return Task.FromResult(JsonSerializer.SerializeToElement(new { ok = true, result }, Json));
             }
             if (action.StartsWith("fs-job-", StringComparison.Ordinal))

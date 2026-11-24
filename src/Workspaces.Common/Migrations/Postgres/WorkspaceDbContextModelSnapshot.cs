@@ -543,6 +543,10 @@ namespace Workspaces.Common.Migrations.Postgres
                         .HasColumnType("text")
                         .HasColumnName("backup_status");
 
+                    b.Property<string>("CheckpointStatus")
+                        .HasColumnType("text")
+                        .HasColumnName("checkpoint_status");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
@@ -573,6 +577,10 @@ namespace Workspaces.Common.Migrations.Postgres
                     b.Property<DateTimeOffset?>("LastBackupAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("last_backup_at");
+
+                    b.Property<DateTimeOffset?>("LastCheckpointAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_checkpoint_at");
 
                     b.Property<string>("Name")
                         .IsRequired()

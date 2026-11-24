@@ -4,6 +4,7 @@ After=workspaces-workspace.service workspaces-workspace-mount.service
 Requires=workspaces-workspace.service workspaces-workspace-mount.service
 Wants=workspaces-t3-connect.service
 Wants=workspaces-scratch-mounts.service workspaces-scratch-watch.service
+Wants=workspaces-repos-checkpoint.timer
 After=workspaces-scratch-mounts.service
 ConditionPathIsDirectory=/workspace/t3
 StartLimitIntervalSec=300

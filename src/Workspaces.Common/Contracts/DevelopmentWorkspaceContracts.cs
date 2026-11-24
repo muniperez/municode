@@ -72,7 +72,12 @@ public sealed record DevelopmentWorkspaceResponse(
     int? EffectiveIdleTimeoutMinutes = null,
     bool KeepRunning = false,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    IReadOnlyList<DevelopmentWorkspaceAgentResponse>? Agents = null);
+    IReadOnlyList<DevelopmentWorkspaceAgentResponse>? Agents = null,
+    int StorageLayout = 1,
+    DateTimeOffset? LastCheckpointAt = null,
+    string? CheckpointStatus = null,
+    DateTimeOffset? LastBackupAt = null,
+    string? BackupStatus = null);
 
 public sealed record DevelopmentWorkspaceTaskLeaseRequest(string TaskId, long Generation);
 public sealed record DevelopmentWorkspaceGenerationRequest(long Generation);

@@ -42,7 +42,8 @@ WORK_CGROUP = Path("/sys/fs/cgroup/workspaceswork.slice")
 T3_CGROUP = WORK_CGROUP / T3_UNIT
 UNITS = (T3_UNIT, "workspaces-workspace.service",
          "workspaces-t3-connect.service", "workspaces-t3-connect-activate.service",
-         "workspaces-scratch-mounts.service", "workspaces-scratch-watch.service", MOUNT_UNIT)
+         "workspaces-scratch-mounts.service", "workspaces-scratch-watch.service", MOUNT_UNIT,
+         "workspaces-repos-checkpoint.service", "workspaces-repos-checkpoint.timer")
 SCRATCH_HELPER = Path("/opt/workspaces-workspace/scratch_mounts.py")
 SCRATCH_FIXTURE = Path("/workspace/repos/native-scratch")
 SCRATCH_OUTPUTS = ("node_modules", "bin", "obj", "dist")
@@ -52,7 +53,7 @@ SEEDED_AGENT_PROVIDERS = {
     "workspaces-muse": ("muse", "/usr/local/bin/muse"),
 }
 UNIT_HASHES = {
-    "workspaces-t3.service": "e95ea598bd9f0be88441dabdfd10ee026dd0c623c805611825a81a73688ef6a2",
+    "workspaces-t3.service": "eb206ae737439b7557a013712072a1e992993d66e4e441df4d41ff3d42914f9c",
     "workspaces-workspace.service": "72b4ad78746e1ece5aaf2b9d7099d871eabb46c756e4115ca4cc96791e941cec",
     MOUNT_UNIT: "63df74733de304f2e1cbf2fcf1c54a8b139de6cfa209e2e24e1301c16071e6b9",
     "workspaceswork.slice": "e1de2748256aed52d74784f73c1c640eb25ec50ac7a3788b09c84599b5e66618",
@@ -60,6 +61,8 @@ UNIT_HASHES = {
     "workspaces-t3-connect-activate.service": "fd2a967a1b575513d589312a2d8b973f9ee105f9ab44708b8c5757bd5930b2d2",
     "workspaces-scratch-mounts.service": "47a5e929f926630374c23349c2d37cbe39e287dea9da72660bc810ba84cd7803",
     "workspaces-scratch-watch.service": "d0edd0d14b17880b6e86b331750e0b324a6ecf597058923581bcd2abda563ac6",
+    "workspaces-repos-checkpoint.service": "368003fd14e0e567c6fe93b0e73eb837fd06baabe0683769a01b2a038bd7d960",
+    "workspaces-repos-checkpoint.timer": "72fc2dcc4513fc273d6b6fc4a3aa3406a6099ac18dd543a96ea3729ab4033801",
 }
 REQUIRED_PROBES = {
     "target-and-toolchain-guard", "pristine-tools-only-no-default-apps", "loop-ext4-root-bootstrap",

@@ -10,6 +10,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -47,6 +48,7 @@ class FakeLinux:
         self.on_freeze = None
         self.checkpoint_error = None
         self.checkpoints = 0
+        self.checkpoint_state = dict(state="empty")
 
     def mount(self, claim):
         self.events.append("mount")
@@ -144,6 +146,14 @@ class FakeLinux:
     def verify_checkpoint(self, checkpoint, operation):
         self.events.append("repos-checkpoint-verify")
         rt.require(checkpoint["operationId"] == operation and self.mounted, "Final checkout checkpoint is not verifiable")
+
+    def stop_periodic_checkpoints(self):
+        self.events.append("periodic-checkpoint-stop")
+
+    def checkpoint_status(self):
+        if isinstance(self.checkpoint_state, Exception):
+            raise self.checkpoint_state
+        return self.checkpoint_state
 
 
 class ManagedT3StopTests(unittest.TestCase):
@@ -974,6 +984,8 @@ class RuntimeTests(unittest.TestCase):
         receipt = self.request("quiesce")
         self.assertEqual(2, receipt["storageLayout"])
         self.assertEqual("operation-a", receipt["checkpoint"]["operationId"])
+        # Periodic saves end before any idle evidence: their Git children run outside the work slice.
+        self.assertEqual(["periodic-checkpoint-stop", "idle", "freeze"], events[:3])
         self.assertEqual(receipt["checkpoint"], self.runtime.s["reposCheckpoint"])
         self.assertEqual(1, events.count("repos-checkpoint"))
         self.assertLess(events.index("stop-services"), events.index("repos-checkpoint"))
@@ -1004,6 +1016,46 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual("Ready", self.runtime.s["phase"])
         self.adapter.checkpoint_error = None
         self.assertEqual("operation-b", self.request("quiesce", operation="operation-b")["checkpoint"]["operationId"])
+
+    def test_local_status_reports_checkpoint_freshness_and_never_fails(self):
+        now = 10_000
+        config = dict(self.primary().c, storageLayout=2, checkpointIntervalSeconds=120)
+        self.runtime = rt.Runtime(config, self.root / "local-status", self.adapter, self.g, clock=lambda: now)
+        self.request("bootstrap")
+        ns = lambda seconds: seconds * 10**9
+        self.assertEqual(dict(state="Missing", intervalSeconds=120), self.request("status")["checkpoint"])
+        ready = dict(state="ready", checkpointId="c-1", completedAt=ns(now - 100),
+                     lastAttempt=dict(at=ns(now - 100), mode="periodic", outcome="succeeded", checkpointId="c-1"))
+        cases = (
+            (ready, dict(state="Fresh", checkpointId="c-1", completedAt=now - 100,
+                         lastAttempt=dict(at=now - 100, outcome="succeeded"))),
+            # Stale after three intervals without a newer checkpoint.
+            (dict(ready, completedAt=ns(now - 361), lastAttempt=None),
+             dict(state="Stale", checkpointId="c-1", completedAt=now - 361)),
+            # A deferred save (the tree kept changing) keeps the last checkpoint's freshness.
+            (dict(ready, lastAttempt=dict(at=ns(now - 10), outcome="deferred", reason="Checkout changed")),
+             dict(state="Fresh", checkpointId="c-1", completedAt=now - 100,
+                  lastAttempt=dict(at=now - 10, outcome="deferred", reason="Checkout changed"))),
+            (dict(ready, lastAttempt=dict(at=ns(now - 10), outcome="failed", reason="Checkpoint destination is full")),
+             dict(state="Failed", checkpointId="c-1", completedAt=now - 100, reason="Checkpoint destination is full",
+                  lastAttempt=dict(at=now - 10, outcome="failed", reason="Checkpoint destination is full"))),
+            (dict(state="empty", lastAttempt=dict(at=ns(now - 10), outcome="failed", reason="Checkpoint save failed")),
+             dict(state="Failed", reason="Checkpoint save failed",
+                  lastAttempt=dict(at=now - 10, outcome="failed", reason="Checkpoint save failed"))),
+            (dict(state="corrupt", reason="Checkpoint pointer is missing"),
+             dict(state="Failed", reason="Checkpoint pointer is missing")),
+        )
+        for value, expected in cases:
+            with self.subTest(value=value):
+                self.adapter.checkpoint_state = value
+                self.assertEqual(dict(expected, intervalSeconds=120), self.request("status")["checkpoint"])
+        self.adapter.checkpoint_state = OSError("store unreadable")
+        status = self.request("status")
+        self.assertEqual(dict(state="Unavailable"), status["checkpoint"])
+        self.assertEqual("Ready", status["phase"])
+        self.runtime = self.primary()
+        self.request("bootstrap")
+        self.assertNotIn("checkpoint", self.request("status"))
 
     def test_local_checkpoint_retry_after_readonly_verifies_instead_of_saving_again(self):
         self.runtime = self.local_primary()
@@ -1475,6 +1527,90 @@ class LocalCheckoutTests(unittest.TestCase):
         self.assertEqual("restored", restored["action"])
         self.assertEqual("final uncommitted edit", (replacement / "repos/project/edit.txt").read_text())
 
+    def test_periodic_checkpoint_saves_only_while_ready_and_never_after_a_stop_fences(self):
+        local = self.root / "vm-a"
+        adapter = self.adapter(local)
+        self.attach(adapter)
+        patchers = (patch.object(adapter, "verify_workspace_mount"),
+                    patch.object(rt, "load_config", side_effect=lambda path: json.loads(Path(path).read_text())))
+        verify = [patcher.start() for patcher in patchers][0]
+        for patcher in patchers:
+            self.addCleanup(patcher.stop)
+        store = str(self.workspace / rt.CHECKPOINT_STORE)
+        state_dir = self.root / "state"
+        state_dir.mkdir()
+
+        def state(**changes):
+            value = dict(identity=dict(vmId="vm-a", generation=3, kind="primary"),
+                         configDigest=rt.digest(self.config), phase="Ready")
+            rt.atomic_json(state_dir / "state.json", dict(value, **changes))
+
+        def periodic(offset=0):
+            return rt.checkpoint_periodic(self.config, state_dir, adapter, lambda: time.time_ns() + offset * 10**9)
+
+        self.assertEqual(dict(action="skipped", reason="Workspace is not bootstrapped"), periodic())
+        state()
+        (local / "repos/project").mkdir()
+        (local / "repos/project/edit.txt").write_text("periodic edit")
+        # The volume's first checkpoint was just taken when the tree was attached.
+        self.assertEqual("Checkpoint interval has not elapsed", periodic()["reason"])
+        saved = periodic(301)
+        self.assertEqual("saved", saved["action"])
+        self.assertEqual(saved["checkpointId"], rc.status(store)["checkpointId"])
+        self.assertEqual("Checkpoint interval has not elapsed", periodic(100)["reason"])
+        (local / "repos/project/edit.txt").write_text("later edit")
+        later = periodic(301)
+        self.assertEqual("saved", later["action"])
+        before = rc.status(store)
+        for changes in (dict(phase="Fenced", fenceOperation="stop-1"), dict(phase="Resuming"),
+                        dict(freezeCompleted=True), dict(configDigest="other-generation-config")):
+            with self.subTest(changes=changes):
+                state(**changes)
+                self.assertEqual("skipped", periodic(1000)["action"])
+        # A stop that fences after the first check but before the store lock still wins, and the
+        # refused save records no attempt that could hide the final checkpoint's status.
+        state()
+        verify.side_effect = lambda: state(phase="Fenced", fenceOperation="stop-1")
+        with self.assertRaisesRegex(rc.Deferred, "not admitting"):
+            periodic(1000)
+        self.assertEqual(before, rc.status(store))
+        self.assertEqual(dict(action="disabled"),
+                         rt.checkpoint_periodic(dict(self.config, storageLayout=1), state_dir, adapter))
+        # The restored tree on a replacement VM has the saved edit.
+        restored = self.attach(self.adapter(self.root / "vm-b", vmId="vm-b", generation=4))
+        self.assertEqual(later["checkpointId"], restored["checkpointId"])
+        self.assertEqual("later edit", (self.root / "vm-b/repos/project/edit.txt").read_text())
+
+    def test_stopping_periodic_checkpoints_waits_for_the_running_save(self):
+        adapter = rt.Linux(self.config)
+        commands = []
+        for state, error in (("inactive", None), ("deactivating", "did not stop")):
+            with self.subTest(state=state), \
+                    patch.object(rt, "run", side_effect=lambda argv, **kwargs: commands.append(argv) or state):
+                if error:
+                    with self.assertRaisesRegex(rt.Blocked, error):
+                        adapter.stop_periodic_checkpoints()
+                else:
+                    adapter.stop_periodic_checkpoints()
+        # Without --no-block, systemctl returns only after the save and its Git children exit.
+        self.assertEqual(["systemctl", "stop", rt.CHECKPOINT_UNIT], commands[0])
+
+    def test_periodic_units_run_outside_the_work_slice_and_stop_with_t3(self):
+        units = Path(__file__).parents[1] / "systemd"
+        t3 = (units / "workspaces-t3.service").read_text()
+        self.assertRegex(t3, r"(?m)^Wants=.*\bworkspaces-repos-checkpoint\.timer\b")
+        service = (units / "workspaces-repos-checkpoint.service").read_text()
+        timer = (units / "workspaces-repos-checkpoint.timer").read_text()
+        for text in (service, timer):
+            self.assertIn("PartOf=workspaces-t3.service", text.splitlines())
+        self.assertNotIn("Slice=", service)
+        self.assertIn("ExecStart=/usr/bin/python3 -B /opt/workspaces-workspace/runtime.py checkpoint-periodic",
+                      service.splitlines())
+        self.assertIn("SuccessExitStatus=%d" % rc.EX_DEFERRED, service.splitlines())
+        self.assertIn(f"ConditionPathExists=/workspace/{rt.LAYOUT_MARKER}", service.splitlines())
+        self.assertIn("OnUnitInactiveSec=60", timer.splitlines())
+        self.assertEqual(rt.CHECKPOINT_UNIT, "workspaces-repos-checkpoint.service")
+
     def test_readonly_and_writable_cover_the_checkout_mount(self):
         adapter = rt.Linux(self.config)
         commands = []
@@ -1533,8 +1669,12 @@ class LocalCheckoutTests(unittest.TestCase):
         runtime.handle(dict(request, operationId="boot", action="bootstrap"))
         self.assertEqual(["mount", "layout", "attach-repos"], fake.events)
         self.assertEqual("Ready", runtime.s["phase"])
+        rt.Runtime(dict(config, checkpointIntervalSeconds=60), self.root / "interval", fake, git=object())
         for change in (dict(kind="ephemeral", volume=None, ignoredDataAcknowledged=True),
-                       dict(storageLayout=3), dict(storageLayout=True)):
+                       dict(storageLayout=3), dict(storageLayout=True),
+                       dict(checkpointIntervalSeconds=59), dict(checkpointIntervalSeconds=3601),
+                       dict(checkpointIntervalSeconds=True), dict(checkpointIntervalSeconds=300.0),
+                       dict(storageLayout=1, checkpointIntervalSeconds=300)):
             with self.subTest(change=change), self.assertRaises(rt.Blocked):
                 rt.Runtime(dict(config, **change), self.root / "invalid", fake, git=object())
 

@@ -53,7 +53,9 @@ public sealed record DevelopmentWorkspaceResponse(
     decimal EstimatedMonthlyStorage, string Currency, DateTimeOffset? PricingUpdatedAt,
     IReadOnlyList<DevelopmentWorkspaceVmResponse>? Vms = null, string? VolumeStatus = null,
     int? IdleTimeoutMinutes = null, int? EffectiveIdleTimeoutMinutes = null, bool KeepRunning = false,
-    IReadOnlyList<DevelopmentWorkspaceAgentResponse>? Agents = null);
+    IReadOnlyList<DevelopmentWorkspaceAgentResponse>? Agents = null, int StorageLayout = 1,
+    DateTimeOffset? LastCheckpointAt = null, string? CheckpointStatus = null,
+    DateTimeOffset? LastBackupAt = null, string? BackupStatus = null);
 
 public sealed record DevelopmentWorkspaceVmResponse(
     string Id, string Kind, long Generation, string DesiredState, string Phase,

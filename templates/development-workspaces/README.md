@@ -947,9 +947,8 @@ VM disk and checkpoints them to the retained volume. The image installs both. Th
 requests layout 2 only for primary volumes it creates while
 `DevelopmentWorkspaceWorker:LocalCheckouts` is `true` (default `false`). The layout is stored on
 the workspace, so flipping the option never converts an existing volume. Existing
-workspaces, layouts and scratch behavior do not change. Periodic saves, status reporting,
-backup changes and migration are later PRs. Keep the option off in production until
-periodic saves land, because until then the first save happens at stop (see below).
+workspaces, layouts and scratch behavior do not change. Backup changes and migration are
+later PRs.
 
 The engine copies a source tree (by default `/workspace/repos`) to a root-owned store at
 `/workspace/.workspaces-checkpoints` (mode 0700):
@@ -1048,6 +1047,34 @@ With `"storageLayout": 2` in the runtime configuration (primary only):
   worker keeps the VM running, reports `workspace_checkpoint_in_progress` and retries the
   same step.
 * Off-host restore is refused until the backup changes land.
+
+#### Periodic checkpoints and status
+
+`workspaces-repos-checkpoint.timer` runs `runtime.py checkpoint-periodic` every minute while
+T3 runs. It is wanted by `workspaces-t3.service` and stops with it. It saves only when the
+interval has passed since the last attempt: 300 seconds by default, or
+`DevelopmentWorkspaceWorker:CheckpointIntervalSeconds` (60 to 3,600). The worker sends
+`checkpointIntervalSeconds` only when it differs from the default, so older layout 2 images
+keep working.
+
+* A save runs only while the workspace is Ready with no fence, freeze or read-only flag. It
+  checks this again while holding the store lock, so a save can never publish after a stop
+  has fenced the workspace; that refusal records nothing. A save deferred by the engine (busy
+  lock, changing tree, or a fence seen under the lock) exits with 75, which systemd treats as
+  success. A later run tries again.
+* The service runs at low CPU and I/O priority outside `workspaceswork.slice`, as root, with
+  a limited capability set. Git runs as the coding user, as in other saves.
+* Stop fences the workspace first, then stops the service and waits for a running save to
+  finish before it checks idleness and freezes T3. The final checkpoint is then saved as
+  described above.
+* `status` reports `checkpoint`: `Fresh`, `Stale` (no successful save for 3 intervals),
+  `Failed` (the last attempt failed or the store is corrupt), `Missing` or `Unavailable`,
+  with the time of the last checkpoint and the last attempt.
+* The worker stores the state and time from each heartbeat. An `Unavailable` report keeps the
+  last known value, and the time never moves backwards. An accepted stop receipt records
+  `Fresh` at stop time. The API (`storageLayout`, `lastCheckpointAt`, `checkpointStatus`),
+  `municode status`, and the dashboard Storage card show it. They also show the last verified
+  off-host backup (`lastBackupAt`, `backupStatus`) for every workspace.
 
 Measured on an aarch64 VM (local ext4, warm cache):
 
