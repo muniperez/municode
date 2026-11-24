@@ -7,6 +7,12 @@
     "cloudImageSerial": "20251001",
     "url": "https://cloud-images.ubuntu.com/releases/noble/release-20251001/ubuntu-24.04-server-cloudimg-amd64.img",
     "sha256": "02dc186dc491514254df58df29a5877c93ca90ac790cc91a164ea90ed3a0bb05",
+    "format": "qcow2",
+    "size": 620695552,
+    "raw": {
+      "size": 3758096384,
+      "sha256": "665300401f914daaeac85871a250e6cae01636b56dad1396dc92dc74614e555f"
+    },
     "aptSnapshot": "20251115T000000Z"
   },
   "node": {
@@ -120,7 +126,7 @@
     "fonts-liberation", "libgtk-3-0t64"
   ],
   "provenance": {
-    "retrievedFrom": "Official Ubuntu SHA256SUMS, Node SHASUMS256.txt, .NET 10 releases.json, npm registry integrity, GitHub release asset digest, GitLab glab v1.74.0 checksums.txt, Anthropic npm registry integrity, Agent Client Protocol registry (Antigravity), Meta Muse release lookaside digest",
+    "retrievedFrom": "Official Ubuntu SHA256SUMS and simplestreams QCOW2 size (RAW digest derived from that verified QCOW2 with qemu-img convert and an independent QCOW2 decoder), Node SHASUMS256.txt, .NET 10 releases.json, npm registry integrity, GitHub release asset digest, GitLab glab v1.74.0 checksums.txt, Anthropic npm registry integrity, Agent Client Protocol registry (Antigravity), Meta Muse release lookaside digest",
     "sourceRevision": "REQUIRED_AT_BUILD",
     "builderIdentity": "REQUIRED_AT_BUILD",
     "qualification": "Recipe only; no provider image has been built or registered by default tests"

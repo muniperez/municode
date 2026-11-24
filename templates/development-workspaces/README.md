@@ -150,23 +150,88 @@ interactive build commands after generalization. Capture only after power-off.
 
 ### Provider images (Hetzner, DigitalOcean, Vultr)
 
-The same recipe produces the image for every supported provider; only capture and
-registration differ. Build in the provider account and region that will run the
-workspaces, from the pinned Ubuntu 24.04 cloud image or that provider's stock Ubuntu
-24.04 x64 image **only when its `/etc/cloud/build.info` serial matches the lock** (the
-guard refuses any other serial; import the pinned cloud image otherwise).
+The same recipe produces the image for every supported provider; only base-image
+import, capture and registration differ. Build in the provider account that will run
+the workspaces. A provider's stock Ubuntu 24.04 image is accepted only if its
+`/etc/cloud/build.info` serial matches the lock. The guard refuses any other serial
+and a missing file, and Vultr's stock image has no `build.info`. DigitalOcean and
+Vultr builders therefore boot an import of the **verified pinned cloud image**.
 
-| Provider | Builder | Capture | `ProviderImageId` |
-| --- | --- | --- | --- |
-| Hetzner | Server without volumes | Server snapshot after power-off | numeric image ID |
-| DigitalOcean | Droplet without volumes, or import the pinned `.img` as a custom image and boot it | Droplet snapshot after power-off | numeric image ID of the snapshot |
-| Vultr | Instance without block storage | Instance snapshot after power-off | snapshot UUID |
+| Provider | Base image input | Builder | Capture | `ProviderImageId` |
+| --- | --- | --- | --- | --- |
+| Hetzner | Stock Ubuntu 24.04 x64 image only when its serial matches the lock | Server without volumes | Server snapshot after power-off | numeric image ID |
+| DigitalOcean | Verified pinned QCOW2 imported as a custom image (`distribution` Ubuntu) | Droplet from that custom image, without volumes | Droplet snapshot after power-off | numeric image ID of the snapshot |
+| Vultr | Pinned RAW derived from the verified QCOW2, imported as a snapshot from URL | Instance from that snapshot, without block storage | Instance snapshot after power-off | snapshot UUID |
+
+#### Verify and derive the provider import file
+
+First run the [pinned download](#retrieving-the-pinned-ubuntu-base-image). Then, on the
+operator workstation, in this directory (Python 3.11+, and `qemu-img` from `qemu-utils`
+for Vultr), check the file against the lock before any upload:
+
+```sh
+python3 -B image/base_image.py verify-qcow2 ubuntu-24.04-server-cloudimg-amd64.img
+# Vultr only: derive the RAW disk. About 3.5 GiB, sparse on most filesystems.
+python3 -B image/base_image.py raw ubuntu-24.04-server-cloudimg-amd64.img ubuntu-24.04-20251001-amd64.raw
+```
+
+`base_image.py` makes no provider or network calls. It refuses a symlink, a size or
+SHA-256 mismatch with `os.size`/`os.sha256`, a non-QCOW2 header, a QCOW2 backing file
+or encryption, a virtual size other than `os.raw.size`, and an existing output. The RAW
+is converted in a private staging directory next to the output and published only if
+it matches `os.raw.size` and `os.raw.sha256`. That digest is the guest-visible disk of
+the pinned QCOW2. It was derived with `qemu-img convert` and confirmed by an independent
+QCOW2 decoder, so it does not depend on the `qemu-img` version. Each command prints
+a JSON attestation with the serial and both digests. Keep that attestation with the
+build record. Never edit the lock to match a different result.
+
+#### Import the base image
+
+Upload only the verified file to HTTPS object storage that you control. Prefer a
+short-lived pre-signed URL. Treat that URL as a secret: keep it out of issues, logs and
+shell history, and delete the object once the import finishes. Providers do not check
+the digest during import. Don't import from the Canonical URL, because it can redirect
+to plain HTTP. The builder's serial guard is the in-guest check that the pinned image
+booted.
+
+**DigitalOcean.** Import the QCOW2 in the region that will build and run workspaces,
+for example
+`doctl compute image create t3-base-20251001 --image-url "$URL" --region <region> --image-distribution Ubuntu`,
+or upload it from the control panel. Wait for the image status `available`. Create the
+builder droplet from it with an SSH key and no volumes. DigitalOcean requires an SSH key
+for custom images and documents that NoCloud listed before ConfigDrive breaks droplets.
+Before running `build.py`, confirm on the builder that `cloud-init status --long`
+completed, `cloud-id` reports `digitalocean` or `configdrive`, and the key was injected.
+Otherwise stop and destroy the builder. Delete the base custom image and the uploaded
+object when the workspace snapshot is registered.
+
+**Vultr.** Run
+`vultr-cli snapshot create-url --url "$URL" --description t3-base-20251001` and omit
+`--uefi`. Wait for the status `complete`. Create the builder instance from that snapshot
+without block storage. Before running `build.py`, confirm on the builder that
+`cloud-init status --long` completed, `cloud-id` reports `vultr`, and
+`/etc/cloud/build.info` reports serial `20251001`. Otherwise stop and destroy the
+builder. Delete the base snapshot and the uploaded object when the workspace snapshot
+is registered.
+
+Then run the disposable-builder commands above, power off, and capture.
+
+#### Register the captured image
+
+Before registration, confirm that the provider reports the captured image as an
+available x86 Ubuntu snapshot. The worker refuses anything else. On DigitalOcean,
+`doctl compute image get <id>` must show the distribution `Ubuntu`. On Vultr, the
+snapshot's `os_id` from `vultr-cli snapshot get <id>` must map to `family` `ubuntu`
+and `arch` `x64` in `vultr-cli os list`. If an imported lineage reports any other OS
+or an unknown one, stop. Don't relabel or spoof it. Live qualification of both import
+paths is tracked in #32.
 
 Each `DevelopmentWorkspaces:Images:<image-key>` entry names exactly one
 `ProviderAccountId` and `ProviderImageId`. Register one image key per provider account
 (for example `t3-connect-2026-11-hetzner`, `…-digitalocean`, `…-vultr`) with the same
-`ManifestSha256`, and list the regions where the image is available in `AllowedRegions`
-(DigitalOcean and Vultr snapshots are regional; transfer them first if needed). Copy the
+`ManifestSha256`, and list the regions where the image is available in `AllowedRegions`.
+DigitalOcean custom images and snapshots are regional; transfer them first if needed.
+Vultr snapshots span all regions. Copy the
 installed manifest's `agents` array into the entry's `Agents` so the API, CLI and
 dashboard show what the image contains:
 
