@@ -1819,7 +1819,9 @@ class Helper:
 
     def collect_garbage(self):
         """Removes scratch for vanished checkouts and stale staging; only after a complete scan."""
-        if self.truncated or any(repo.git_failed for repo in self.repos.values()):
+        # A malformed marker identifies a target by hash, but cannot identify its orphan scratch.
+        if self.invalid_inhibitions or self.truncated or \
+                any(repo.git_failed for repo in self.repos.values()):
             return
         known = {repo.id: repo for repo in self.repos.values()}
         for identifier in sorted(os.listdir(self.scratch_fd)):
@@ -1873,7 +1875,8 @@ class Helper:
                     self.in_use(self.repo_path(repo.components)):
                 continue
             for relative, candidate in repo.candidates.items():
-                if candidate.mounted or repo.ignored.get(relative) is not True or \
+                if self.overlaps_inhibition(self.repo_path(repo.components + relative)) or \
+                        candidate.mounted or repo.ignored.get(relative) is not True or \
                         relative[-1] not in ALLOWLIST or self.sys.uid(candidate.info) != self.uid:
                     continue
                 try:
