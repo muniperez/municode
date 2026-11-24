@@ -15,7 +15,10 @@ sign-in and exactly matching origins in `Console:BaseUrl`,
   own initial migration and model snapshot. This setup is for fresh installations.
 - Configure a separate Kratos instance with its own storage, cookie names, and
   secrets. Use the supplied [identity schema](identity.schema.json) as the default
-  `user` schema and enable password sign-in. Configure the public base URL as
+  `user` schema and enable password sign-in. To offer passkeys, also enable
+  Kratos's `passkey` method with `rp.id` set to the dashboard host name and
+  `rp.origins` set to exactly `Kratos:DashboardOrigin`, and set
+  `Kratos:PasskeyEnabled=true` on the API. Configure the public base URL as
   the private endpoint reachable by the API, keep the admin URL private, and
   allow the Workspaces console as a browser return origin. The Kratos
   `session.lifespan` must cover the longest configured Workspaces idle window

@@ -178,6 +178,9 @@ services:
       SELFSERVICE_FLOWS_ERROR_UI_URL: ${CONSOLE_URL:?set CONSOLE_URL}/sign-in
       SELFSERVICE_FLOWS_LOGIN_UI_URL: ${CONSOLE_URL:?set CONSOLE_URL}/sign-in
       SELFSERVICE_FLOWS_SETTINGS_UI_URL: ${CONSOLE_URL:?set CONSOLE_URL}/settings/account
+      SELFSERVICE_METHODS_PASSKEY_ENABLED: ${WORKSPACES_PASSKEYS_ENABLED:-true}
+      SELFSERVICE_METHODS_PASSKEY_CONFIG_RP_ID: ${CONSOLE_HOSTNAME:?set CONSOLE_HOSTNAME}
+      SELFSERVICE_METHODS_PASSKEY_CONFIG_RP_ORIGINS: ${CONSOLE_URL:?set CONSOLE_URL}
     env_file:
       - ${WORKSPACES_SECRETS_DIR:?set WORKSPACES_SECRETS_DIR}/kratos.env
     volumes:
@@ -261,6 +264,7 @@ services:
       Kratos__PublicBaseUrl: http://kratos:4433/
       Kratos__AdminBaseUrl: http://kratos:4434/
       Kratos__DashboardOrigin: ${CONSOLE_URL:?set CONSOLE_URL}
+      Kratos__PasskeyEnabled: ${WORKSPACES_PASSKEYS_ENABLED:-true}
       GitHub__ApiUrl: ${API_URL:?set API_URL}
       Bootstrap__InstallationId: ${WORKSPACES_INSTALLATION_ID:?set WORKSPACES_INSTALLATION_ID}
     secrets:

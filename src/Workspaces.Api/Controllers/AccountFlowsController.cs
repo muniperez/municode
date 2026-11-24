@@ -182,7 +182,13 @@ public sealed class AccountFlowsController(
             return (null, EndpointResults.Problem("forbidden", "This identity is not admitted to this instance.", 403));
         // Login applies the explicit sign-in choice; settings keeps the current session's choice; recovery is standard.
         var remembered = false;
-        if (kind == "login")
+        if (kind == "login" && keepSignedIn is null && principal is { IsDashboardUser: true, BrowserSessionId: { } signedInId } &&
+            principal.UserId == user.Id)
+        {
+            // Re-authentication of the signed-in user (privileged settings) keeps the current session's choice.
+            remembered = (await sessions.FindByIdAsync(signedInId, cancellationToken))?.Persistent == true;
+        }
+        else if (kind == "login")
         {
             remembered = keepSignedIn == true && sessions.Policy.KeepSignedInEnabled;
             if (keepSignedIn is not null && user.KeepSignedIn != keepSignedIn.Value)

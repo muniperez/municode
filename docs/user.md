@@ -5,6 +5,18 @@ one-time installation setup; subsequent users receive access from an organizatio
 owner or admin. Keep the console and API on their HTTPS origins and do not copy
 session cookies or API keys into files, command history or support reports.
 
+## Passkeys
+
+When your operator enables passkeys, open **Settings → Account** and choose
+**Add passkey** to save one with this device's screen lock, a phone or a
+security key. Then choose **Sign in with passkey** on the sign-in page. Your
+password keeps working, and a canceled passkey prompt leaves the password form
+available. The same account settings list your passkeys and remove them; the
+last remaining sign-in method cannot be removed. Adding or removing a passkey,
+like changing your password, may first ask you to confirm it's you and then
+signs out your other browser sessions. Passkey sign-in also approves `workspaces
+login` requests from the CLI.
+
 ## Dashboard
 
 The packaged dashboard is a static client of the standalone API. It lists

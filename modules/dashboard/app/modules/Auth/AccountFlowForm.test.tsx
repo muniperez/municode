@@ -216,7 +216,6 @@ describe("account browser forms", () => {
 
   it.each([
     [410, "auth_flow_expired", "This form expired. Restart to try again."],
-    [403, "session_refresh_required", "Log out and sign in again before updating account settings."],
     [503, "auth_unavailable", "Account service is unavailable. Retry when it is available."]
   ])("shows an actionable settings error for %s without replaying the password", async (status, code, message) => {
     const flow = browserFlow("settings");

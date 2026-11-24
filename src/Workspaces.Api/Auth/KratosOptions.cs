@@ -9,6 +9,8 @@ public sealed class KratosOptions
     public string DashboardOrigin { get; set; } = "";
     public bool GoogleEnabled { get; set; }
     public bool EmailRecoveryEnabled { get; set; }
+    /// <summary>Whether Kratos enables the dedicated passkey method for this dashboard origin.</summary>
+    public bool PasskeyEnabled { get; set; }
 }
 
 public sealed class KratosUnavailableException() : Exception("The identity service is temporarily unavailable.");
