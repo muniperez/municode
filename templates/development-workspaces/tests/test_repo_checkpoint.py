@@ -280,6 +280,40 @@ class CheckpointTests(unittest.TestCase):
         with self.assertRaisesRegex(rc.Failed, "missing or corrupt"):
             rc.verify(self.store, BINDING, deep=True)
 
+    def test_compare_tree_proves_a_restore_and_detects_any_difference(self):
+        self.make_app()
+        result = self.save()
+        self.restore("copy", BINDING)
+        copy = self.base / "copy"
+        proof = rc.compare_tree(self.store, str(copy), BINDING, result["checkpointId"], deep=True)
+        self.assertEqual(len(json.loads(Path(self.store, "manifests", result["checkpointId"] + ".json")
+                                        .read_bytes())["entries"]), proof["entries"])
+        edited = copy / "app" / "untracked.txt"
+        stamp = edited.stat().st_mtime_ns
+        edited.write_text("NEW\n")  # Same size and mtime: only the deep hash sees it.
+        os.utime(edited, ns=(stamp, stamp))
+        rc.compare_tree(self.store, str(copy), BINDING, result["checkpointId"])
+        with self.assertRaisesRegex(rc.Failed, "differs"):
+            rc.compare_tree(self.store, str(copy), BINDING, result["checkpointId"], deep=True)
+        edited.write_text("new\n")
+        os.utime(edited, ns=(stamp, stamp))
+        parent = (copy / "app").stat().st_mtime_ns
+        for change, undo in ((lambda: (copy / "app" / "extra").write_text("x"),
+                              lambda: (copy / "app" / "extra").unlink()),
+                             (lambda: (copy / "app" / "run.sh").chmod(0o644),
+                              lambda: (copy / "app" / "run.sh").chmod(0o755)),
+                             (lambda: (copy / "app" / "link").unlink(),
+                              lambda: (copy / "app" / "link").symlink_to("run.sh"))):
+            change()
+            os.utime(copy / "app", ns=(parent, parent))
+            with self.subTest(change=change), self.assertRaisesRegex(rc.Failed, "differs"):
+                rc.compare_tree(self.store, str(copy), BINDING, result["checkpointId"])
+            undo()
+            os.utime(copy / "app", ns=(parent, parent))
+        rc.compare_tree(self.store, str(copy), BINDING, result["checkpointId"], deep=True)
+        with self.assertRaisesRegex(rc.Failed, "another workspace volume"):
+            rc.compare_tree(self.store, str(copy), dict(BINDING, providerVolumeId="other"), result["checkpointId"])
+
     def test_status_distinguishes_empty_from_missing_or_corrupt_pointer(self):
         self.assertEqual("empty", rc.status(self.store)["state"])
         (self.source / "file.txt").write_text("data\n")

@@ -946,9 +946,9 @@ rejects unknown fields.
 VM disk and checkpoints them to the retained volume. The image installs both. The worker
 requests layout 2 only for primary volumes it creates while
 `DevelopmentWorkspaceWorker:LocalCheckouts` is `true` (default `false`). The layout is stored on
-the workspace, so flipping the option never converts an existing volume. Existing
-workspaces, layouts and scratch behavior do not change. Backup changes and migration are
-later PRs.
+the workspace, so flipping the option never converts an existing volume on its own. Existing
+layout 1 volumes move to layout 2 only through the explicit
+[migration](#migrating-layout-1-volumes) (`MigrateExistingCheckouts`, also off by default).
 
 The engine copies a source tree (by default `/workspace/repos`) to a root-owned store at
 `/workspace/.workspaces-checkpoints` (mode 0700):
@@ -1020,7 +1020,7 @@ With `"storageLayout": 2` in the runtime configuration (primary only):
   local directory must be on a separate ext4, xfs or btrfs filesystem.
 * The volume's own `repos` directory is only an empty root-owned 0555 mountpoint. If the
   mount is ever missing, nothing can clone underneath it. Bootstrap refuses old-layout data
-  in it; migration is a later PR.
+  in it, except through the [migration](#migrating-layout-1-volumes).
 * The root-only `/workspace/.workspaces-layout.json` binds the volume to layout 2. An older
   layout refuses such a volume, and the scratch relocation units exit as disabled. A new
   marker is created only when the volume has no checkouts and no checkpoint store. It
@@ -1093,6 +1093,59 @@ Run the engine checks with:
 TMPDIR=$PWD/.local/artifacts/tmp python3 -B -m unittest discover \
   -s templates/development-workspaces/tests -p test_repo_checkpoint.py -v
 ```
+
+#### Migrating layout 1 volumes
+
+With both `DevelopmentWorkspaceWorker:LocalCheckouts` and
+`DevelopmentWorkspaceWorker:MigrateExistingCheckouts` set to `true` (both default `false`),
+the worker migrates an existing layout 1 primary volume on its next start. It decides this
+once, before bootstrap, and sends `"storageLayout": 2, "migrateStorageLayout": true` on
+every retry of that start. New volumes are not migrated; they start in layout 2. The image
+must include the migration; an older runtime rejects the unknown key and the start fails
+closed in layout 1.
+
+Bootstrap runs the migration after the volume is mounted and before anything can write to
+it, so T3, tasks and folder jobs never run during it:
+
+1. Preconditions: `/workspace/repos` is a non-empty directory, there is no checkpoint store
+   and no layout marker, and the VM disk has no checkout tree. Scratch mounts are detached
+   first. If an interrupted scratch relocation is still unresolved
+   (`.workspaces-scratch-trash`), the migration is refused. An empty volume needs no
+   migration and starts layout 2 with an empty tree.
+2. A root-only journal (`/workspace/.workspaces-layout-migration.json`) records `started`.
+3. The old tree is saved as the volume's first checkpoint, under a writer fence, with the
+   same rules as any save: scratch-allowlisted outputs are omitted and external references
+   are reported. The checkpoint is deep-verified (every hash), restored to the VM disk, and
+   the restored tree is compared with the manifest, rehashing every file.
+4. Cutover: the journal records `cutover` with the measurements, then the layout marker is
+   written with the checkpoint as the volume's first one. From here the volume is layout 2.
+5. The old tree is renamed to `.workspaces-layout-migration-old` (journal `detached`), the
+   VM-disk tree is mounted at `/workspace/repos`, and only then is the old tree deleted.
+
+Before the marker is written, the old tree is never modified. Any failure (a changing tree,
+a full disk, a restore or comparison mismatch) removes only the migration's own outputs and
+reports `Storage layout migration failed and was rolled back: …`. So does a crash: the next
+bootstrap rolls back an unfinished migration whether or not it still asks for one. After
+cutover, the migration is never rolled back. A crash then is finished by the next bootstrap,
+which detaches and deletes the old tree. The worker records layout 2 only after a Ready
+bootstrap with the request. If the option is turned off after a guest cutover, the guest
+refuses the layout 1 configuration until it is turned back on.
+
+The BootstrapReady receipt carries `storageLayoutMigration`: the checkpoint ID and manifest
+hash, files, bytes, bytes written, peak store growth, omitted, skipped and external reference
+counts, save, verify, restore and compare times, restored entries, unmounted scratch mounts,
+and `writersBlockedMs` (the time from the start of the migration to the cutover).
+
+Risks:
+
+* The volume temporarily needs room for a second copy of the checkouts (the store), minus
+  omitted outputs. A full volume fails the save and rolls back.
+* Bootstrap allows 600 s for the runtime. A large first save on a slow network volume, with
+  the deep verify and compare, can approach it. The worker's bootstrap command times out
+  after 75 s and the VM is shown blocked meanwhile, but the runtime keeps working and the
+  retried step converges.
+* Live measurements on a real retained volume are still pending; the local figures above
+  are the only ones so far.
 
 ### Confirmed checkout deletion
 

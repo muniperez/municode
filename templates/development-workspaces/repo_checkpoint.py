@@ -1235,6 +1235,82 @@ def adopt(store_path, source_volume, binding, operation_id, expected=None, clock
         store.unlock()
 
 
+def compare_tree(store_path, root, binding, checkpoint_id, deep=False):
+    """Prove that a restored tree is exactly a retained checkpoint of this volume.
+
+    Every path, type, mode, size, modification time and symlink target must match the manifest,
+    with nothing extra or missing and no other filesystem inside. deep also rereads every file and
+    checks its hash. Ownership is not compared: restore assigns it. Raises Failed on a difference."""
+    binding = validate_binding(binding)
+    store = Store(store_path)
+    if not store.prepare(create=False):
+        raise Failed("No completed checkpoint")
+    store.lock(LOCK_SECONDS)
+    try:
+        manifest, _ = store.select(checkpoint_id)
+    finally:
+        store.unlock()
+    if not same_volume(manifest["binding"], binding):
+        raise Failed("Checkpoint belongs to another workspace volume")
+    expected = manifest["entries"]
+
+    def require_same(condition):
+        if not condition:
+            raise Failed("Restored checkout differs from its checkpoint")
+
+    try:
+        root_fd = os.open(root, DIRECTORY)
+    except OSError as error:
+        raise Failed("Restored checkout is unavailable") from error
+    info = os.fstat(root_fd)
+    device = info.st_dev
+    stack = [(root_fd, "")]
+    seen = files = 0
+    try:
+        require_same(stat.S_IMODE(info.st_mode) == safe_mode(manifest["root"]["mode"]) and
+                     info.st_mtime_ns == manifest["root"]["mtimeNs"])
+        while stack:
+            fd, prefix = stack.pop()
+            try:
+                for name in os.listdir(fd):
+                    path = prefix + name
+                    entry = expected.get(path)
+                    require_same(isinstance(entry, dict))
+                    info = os.lstat(name, dir_fd=fd)
+                    seen += 1
+                    kind = entry.get("type")
+                    if kind == "symlink":
+                        require_same(stat.S_ISLNK(info.st_mode) and os.readlink(name, dir_fd=fd) == entry["target"])
+                        continue
+                    require_same(kind in ("dir", "file") and info.st_dev == device and
+                                 stat.S_IMODE(info.st_mode) == safe_mode(entry["mode"]) and
+                                 info.st_mtime_ns == entry["mtimeNs"])
+                    if kind == "dir":
+                        require_same(stat.S_ISDIR(info.st_mode))
+                        stack.append((os.open(name, DIRECTORY, dir_fd=fd), path + "/"))
+                        continue
+                    require_same(stat.S_ISREG(info.st_mode) and info.st_size == entry["size"])
+                    files += 1
+                    if deep:
+                        digest = hashlib.sha256()
+                        source = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+                        try:
+                            for chunk in iter(lambda: os.read(source, CHUNK), b""):
+                                digest.update(chunk)
+                        finally:
+                            os.close(source)
+                        require_same(digest.hexdigest() == entry["sha256"])
+            finally:
+                os.close(fd)
+        require_same(seen == len(expected))
+    except OSError as error:
+        raise Failed("Restored checkout is unreadable") from error
+    finally:
+        for fd, _ in stack:
+            os.close(fd)
+    return dict(checkpointId=manifest["checkpointId"], entries=seen, files=files)
+
+
 def status(store_path):
     """Pointer and last-attempt state. "empty" means no checkpoint was ever published."""
     store = Store(store_path)
