@@ -128,6 +128,12 @@ jobs:
           python3 -B "$dashboard_probe" --console-url "$console_url" \
             --api-origin https://api.localhost \
             --source-url https://github.com/muniperez/municode
+      - name: Browser-test the dashboard workspace flows
+        working-directory: modules/dashboard
+        env:
+          # The runner image ships Google Chrome, so no browser download is needed.
+          PLAYWRIGHT_CHANNEL: chrome
+        run: npm exec --yes --package=playwright@1.61.0 -- node ../../scripts/dashboard-browser-acceptance.mjs
 
   images:
     runs-on: ubuntu-24.04

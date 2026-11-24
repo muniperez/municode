@@ -124,3 +124,19 @@ node scripts/workspace-browser-acceptance.mjs
 The synthetic suite covers provisioning, enrollment, relay, persistence, deletion, Git recovery
 and guest protocols. The prepared-image documentation describes the separate native image
 qualification, including real mounts, systemd, T3 and provider network behavior.
+
+The dashboard browser acceptance drives the built dashboard against a stateful, credential-free
+mock of the workspace API at desktop, 390 px and 320 px widths. It covers the list, filters,
+details and direct links; create with its single automatic start and idempotent retry; startup,
+T3 and preview launch, stop and revisit; temporary VMs, Git-save recovery, discard and stop all;
+stale generations, rejected and expired launches; the read-only role; and empty, unavailable and
+refresh-error states. It fails on any unexpected request, mutation or external origin. CI runs
+it with the runner's Google Chrome (`PLAYWRIGHT_CHANNEL=chrome`); locally, reuse the Chromium
+shell installed above. Screenshots go to `.local/artifacts/dashboard-browser`.
+
+```sh
+npm ci --prefix modules/dashboard
+npm run build --prefix modules/dashboard
+cd modules/dashboard
+npm exec --package=playwright@1.61.0 -- node ../../scripts/dashboard-browser-acceptance.mjs
+```
