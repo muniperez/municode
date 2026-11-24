@@ -45,6 +45,8 @@ class FakeLinux:
         self.launches = 0
         self.ambiguous = False
         self.on_freeze = None
+        self.checkpoint_error = None
+        self.checkpoints = 0
 
     def mount(self, claim):
         self.events.append("mount")
@@ -129,6 +131,19 @@ class FakeLinux:
 
     def attach_repos(self, restore=True):
         self.events.append("attach-repos")
+
+    def checkpoint_repos(self, operation):
+        self.events.append("repos-checkpoint")
+        rt.require(self.frozen and not self.ro and self.mounted, "Checkpoint needs a fenced writable volume")
+        if self.checkpoint_error:
+            raise rt.Blocked("Final checkout checkpoint failed: " + self.checkpoint_error)
+        self.checkpoints += 1
+        return dict(checkpointId="c-%020d-%016x" % (self.checkpoints, self.checkpoints),
+                    manifestSha256="a" * 64, operationId=operation, binding={}, files=1, bytes=1, durationMs=1)
+
+    def verify_checkpoint(self, checkpoint, operation):
+        self.events.append("repos-checkpoint-verify")
+        rt.require(checkpoint["operationId"] == operation and self.mounted, "Final checkout checkpoint is not verifiable")
 
 
 class ManagedT3StopTests(unittest.TestCase):
@@ -946,6 +961,70 @@ class RuntimeTests(unittest.TestCase):
         self.assertLess(events.index("readonly"), events.index("unmount"))
         self.assertNotIn("scratch-resume", events)
 
+    def local_primary(self):
+        runtime = self.primary()
+        runtime.c["storageLayout"] = 2
+        return rt.Runtime(runtime.c, self.root / "local-state", self.adapter, self.g)
+
+    def test_local_checkouts_stop_saves_final_checkpoint_after_writers_stop_and_binds_it(self):
+        self.runtime = self.local_primary()
+        self.request("bootstrap")
+        events = self.adapter.events
+        del events[:]
+        receipt = self.request("quiesce")
+        self.assertEqual(2, receipt["storageLayout"])
+        self.assertEqual("operation-a", receipt["checkpoint"]["operationId"])
+        self.assertEqual(receipt["checkpoint"], self.runtime.s["reposCheckpoint"])
+        self.assertEqual(1, events.count("repos-checkpoint"))
+        self.assertLess(events.index("stop-services"), events.index("repos-checkpoint"))
+        self.assertLess(max(i for i, event in enumerate(events[:events.index("repos-checkpoint")])
+                            if event == "t3-proof"), events.index("repos-checkpoint"))
+        self.assertLess(events.index("repos-checkpoint"), events.index("readonly"))
+        self.assertLess(events.index("readonly"), events.index("unmount"))
+        self.assertNotIn("scratch-suspend", events)
+        self.assertEqual("ReceiptValid", self.request("receipt-validate", receiptId=receipt["receiptId"])["type"])
+        self.assertEqual(receipt, self.request("quiesce"))
+        self.assertEqual(1, self.adapter.checkpoints)
+        # A receipt without the checkpoint never validates.
+        self.runtime.s["receipts"]["operation-a"] = dict(receipt, checkpoint=None)
+        self.assert_blocked("receipt-validate", "final checkout checkpoint", receiptId=receipt["receiptId"])
+
+    def test_local_checkpoint_failure_keeps_the_vm_and_its_files_and_resume_forgets_it(self):
+        self.runtime = self.local_primary()
+        self.request("bootstrap")
+        self.adapter.checkpoint_error = "Checkpoint destination is full"
+        self.assert_blocked("quiesce", "destination is full")
+        self.assertEqual("repos-checkpoint", self.runtime.diagnostic_stage)
+        for event in ("readonly", "unmount"):
+            self.assertNotIn(event, self.adapter.events)
+        self.assertTrue(self.adapter.mounted)
+        self.assertEqual("Frozen", self.runtime.s["phase"])
+        self.assertNotIn("reposCheckpoint", self.runtime.s)
+        self.request("resume", deletionNotCommitted=True)
+        self.assertEqual("Ready", self.runtime.s["phase"])
+        self.adapter.checkpoint_error = None
+        self.assertEqual("operation-b", self.request("quiesce", operation="operation-b")["checkpoint"]["operationId"])
+
+    def test_local_checkpoint_retry_after_readonly_verifies_instead_of_saving_again(self):
+        self.runtime = self.local_primary()
+        self.request("bootstrap")
+        with patch.object(self.adapter, "verify_fence", side_effect=rt.Blocked("Workspace no longer read-only")):
+            self.assert_blocked("quiesce", "read-only")
+        self.assertTrue(self.adapter.ro)
+        saved = self.runtime.s["reposCheckpoint"]
+        del self.adapter.events[:]
+        receipt = self.request("quiesce")
+        self.assertEqual(saved, receipt["checkpoint"])
+        self.assertEqual(1, self.adapter.checkpoints)
+        self.assertIn("repos-checkpoint-verify", self.adapter.events)
+        self.assertNotIn("repos-checkpoint", self.adapter.events)
+        # Resuming drops the binding: writers may change the tree before the next stop.
+        self.runtime.s.update(phase="Frozen")
+        self.runtime.s["receipts"] = {}
+        self.adapter.mounted = True
+        self.request("resume", deletionNotCommitted=True)
+        self.assertNotIn("reposCheckpoint", self.runtime.s)
+
     def test_scratch_detach_failure_keeps_volume_mounted_and_resume_reestablishes(self):
         self.runtime = self.primary()
         self.request("bootstrap")
@@ -1375,7 +1454,74 @@ class LocalCheckoutTests(unittest.TestCase):
                 self.assertRaisesRegex(rt.Blocked, "must not use the retained volume"):
             adapter.local_root()
 
-    def test_runtime_bootstrap_attaches_before_ready_and_stop_is_blocked_before_any_fence(self):
+    def test_final_checkpoint_on_the_real_engine_restores_on_a_replacement_vm(self):
+        local = self.root / "vm-a"
+        adapter = self.adapter(local)
+        self.attach(adapter)
+        (local / "repos/project").mkdir()
+        (local / "repos/project/edit.txt").write_text("final uncommitted edit")
+        checkpoint = adapter.checkpoint_repos("stop-1")
+        self.assertEqual(("stop-1", 3, 3), (checkpoint["operationId"], checkpoint["binding"]["generation"],
+                                             checkpoint["binding"]["writerGeneration"]))
+        adapter.verify_checkpoint(checkpoint, "stop-1")
+        with self.assertRaisesRegex(rt.Blocked, "not taken by this operation"):
+            adapter.verify_checkpoint(checkpoint, "stop-2")
+        rc.save(str(local / "repos"), str(self.workspace / rt.CHECKPOINT_STORE), adapter.repos_binding(),
+                str(local / "repos.lineage.json"), fenced=True, operation_id="later")
+        with self.assertRaisesRegex(rt.Blocked, "no longer the current checkpoint"):
+            adapter.verify_checkpoint(checkpoint, "stop-1")
+        replacement = self.root / "vm-b"
+        restored = self.attach(self.adapter(replacement, vmId="vm-b", generation=4))
+        self.assertEqual("restored", restored["action"])
+        self.assertEqual("final uncommitted edit", (replacement / "repos/project/edit.txt").read_text())
+
+    def test_readonly_and_writable_cover_the_checkout_mount(self):
+        adapter = rt.Linux(self.config)
+        commands = []
+        repos = str(self.workspace / "repos")
+        with patch.object(adapter, "probe_volume", return_value="/dev/sdb"), \
+                patch.object(adapter, "verify_owner"), patch.object(adapter, "verify_repos_mount") as verify, \
+                patch.object(rt.os, "sync"), patch.object(rt.os.path, "ismount", return_value=True), \
+                patch.object(rt, "run", side_effect=lambda argv, **kwargs: commands.append(argv) or
+                             ("/dev/sdb" if "SOURCE" in argv else "ro" if "OPTIONS" in argv else "")):
+            adapter.readonly()
+            remounts = [argv for argv in commands if argv[:2] == ["mount", "-o"]]
+            self.assertEqual([["mount", "-o", "remount,bind,ro,nodev,nosuid", repos],
+                              ["mount", "-o", "remount,ro", str(self.workspace)]], remounts)
+            self.assertEqual(False, verify.call_args.kwargs["writable"])
+            del commands[:]
+            with patch.object(rt, "run", side_effect=lambda argv, **kwargs: commands.append(argv) or "rw"):
+                adapter.writable()
+            self.assertEqual(["mount", "-o", "remount,bind,rw,nodev,nosuid", repos], commands[-1])
+        with patch.object(adapter, "probe_volume"), patch.object(adapter, "verify_owner"), \
+                patch.object(rt.os.path, "ismount", return_value=False), \
+                patch.object(rt, "run", return_value="rw"), \
+                patch.object(adapter, "attach_repos") as attach:
+            adapter.writable()
+        attach.assert_called_once_with(restore=False)
+
+    def test_checkout_mount_is_writable_and_visible_to_t3_tasks_and_folder_jobs(self):
+        unit = (Path(__file__).parents[1] / "systemd/workspaces-t3.service").read_text().splitlines()
+        values = lambda key: " ".join(line.split("=", 1)[1] for line in unit if line.startswith(key + "="))
+        # T3 cannot start before the mount unit has verified the checkout mount.
+        for key in ("Requires", "After"):
+            self.assertIn("workspaces-workspace-mount.service", values(key).split())
+        # ReadWritePaths= applies recursively to the mounts below it at unit start.
+        self.assertIn("/workspace", values("ReadWritePaths").split())
+        adapter = rt.Linux(dict(self.config, workspace="/workspace"))
+        commands = []
+        with patch.object(rt, "run", side_effect=lambda argv, **kwargs: commands.append(argv)):
+            adapter.launch("task", ["true"])
+            payload = dict(mode="delete", workspace="/workspace", path=["repos", "project"], localRepos=True,
+                           vmId="vm-a", generation=3)
+            with patch.object(adapter, "filesystem_prepare") as prepare:
+                adapter.filesystem_launch("job", payload, self.root / "out")
+            prepare.assert_not_called()
+        self.assertIn("--property=ReadWritePaths=/workspace -" + rt.SCRATCH_ROOT, commands[0])
+        writable = [arg for arg in commands[1] if arg.startswith("--property=ReadWritePaths=")]
+        self.assertIn("-/workspace/repos", writable[0].split("=", 2)[2].split())
+
+    def test_runtime_bootstrap_attaches_before_ready(self):
         fake = FakeLinux()
         config = dict(self.config, uid=2000, gid=2000,
                       volume=dict(device="/dev/disk/by-id/fake", providerDeviceId="fake",
@@ -1386,11 +1532,7 @@ class LocalCheckoutTests(unittest.TestCase):
                        t3SnapshotSequence=0)
         runtime.handle(dict(request, operationId="boot", action="bootstrap"))
         self.assertEqual(["mount", "layout", "attach-repos"], fake.events)
-        with self.assertRaisesRegex(rt.Blocked, "final checkpoint"):
-            runtime.handle(dict(request, operationId="stop", action="quiesce"))
-        self.assertEqual(["mount", "layout", "attach-repos"], fake.events)
         self.assertEqual("Ready", runtime.s["phase"])
-        self.assertNotIn("fenceOperation", runtime.s)
         for change in (dict(kind="ephemeral", volume=None, ignoredDataAcknowledged=True),
                        dict(storageLayout=3), dict(storageLayout=True)):
             with self.subTest(change=change), self.assertRaises(rt.Blocked):

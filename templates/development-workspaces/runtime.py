@@ -934,7 +934,7 @@ class Linux:
                     filesystemUuid=claim["filesystemUuid"], vmId=self.config["vmId"],
                     generation=self.config["generation"], writerGeneration=self.config["generation"])
 
-    def verify_repos_mount(self):
+    def verify_repos_mount(self, writable=True):
         mountpoint = self.workspace / "repos"
         require(os.path.ismount(mountpoint), "Checkout mount is missing")
         live = os.stat(mountpoint, follow_symlinks=False)
@@ -942,7 +942,8 @@ class Linux:
         require((live.st_dev, live.st_ino) == (local.st_dev, local.st_ino) and
                 live.st_dev != os.stat(self.workspace).st_dev, "Checkout mount is not the VM-disk checkout tree")
         options = run(["findmnt", "-rn", "-M", str(mountpoint), "-o", "OPTIONS"], timeout=5).split(",")
-        require("rw" in options and "nodev" in options and "nosuid" in options,
+        require((writable is None or ("rw" if writable else "ro") in options) and
+                "nodev" in options and "nosuid" in options,
                 "Checkout mount options are unsafe")
 
     def local_root(self):
@@ -1018,6 +1019,38 @@ class Linux:
             run(["umount", str(mountpoint)], timeout=30)
             raise
         return result
+
+    def checkpoint_repos(self, operation):
+        """Fenced final checkpoint of the VM-disk checkout tree into the retained volume.
+
+        Runs as root after every writer stopped; Git classification inside the engine drops to the
+        coding user in this process's cgroup, never in the frozen work slice."""
+        import repo_checkpoint as checkpoints
+        self.verify_repos_mount()
+        root = self.local_root()
+        try:
+            result = checkpoints.save(str(root / "repos"), str(self.workspace / CHECKPOINT_STORE),
+                                      self.repos_binding(), str(root / "repos.lineage.json"),
+                                      fenced=True, operation_id=operation)
+        except (checkpoints.Failed, checkpoints.Deferred) as error:
+            raise Blocked("Final checkout checkpoint failed: " + error.reason) from error
+        checkpoint = dict(checkpointId=result["checkpointId"], manifestSha256=result["manifestSha256"],
+                          operationId=operation, binding=result["binding"], files=result["files"],
+                          bytes=result["bytes"], durationMs=result["durationMs"])
+        self.verify_checkpoint(checkpoint, operation)
+        return checkpoint
+
+    def verify_checkpoint(self, checkpoint, operation):
+        """The final checkpoint is complete, bound to this writer and still the current one."""
+        import repo_checkpoint as checkpoints
+        store = str(self.workspace / CHECKPOINT_STORE)
+        try:
+            found = checkpoints.verify(store, self.repos_binding(), checkpoint["checkpointId"], operation)
+        except checkpoints.Failed as error:
+            raise Blocked("Final checkout checkpoint is not verifiable: " + error.reason) from error
+        require(found["manifestSha256"] == checkpoint["manifestSha256"] and
+                checkpoints.status(store).get("checkpointId") == checkpoint["checkpointId"],
+                "Final checkout checkpoint is no longer the current checkpoint")
 
     def mount(self, claim):
         device = self.probe_volume(claim)
@@ -1241,6 +1274,12 @@ class Linux:
              str(self.workspace)])
         require("rw" in run(["findmnt", "-rn", "-M", str(self.workspace), "-o", "OPTIONS"]).split(","),
                 "Cannot restore writable workspace")
+        if self.local_layout():
+            if os.path.ismount(self.workspace / "repos"):
+                run(["mount", "-o", "remount,bind,rw,nodev,nosuid", str(self.workspace / "repos")])
+                self.verify_repos_mount()
+            else:
+                self.attach_repos(restore=False)
 
     def start_services(self):
         if self.config.get("startServices", True):
@@ -1297,6 +1336,8 @@ class Linux:
         else:
             require(result.returncode == 0 and "ro" in result.stdout.strip().split(","),
                     "Workspace no longer read-only")
+            if self.local_layout():
+                self.verify_repos_mount(writable=False)
 
     def idle(self, tasks):
         for task in tasks.values():
@@ -1431,6 +1472,10 @@ class Linux:
                 run(["mount", "--bind", str(self.workspace), str(self.workspace)])
             run(["mount", "-o", "remount,bind,ro", str(self.workspace)])
         else:
+            if self.local_layout():
+                self.verify_repos_mount(writable=None)
+                run(["mount", "-o", "remount,bind,ro,nodev,nosuid", str(self.workspace / "repos")])
+                self.verify_repos_mount(writable=False)
             run(["mount", "-o", "remount,ro", str(self.workspace)])
         options = run(["findmnt", "-rn", "-M", str(self.workspace), "-o", "OPTIONS"]).split(",")
         require("ro" in options, "Workspace did not become read-only")
@@ -1870,6 +1915,7 @@ class Runtime:
             self.scratch("resume")
             self.s["phase"] = "Ready"
             self.s.pop("fenceOperation", None)
+            self.s.pop("reposCheckpoint", None)
             self.save()
             return dict(type="DrainCancelled", **self.identity())
         if action == "resume":
@@ -1881,6 +1927,7 @@ class Runtime:
             self.s["receipts"] = {}
             prepared = self.s.pop("preparedBackup", None)
             self.s.pop("fenceOperation", None)
+            self.s.pop("reposCheckpoint", None)
             self.save()  # Revoke all deletion receipts durably before allowing a single write.
             if prepared:
                 (self.root / prepared["objectId"]).unlink(missing_ok=True)
@@ -1905,8 +1952,6 @@ class Runtime:
                 require(action in ("git-save", "discard"), "Ephemeral requires Git save or explicit discard")
             else:
                 require(action == "quiesce", "Primary requires retained-volume quiescence")
-                require(not self.local, "Stopping a workspace with local checkouts requires a final checkpoint, "
-                        "which this image cannot take yet")
             if self.s.get("fenceOperation") not in (None, operation):
                 raise Blocked("Another operation owns the freeze; stale operation")
             # Folder size and deletion jobs must have exited before any freeze evidence is taken.
@@ -1931,6 +1976,12 @@ class Runtime:
                 self.diagnostic_stage = "t3-final-snapshot"
                 require(self.adapter.verify_t3_snapshot(expected) == previous,
                         "Frozen T3 state changed after quiescence")
+                if self.local:
+                    self.diagnostic_stage = "repos-checkpoint-verify"
+                    checkpoint = self.s.get("reposCheckpoint")
+                    require(checkpoint and checkpoint["operationId"] == operation,
+                            "Final checkout checkpoint is missing for this operation")
+                    self.adapter.verify_checkpoint(checkpoint, operation)
             else:
                 self.s["fenceOperation"] = operation
                 self.s["phase"] = "Fenced"
@@ -1958,6 +2009,19 @@ class Runtime:
                 self.adapter.idle(self.s["tasks"])
                 self.diagnostic_stage = "t3-final-snapshot"
                 final_t3 = self.adapter.verify_t3_snapshot(None)
+                if self.local:
+                    # The VM disk is lost with the VM: the retained volume must hold the final tree
+                    # before anything becomes read-only. A failure leaves the VM and its files intact.
+                    checkpoint = self.s.get("reposCheckpoint")
+                    if checkpoint and checkpoint["operationId"] == operation:
+                        # Writers stayed fenced since this operation saved (resume and cancel-drain
+                        # drop it), and a retry after the read-only remount could not save again.
+                        self.diagnostic_stage = "repos-checkpoint-verify"
+                        self.adapter.verify_checkpoint(checkpoint, operation)
+                    else:
+                        self.diagnostic_stage = "repos-checkpoint"
+                        self.s["reposCheckpoint"] = self.adapter.checkpoint_repos(operation)
+                        self.save()
                 self.s["filesystemReadOnly"] = True
                 self.save()
                 self.diagnostic_stage = "remount-readonly"
@@ -1995,9 +2059,10 @@ class Runtime:
             self.adapter.unmount()
             self.s["phase"] = "Quiesced"
             self.save()
+            local = dict(storageLayout=2, checkpoint=self.s["reposCheckpoint"]) if self.local else {}
             return self.receipt("PrimaryQuiesced", operation, filesystemUuid=
                                 self.c["volume"]["filesystemUuid"], unmounted=True, backup=backup,
-                                scratchMounts=self.s.get("scratchUnmount"),
+                                scratchMounts=self.s.get("scratchUnmount"), **local,
                                 t3State=self.s["frozenT3State"],
                                 t3SnapshotSequence=self.s["freezeHttpSequence"])
         if action == "receipt-validate":
@@ -2007,6 +2072,11 @@ class Runtime:
             require(self.s.get("fenceOperation") == operation, "Freeze operation changed")
             self.adapter.idle(self.s["tasks"])
             self.adapter.verify_fence(unmounted=receipt["type"] == "PrimaryQuiesced")
+            if self.local and receipt["type"] == "PrimaryQuiesced":
+                checkpoint = self.s.get("reposCheckpoint")
+                require(receipt.get("storageLayout") == 2 and checkpoint and
+                        checkpoint["operationId"] == operation and receipt.get("checkpoint") == checkpoint,
+                        "Quiescence receipt lacks the final checkout checkpoint")
             if self.c["kind"] == "ephemeral" and receipt["type"] == "GitSaved":
                 require(self.git.inspect(self.c["repositories"], self.c["workspace"]) ==
                         receipt["repositories"], "Checkout or remote changed since save receipt")
@@ -2454,7 +2524,12 @@ def serve(config, state_dir, socket_path):
                             response = runtime.respond(json.loads(data))
                     except Exception as error:
                         response = failure_response(error)
-                    connection.sendall(json.dumps(response, sort_keys=True).encode() + b"\n")
+                    try:
+                        connection.sendall(json.dumps(response, sort_keys=True).encode() + b"\n")
+                    except OSError:
+                        # The caller gave up (management SSH timeout). The state is saved, so a
+                        # retry replays the outcome; the agent must keep serving.
+                        pass
         finally:
             sock.unlink(missing_ok=True)
 

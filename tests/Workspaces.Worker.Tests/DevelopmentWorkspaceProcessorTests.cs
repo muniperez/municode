@@ -14,6 +14,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Renci.SshNet.Common;
 using Workspaces.Common.Contracts;
 using Workspaces.Common.Data;
 using Workspaces.Common.Models;
@@ -244,6 +245,78 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
     }
 
     [Theory]
+    [InlineData("valid", null)]
+    [InlineData("missing", "workspace_reconciliation_required")]
+    [InlineData("generation", "workspace_reconciliation_required")]
+    [InlineData("operation", "workspace_reconciliation_required")]
+    [InlineData("volume", "workspace_reconciliation_required")]
+    public async Task LocalCheckoutPrimaryReleasesComputeOnlyWithThisGenerationsFinalCheckpoint(string checkpoint, string? errorCode)
+    {
+        var (workspace, vm, operation) = await SeedStop("quiesce");
+        workspace.StorageLayout = 2;
+        await db.SaveChangesAsync();
+        runtime.Checkpoint = (target, operationId) => checkpoint == "missing" ? null : FinalCheckpoint(workspace, target,
+            checkpoint == "operation" ? "another-operation" : operationId,
+            checkpoint == "generation" ? target.Generation - 1 : target.Generation,
+            checkpoint == "volume" ? "another-volume" : workspace.ProviderVolumeId!);
+
+        await Hop();
+
+        var current = await CurrentVm(vm.Id);
+        Assert.Equal(errorCode, current.ErrorCode);
+        Assert.Empty(cloud.DeletedServers);
+        Assert.Equal(0, cloud.Detaches);
+        if (errorCode is not null)
+        {
+            Assert.Equal("blocked", current.Phase);
+            Assert.True(current.ComputeReserved);
+            Assert.Null(current.QuiescenceReceipt);
+            return;
+        }
+        // Compute deletion re-checks the durable receipt, not just the reply that recorded it.
+        foreach (var expected in new[] { "detached", "delete-intent", "commit-delete", "delete" })
+            await Hop(expected);
+        var stored = await db.DevelopmentWorkspaceVms.SingleAsync(x => x.Id == vm.Id);
+        stored.QuiescenceReceipt = stored.QuiescenceReceipt!.Replace("\"storageLayout\":2", "\"storageLayout\":1");
+        await db.SaveChangesAsync();
+        await Hop();
+        Assert.True((await CurrentVm(vm.Id)).ComputeReserved);
+        Assert.Empty(cloud.DeletedServers);
+        Assert.Equal("delete", (await CurrentOperation(operation.Id)).Step);
+    }
+
+    [Fact]
+    public async Task SlowFinalCheckpointKeepsTheVmAndRetriesTheSameStop()
+    {
+        var (workspace, vm, operation) = await SeedStop("quiesce");
+        workspace.StorageLayout = 2;
+        await db.SaveChangesAsync();
+        runtime.QuiesceTimeouts = 1;
+        runtime.Checkpoint = (target, operationId) =>
+            FinalCheckpoint(workspace, target, operationId, target.Generation, workspace.ProviderVolumeId!);
+
+        await Hop("quiesce");
+        var waiting = await CurrentVm(vm.Id);
+        Assert.Equal("workspace_checkpoint_in_progress", waiting.ErrorCode);
+        Assert.Equal("draining", waiting.Phase);
+        Assert.True(waiting.ComputeReserved);
+        Assert.Equal("pending", (await CurrentOperation(operation.Id)).Status);
+        Assert.DoesNotContain("resume", runtime.Actions);
+
+        await Hop("detach");
+        Assert.Null((await CurrentVm(vm.Id)).ErrorCode);
+        Assert.Contains("\"checkpoint\"", (await CurrentVm(vm.Id)).QuiescenceReceipt);
+    }
+
+    private static object FinalCheckpoint(DevelopmentWorkspace workspace, WorkspaceRuntimeTarget target,
+        string operationId, long generation, string providerVolumeId) => new
+    {
+        checkpointId = "c-" + new string('1', 20) + "-" + new string('a', 16), manifestSha256 = new string('b', 64), operationId,
+        binding = new { workspaceId = workspace.Id, providerVolumeId, filesystemUuid = workspace.VolumeFilesystemUuid,
+            vmId = target.VmId, generation, writerGeneration = generation }
+    };
+
+    [Theory]
     [InlineData(true, false)]
     [InlineData(true, true)]
     [InlineData(false, false)]
@@ -272,6 +345,7 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
             ? new[] { "workspaces-t3.service", "workspaces-preview-static.service" }
             : ["workspaces-t3.service"], stops);
         Assert.Equal(!ephemeral, config.TryGetProperty("volume", out _));
+        Assert.False(config.TryGetProperty("storageLayout", out _));
         Assert.Equal(0, cloud.Deletes);
         Assert.Equal(0, cloud.Detaches);
     }
@@ -1793,6 +1867,8 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         public List<JsonElement> FilesystemRequests { get; } = [];
         public object? FilesystemResult { get; set; }
         public bool FailFilesystemStart { get; set; }
+        public int QuiesceTimeouts { get; set; }
+        public Func<WorkspaceRuntimeTarget, string, object?>? Checkpoint { get; set; }
         public Task<JsonElement> CallAsync(WorkspaceRuntimeTarget target, string operationId, string action, object? arguments, CancellationToken ct)
         {
             ArgumentException.ThrowIfNullOrEmpty(operationId);
@@ -1825,12 +1901,25 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
             if (action == "git-check" && !GitClean)
                 return Task.FromResult(JsonSerializer.SerializeToElement(new { ok = false, state = "AwaitingGitSave" }, Json));
             if (action == "quiesce")
-                return Task.FromResult(JsonSerializer.SerializeToElement(new { ok = true, result = new
+            {
+                if (QuiesceTimeouts > 0)
                 {
-                    schemaVersion = 1, vmId = target.VmId, generation = target.Generation + ReceiptGenerationDelta, kind = target.Kind,
-                    operationId, receiptId = new string('a', 64), type = "PrimaryQuiesced", unmounted = true,
-                    filesystemUuid = ReceiptFilesystemUuid
-                } }, Json));
+                    QuiesceTimeouts--;
+                    throw new SshOperationTimeoutException("Synthetic command timeout.");
+                }
+                var quiesced = new Dictionary<string, object?>
+                {
+                    ["schemaVersion"] = 1, ["vmId"] = target.VmId, ["generation"] = target.Generation + ReceiptGenerationDelta,
+                    ["kind"] = target.Kind, ["operationId"] = operationId, ["receiptId"] = new string('a', 64),
+                    ["type"] = "PrimaryQuiesced", ["unmounted"] = true, ["filesystemUuid"] = ReceiptFilesystemUuid
+                };
+                if (Checkpoint?.Invoke(target, operationId) is { } checkpoint)
+                {
+                    quiesced["storageLayout"] = 2;
+                    quiesced["checkpoint"] = checkpoint;
+                }
+                return Task.FromResult(JsonSerializer.SerializeToElement(new { ok = true, result = quiesced }, Json));
+            }
             if (action is "git-save" or "discard")
             {
                 var branch = WorkBranch == "" ? $"workspaces/{target.VmId}/g{target.Generation}" : WorkBranch;

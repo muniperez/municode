@@ -575,6 +575,12 @@ namespace Workspaces.Common.Migrations.Sqlite
                         .HasColumnType("INTEGER")
                         .HasColumnName("revision");
 
+                    b.Property<int>("StorageLayout")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(1)
+                        .HasColumnName("storage_layout");
+
                     b.Property<decimal>("StorageMonthlyRate")
                         .HasColumnType("TEXT")
                         .HasColumnName("storage_monthly_rate");

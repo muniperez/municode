@@ -58,6 +58,40 @@ public sealed partial class DevelopmentWorkspaceProcessorTests
         Assert.Null(cloud.Volume);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StorageLayoutIsChosenOnlyWhenTheVolumeIsCreated(bool createdLocal)
+    {
+        cloud.AllowProvisioning = true;
+        runtime.VolumeFilesystemUuid = "filesystem-retained";
+        workerOptions.LocalCheckouts = createdLocal;
+        UseEnrollment();
+        var workspace = await lifecycle.CreateAsync(new("org", "Layout fixture", "image", "standard", "plan", 20, "layout"), "actor", default);
+        var vmId = workspace.PrimaryVmId;
+        await lifecycle.StartAsync(workspace.Id, "org", default);
+        var first = await ProcessUntilAsync(vmId, "ready");
+        var expected = createdLocal ? 2 : 1;
+        Assert.Equal(expected, (await CurrentWorkspace(workspace.Id)).StorageLayout);
+        Assert.Equal(createdLocal, runtime.BootstrapConfiguration!.Value.TryGetProperty("storageLayout", out _));
+        var retained = await CurrentWorkspace(workspace.Id);
+        if (createdLocal)
+            runtime.Checkpoint = (target, operationId) =>
+                FinalCheckpoint(retained, target, operationId, target.Generation, retained.ProviderVolumeId!);
+
+        await lifecycle.StopVmAsync(workspace.Id, "org", vmId, first.Generation, default);
+        var stopped = await ProcessUntilAsync(vmId, "stopped");
+        Assert.Equal(createdLocal, stopped.QuiescenceReceipt!.Contains("\"checkpoint\""));
+
+        // Flipping the option never converts a retained volume.
+        workerOptions.LocalCheckouts = !createdLocal;
+        await lifecycle.StartVmAsync(workspace.Id, "org", vmId, stopped.Generation, default);
+        await ProcessUntilAsync(vmId, "ready");
+        Assert.Equal(expected, (await CurrentWorkspace(workspace.Id)).StorageLayout);
+        Assert.Equal(createdLocal, runtime.BootstrapConfiguration!.Value.TryGetProperty("storageLayout", out var layout) &&
+            layout.GetInt32() == 2);
+    }
+
     [Fact]
     public async Task RestartFencesPersistedPortsAndReadyMonitorRestoresCurrentGeneration()
     {

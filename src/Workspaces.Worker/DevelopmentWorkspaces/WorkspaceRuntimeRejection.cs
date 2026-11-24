@@ -26,7 +26,7 @@ internal sealed record WorkspaceRuntimeRejection(
                 "idle-before-freeze", "kernel-freeze", "idle-after-freeze", "t3-snapshot",
                 "stop-services", "idle-after-stop", "t3-final-snapshot", "remount-readonly",
                 "verify-fence", "git-inspect", "git-reinspect", "resume", "cancel-drain",
-                "scratch-suspend", "scratch-unmount"]) ?? "unknown",
+                "scratch-suspend", "scratch-unmount", "repos-checkpoint", "repos-checkpoint-verify"]) ?? "unknown",
             Allowed(Text(detail, "failureType"), ["blocked", "tool_exit", "tool_timeout",
                 "permission_denied", "file_missing", "filesystem_error", "sqlite_error",
                 "missing_field", "invalid_type", "invalid_value", "missing_attribute", "adapter_error"]) ?? "unknown",
@@ -56,6 +56,10 @@ internal sealed record WorkspaceRuntimeRejection(
                 return "t3_work_not_idle_" + table;
         if (reason == "T3 has active/pending work or an unknown status in orchestration_v2_effect_outbox")
             return "t3_work_not_idle_effect_outbox";
+        if (reason?.StartsWith("Final checkout checkpoint failed: ", StringComparison.Ordinal) == true)
+            return "checkout_checkpoint_failed";
+        if (reason?.StartsWith("Final checkout checkpoint is not verifiable: ", StringComparison.Ordinal) == true)
+            return "checkout_checkpoint_unverified";
         return CodeForStaticReason(reason);
     }
 
@@ -77,6 +81,10 @@ internal sealed record WorkspaceRuntimeRejection(
         "Work cgroup is no longer frozen" => "cgroup_fence_lost",
         "Workspace no longer read-only" => "filesystem_fence_lost",
         "Workspace did not become read-only" => "filesystem_readonly_failed",
+        "Final checkout checkpoint is no longer the current checkpoint" => "checkout_checkpoint_superseded",
+        "Final checkout checkpoint is missing for this operation" => "checkout_checkpoint_missing",
+        "Checkout mount options are unsafe" => "checkout_mount_unsafe",
+        "Checkout mount is missing" => "checkout_mount_missing",
         "Scratch build-output mounts remain under the workspace" => "scratch_mounts_remain",
         "Scratch mount helper returned no result" => "scratch_helper_failed",
         "Designated service did not stop cleanly" => "service_stop_unconfirmed",

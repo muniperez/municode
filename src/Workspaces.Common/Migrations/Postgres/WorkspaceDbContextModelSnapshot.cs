@@ -580,6 +580,12 @@ namespace Workspaces.Common.Migrations.Postgres
                         .HasColumnType("bigint")
                         .HasColumnName("revision");
 
+                    b.Property<int>("StorageLayout")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1)
+                        .HasColumnName("storage_layout");
+
                     b.Property<decimal>("StorageMonthlyRate")
                         .HasColumnType("numeric")
                         .HasColumnName("storage_monthly_rate");

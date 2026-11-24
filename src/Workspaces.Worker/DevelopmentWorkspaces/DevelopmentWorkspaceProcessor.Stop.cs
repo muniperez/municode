@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Renci.SshNet.Common;
 using Workspaces.Common.Models;
 using Workspaces.Common.Providers;
 using Workspaces.Common.Services;
@@ -10,6 +11,23 @@ namespace Workspaces.Worker.DevelopmentWorkspaces;
 public sealed partial class DevelopmentWorkspaceProcessor
 {
     private async Task StopStepAsync(IDevelopmentWorkspaceProvider cloud, DevelopmentWorkspace workspace,
+        DevelopmentWorkspaceVm vm, DevelopmentWorkspaceOperation op, Evidence evidence, CancellationToken ct)
+    {
+        try
+        {
+            await StopStepCoreAsync(cloud, workspace, vm, op, evidence, ct);
+        }
+        catch (SshOperationTimeoutException) when (op.Step == "quiesce" && vm.Kind == "primary" &&
+            workspace.StorageLayout == 2 && !ct.IsCancellationRequested)
+        {
+            // The final checkout checkpoint can outlast one management command. The runtime keeps
+            // working after the caller leaves and replays its outcome, so retry the same step.
+            await SaveAsync(op, evidence, op.Step, null, ct, blocker: new DrainBlocker(
+                "workspace_checkpoint_in_progress", "Saving the final checkout checkpoint; the VM keeps running until it completes."));
+        }
+    }
+
+    private async Task StopStepCoreAsync(IDevelopmentWorkspaceProvider cloud, DevelopmentWorkspace workspace,
         DevelopmentWorkspaceVm vm, DevelopmentWorkspaceOperation op, Evidence evidence, CancellationToken ct)
     {
         switch (op.Step)
@@ -175,6 +193,12 @@ public sealed partial class DevelopmentWorkspaceProcessor
                     vm.QuiescedOperationId != op.Id || vm.QuiescedGeneration != vm.Generation ||
                     string.IsNullOrEmpty(vm.QuiescenceReceipt))
                     throw new InvalidOperationException("There is no durable deletion intent and quiescence proof for this generation.");
+                if (vm.Kind == "primary" && workspace.StorageLayout == 2)
+                {
+                    using var quiesced = JsonDocument.Parse(vm.QuiescenceReceipt);
+                    if (!HasFinalCheckpoint(quiesced.RootElement, vm, op, workspace))
+                        throw new InvalidOperationException("The primary has no final checkout checkpoint on its retained volume.");
+                }
                 var server = await cloud.GetWorkspaceServerAsync(vm.ProviderServerId!, ct);
                 if (server is not null)
                 {
@@ -297,6 +321,8 @@ public sealed partial class DevelopmentWorkspaceProcessor
         if (vm.Kind == "primary" && (type != "PrimaryQuiesced" || !receipt.GetProperty("unmounted").GetBoolean() ||
             receipt.GetProperty("filesystemUuid").GetString() != workspace.VolumeFilesystemUuid))
             throw new InvalidOperationException("The primary has no exact-volume unmount proof.");
+        if (vm.Kind == "primary" && workspace.StorageLayout == 2 && !HasFinalCheckpoint(receipt, vm, op, workspace))
+            throw new InvalidOperationException("The primary has no final checkout checkpoint on its retained volume.");
         if (vm.Kind == "ephemeral" && type != (discard ? "DiscardAuthorized" : "GitSaved"))
             throw new InvalidOperationException("The ephemeral has neither verified Git proof nor authorized discard.");
         if (type == "GitSaved")
@@ -311,6 +337,27 @@ public sealed partial class DevelopmentWorkspaceProcessor
                 !IsHex(head, 40) || repository.GetProperty("remoteSha").GetString() != head)
                 throw new InvalidOperationException("Git save proof does not match the exact reserved repository and commit.");
         }
+    }
+
+    // VM-disk checkouts vanish with the VM, so a layout 2 stop needs this generation's fenced checkpoint.
+    private static bool HasFinalCheckpoint(JsonElement receipt, DevelopmentWorkspaceVm vm,
+        DevelopmentWorkspaceOperation op, DevelopmentWorkspace workspace)
+    {
+        if (!receipt.TryGetProperty("storageLayout", out var layout) || layout.ValueKind != JsonValueKind.Number ||
+            !layout.TryGetInt32(out var value) || value != 2 ||
+            !receipt.TryGetProperty("checkpoint", out var checkpoint) || checkpoint.ValueKind != JsonValueKind.Object ||
+            !checkpoint.TryGetProperty("binding", out var binding) || binding.ValueKind != JsonValueKind.Object)
+            return false;
+        static string? Text(JsonElement json, string name) =>
+            json.TryGetProperty(name, out var item) && item.ValueKind == JsonValueKind.String ? item.GetString() : null;
+        static long? Number(JsonElement json, string name) =>
+            json.TryGetProperty(name, out var item) && item.ValueKind == JsonValueKind.Number &&
+            item.TryGetInt64(out var number) ? number : null;
+        return System.Text.RegularExpressions.Regex.IsMatch(Text(checkpoint, "checkpointId") ?? "", "^c-[0-9]{20}-[0-9a-f]{16}$") &&
+            IsHex(Text(checkpoint, "manifestSha256"), 64) && Text(checkpoint, "operationId") == op.Id &&
+            Text(binding, "workspaceId") == workspace.Id && Text(binding, "providerVolumeId") == workspace.ProviderVolumeId &&
+            Text(binding, "filesystemUuid") == workspace.VolumeFilesystemUuid && Text(binding, "vmId") == vm.Id &&
+            Number(binding, "generation") == vm.Generation && Number(binding, "writerGeneration") == vm.Generation;
     }
 
     private static bool IsHex(string? value, int length) =>

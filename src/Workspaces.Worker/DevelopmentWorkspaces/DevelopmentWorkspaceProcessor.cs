@@ -220,8 +220,12 @@ public sealed partial class DevelopmentWorkspaceProcessor(
                 if (workspace.VolumeFilesystemUuid is null && !evidence.NewVolume)
                     throw new InvalidOperationException("Existing volume filesystem ownership must be reconciled, not initialized.");
                 var volumeId = volume.Id;
+                var localCheckouts = evidence.NewVolume && options.Value.LocalCheckouts;
                 await SaveAsync(op, evidence, "volume-ready", (_, _, fresh) =>
-                { fresh.ProviderVolumeId = volumeId; fresh.VolumeStatus = "creating"; }, ct); break;
+                {
+                    fresh.ProviderVolumeId = volumeId; fresh.VolumeStatus = "creating";
+                    if (localCheckouts) fresh.StorageLayout = 2;
+                }, ct); break;
             case "volume-ready":
                 if (!await WaitActionsAsync(cloud, evidence, ct)) { await SaveAsync(op, evidence, op.Step, null, ct); break; }
                 await SaveAsync(op, evidence, "firewall", (_, _, fresh) => fresh.VolumeStatus = "retained", ct); break;
@@ -391,6 +395,7 @@ public sealed partial class DevelopmentWorkspaceProcessor(
                 owner = new { organizationId = workspace.OrganizationId, workspaceId = workspace.Id,
                     providerAccountId = workspace.ProviderAccountId, location = workspace.Region, providerVolumeId = workspace.ProviderVolumeId }
             };
+            if (workspace.StorageLayout == 2) config["storageLayout"] = 2;
             if (options.Value.BackupRecipient is not null)
                 config["backup"] = new { transport = "management-ssh-stream", recipient = options.Value.BackupRecipient,
                     keyRecoveryId = options.Value.BackupRecoveryId, destinationIdentity = options.Value.BackupDestinationIdentity,
