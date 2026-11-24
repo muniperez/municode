@@ -1,29 +1,42 @@
 import { apiRequest } from "./apiClient";
 
+/** Calendar month, ISO week (Monday to Sunday) or calendar quarter, all in UTC. */
+export type BudgetPeriod = "month" | "week" | "quarter";
+
 export type BudgetProviderProjection = {
   providerAccountId: string; providerName: string; providerType: string; computeMonthly: number; storageMonthly: number;
   projectedMonthly: number; workspaceCount: number; reservedVmCount: number;
   /** False when a resource has a missing price; its cost is left out, never counted as zero. */
   complete: boolean; assumptions: string[];
+  /** Estimate for the whole budget period; the *Monthly fields are the monthly run rate. */
+  projectedAmount: number;
 };
 /** One priced resource: from the operator's price catalog or the rate recorded when it was selected (fallback). */
 export type BudgetPriceLine = {
   resource: "compute" | "storage"; resourceId: string; sku?: string | null; quantity: number; source: "catalog" | "fallback";
   catalogEntryId?: string | null; billingModel: string; currency: string; amount: number | null;
   status: "current" | "stale" | "missing"; pricedAt?: string | null;
+  /** Estimate for the budget period; amount is the monthly run rate. */
+  periodAmount: number | null;
 };
 export type BudgetContributor = {
   workspaceId: string; workspaceName: string; providerAccountId: string; region: string; skus: string[]; reservedVmCount: number;
   computeHourly: number; computeMonthly: number; storageMonthly: number; projectedMonthly: number;
   pricingStatus: "current" | "stale" | "unknown"; pricingUpdatedAt?: string | null; lines: BudgetPriceLine[];
+  projectedAmount: number;
 };
 export type BudgetExcludedWorkspace = { workspaceId: string; workspaceName: string; currency: string; reason: string };
-/** Every amount is an estimate from recorded rates; provider-reported charges are never mixed in (see Budget.providerCharges). */
+/**
+ * Every amount is an estimate from recorded rates; provider-reported charges are never mixed in (see Budget.providerCharges).
+ * `period` is the key of the current period ("2026-11", "2026-W48" or "2026-Q4"); `projectedAmount` is the estimate for that
+ * whole period and is what the percentage and thresholds compare with the budget amount.
+ */
 export type BudgetProjection = {
   period: string; estimate: boolean; complete: boolean; projectedHourly: number; projectedMonthly: number; percentOfBudget: number;
   crossedThreshold: number | null; overBudget: boolean; providerChargesAvailable: boolean;
   providers: BudgetProviderProjection[]; contributors: BudgetContributor[]; excluded: BudgetExcludedWorkspace[];
   warnings: string[]; assumptions: string[];
+  periodType: BudgetPeriod; periodStart: string; periodEnd: string; periodHours: number; projectedAmount: number;
 };
 export type BudgetEmailAudience = "admins" | "members";
 /**
@@ -51,8 +64,9 @@ export type BudgetProviderCharges = {
   totals: { currency: string; amount: number; accountCount: number }[]; notes: string[];
 };
 export type Budget = {
-  id: string; organizationId: string; name: string; currency: string; monthlyAmount: number; thresholds: number[];
-  providerAccountIds: string[]; revision: number; createdAt: string; updatedAt: string; projection: BudgetProjection;
+  id: string; organizationId: string; name: string; currency: string; amount: number; period: BudgetPeriod; thresholds: number[];
+  /** Scope: provider accounts, then whole workspaces or individual VMs (compute only); empty lists include everything. */
+  providerAccountIds: string[]; workspaceIds: string[]; vmIds: string[]; revision: number; createdAt: string; updatedAt: string; projection: BudgetProjection;
   notifications: BudgetNotificationSettings; lastAlert: { period: string; threshold: number; alertedAt: string } | null;
   deliveries: BudgetNotificationDelivery[];
   providerCharges?: BudgetProviderCharges | null;
@@ -65,7 +79,8 @@ export type BudgetNotificationInput = {
   email?: boolean; emailAudience?: BudgetEmailAudience;
 };
 export type BudgetInput = {
-  name: string; monthlyAmount: number; thresholds: number[]; providerAccountIds: string[]; notifications?: BudgetNotificationInput;
+  name: string; amount: number; period: BudgetPeriod; thresholds: number[]; providerAccountIds: string[]; workspaceIds: string[];
+  vmIds: string[]; notifications?: BudgetNotificationInput;
 };
 
 export function listBudgets(organizationId: string, signal?: AbortSignal) {

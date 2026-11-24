@@ -64,15 +64,28 @@ instead of treating it as complete.
 
 ## Budgets
 
-**Settings → Budgets** compares an estimated monthly cost with optional
-organization budgets. Every organization member can view budgets; only owners
+**Settings → Budgets** compares an estimated cost with optional organization
+budgets. Every organization member can view budgets; only owners
 and admins create, edit or delete them (API key scopes `budgets:read` and
 `budgets:write`). Budgets only inform. Crossing a threshold never blocks
 creating or starting a workspace and never stops resources.
 
+Each budget has an amount per period: a calendar month, an ISO week (Monday to
+Sunday) or a calendar quarter, all in UTC. Its scope narrows what is counted.
+Provider accounts are applied first. Within them, you can select whole
+workspaces (all their VMs and storage) or individual VMs (only their compute).
+Empty selections include everything, and selections that no longer exist are
+reported as warnings. The API and webhook payload name the limit `amount` with a
+`period` of `month`, `week` or `quarter`, and the selections `providerAccountIds`,
+`workspaceIds` and `vmIds`.
+
 The estimate is not an invoice and does not include provider-reported charges.
-It assumes every VM that currently reserves compute runs for a full 720-hour
-month and every retained volume is kept all month. Prices come from the
+It assumes every VM that currently reserves compute runs for the whole period
+and every retained volume is kept for the whole period. A full calendar month
+counts as 720 hours, so a quarter is three monthly amounts. A week counts its
+actual hours, split at a month boundary, and monthly caps and minimum charges
+apply separately in each calendar month. The card also shows the monthly run
+rate. Prices come from the
 operator's price catalog for each provider, region and size, including hourly
 billing, monthly caps, per-second billing and minimum charges. Without a
 catalog entry, the rate recorded when the VM was selected or the workspace was
@@ -84,10 +97,11 @@ marks the estimate incomplete and is not counted as zero. Prices older than the
 operator's limit are marked stale. Viewing budgets never records anything.
 
 The worker checks budgets in the background (every five minutes by default) and
-notifies once per threshold per calendar month (UTC). If several thresholds are
+notifies once per threshold per budget period (the UTC month, ISO week or
+quarter). If several thresholds are
 crossed at once, one notification names the highest and lists all of them in
-`crossedThresholds`. Changing the amount, thresholds or scope starts a new alert
-baseline; changing only the name or notification settings does not. Each budget
+`crossedThresholds`. Changing the amount, period, thresholds or scope starts a new
+alert baseline; changing only the name or notification settings does not. Each budget
 chooses its channels:
 
 - **In-app** (on by default): a `budget.threshold_crossed` audit event and a
@@ -108,7 +122,8 @@ chooses its channels:
   organization's owners and admins (the default) or all members. Email goes to
   each member's account address; you cannot add other addresses. Membership and
   role are checked again just before sending, so removed members get nothing.
-  The email lists the threshold, the estimated projection, the top contributors,
+  The email names the budget period and its dates and lists the threshold, the
+  estimated projection for the period, the top contributors,
   warnings and assumptions. It states that the figures are estimates and that
   budgets never block or stop resources. It never contains webhook URLs, signing
   secrets or credentials. Email needs an operator to configure outbound email.
@@ -120,8 +135,8 @@ attempts and last error. Turning a channel off cancels its pending deliveries.
 
 **Provider-reported charges** appear on each budget card separately from the
 estimate. For each provider account in the budget's scope, the card shows the
-month-to-date amount the provider reports for the current UTC month, in the
-provider's currency, with the time it was reported ("as of"). Totals are listed
+month-to-date amount the provider reports for the current UTC month (also for
+weekly and quarterly budgets), in the provider's currency, with the time it was reported ("as of"). Totals are listed
 per currency; different currencies are never converted or summed, and the
 amounts are never added to the estimate or used for threshold alerts. Each
 amount covers the whole provider account, including resources Municode does not

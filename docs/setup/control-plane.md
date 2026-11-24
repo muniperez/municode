@@ -116,7 +116,9 @@ reported as a missing price and is not counted, never treated as zero. Entries
 older than `PriceCatalogMaxAgeDays` (default 90) are flagged as stale. Invalid
 entries are ignored and listed as a budget warning. Amounts in different
 currencies are never converted or summed, so price each provider in the
-currency your budgets use.
+currency your budgets use. Monthly caps, monthly rates and minimum charges apply
+per calendar month. Weekly and quarterly budgets therefore apply them separately
+in each calendar month the period covers.
 
 ## Integration contracts
 

@@ -5,6 +5,7 @@ import { useSettings } from "@/modules/Settings/SettingsProvider";
 import { listBudgets, type Budget } from "@/api/budgetsApi";
 import { formatPrice } from "@/modules/Workspaces/WorkspaceCostEstimate";
 
+const periodPhrase = { month: "this month", week: "this week", quarter: "this quarter" } as const;
 const alertKey = (budget: Budget) => `${budget.id}:${budget.projection.period}:${budget.projection.crossedThreshold}`;
 const storageKey = (organizationId: string) => `municode:budget-alerts-dismissed:${organizationId}`;
 
@@ -32,15 +33,15 @@ export function BudgetAlertBanner() {
   }, [organizationId]);
   if (!organizationId || alerts.length === 0) return null;
   const [first] = alerts;
-  const amount = formatPrice(first.projection.projectedMonthly, first.currency);
-  const limit = formatPrice(first.monthlyAmount, first.currency);
+  const amount = formatPrice(first.projection.projectedAmount, first.currency);
+  const limit = formatPrice(first.amount, first.currency);
   function dismiss() {
     sessionStorage.setItem(storageKey(organizationId!), JSON.stringify([...dismissedAlerts(organizationId!), ...alerts.map(alertKey)]));
     setAlerts([]);
   }
   return <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
     <p>
-      Budget “{first.name}” is estimated at {amount} of {limit} this month ({first.projection.percentOfBudget}%, crossed {first.projection.crossedThreshold}%)
+      Budget “{first.name}” is estimated at {amount} of {limit} {periodPhrase[first.period]} ({first.projection.percentOfBudget}%, crossed {first.projection.crossedThreshold}%)
       {alerts.length > 1 ? ` and ${alerts.length - 1} more budget${alerts.length > 2 ? "s" : ""} crossed a threshold` : ""}.
       {" "}Budgets only inform; nothing was blocked or stopped.
     </p>

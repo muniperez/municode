@@ -2,11 +2,14 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createBudget, deleteBudget, listBudgets, updateBudget, type Budget } from "@/api/budgetsApi";
 import { listProviders } from "@/api/providersApi";
+import { listDevelopmentWorkspaces } from "@/api/workspacesApi";
+import type { DevelopmentWorkspace } from "@/models/controlPlane";
 import { BudgetsSettingsModule } from "./BudgetsSettingsModule";
 import { BudgetAlertBanner } from "./BudgetAlertBanner";
 
 vi.mock("@/api/budgetsApi", () => ({ listBudgets: vi.fn(), createBudget: vi.fn(), updateBudget: vi.fn(), deleteBudget: vi.fn() }));
 vi.mock("@/api/providersApi", () => ({ listProviders: vi.fn() }));
+vi.mock("@/api/workspacesApi", () => ({ listDevelopmentWorkspaces: vi.fn() }));
 const organization = { id: "org", role: "owner" };
 vi.mock("@/core/auth/AuthProvider", () => ({ useAuth: () => ({ selectedOrganization: organization }) }));
 const openSettings = vi.fn();
@@ -16,21 +19,22 @@ function budget(overrides: Partial<Budget["projection"]> = {}, extra: Partial<Bu
   return {
     notifications: { inApp: true, webhook: false, webhookTarget: null, webhookSecretConfigured: false, email: false, emailAudience: "admins", emailAvailable: true },
     lastAlert: null, deliveries: [],
-    id: "budget-1", organizationId: "org", name: "Team", currency: "USD", monthlyAmount: 50, thresholds: [50, 80, 100],
-    providerAccountIds: [], revision: 3, createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z",
+    id: "budget-1", organizationId: "org", name: "Team", currency: "USD", amount: 50, period: "month", thresholds: [50, 80, 100],
+    providerAccountIds: [], workspaceIds: [], vmIds: [], revision: 3, createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z",
     projection: {
       period: "2026-11", estimate: true, complete: false, projectedHourly: 0.1056, projectedMonthly: 76, percentOfBudget: 152,
-      crossedThreshold: 100, overBudget: true, providerChargesAvailable: false,
+      crossedThreshold: 100, overBudget: true, providerChargesAvailable: false, periodType: "month",
+      periodStart: "2026-11-01T00:00:00Z", periodEnd: "2026-12-01T00:00:00Z", periodHours: 720, projectedAmount: 76,
       providers: [{ providerAccountId: "do", providerName: "Droplets", providerType: "digital-ocean", computeMonthly: 72,
-        storageMonthly: 4, projectedMonthly: 76, workspaceCount: 2, reservedVmCount: 1, complete: false,
+        storageMonthly: 4, projectedMonthly: 76, projectedAmount: 76, workspaceCount: 2, reservedVmCount: 1, complete: false,
         assumptions: ["Compute s-2vcpu in all regions: billed per started hour at 0.10 USD/VM-hour.",
           "Fallback rate: 1 volume(s) have no storage catalog entry, so the monthly storage rate recorded when the workspace was created is used."] }],
       contributors: [{ workspaceId: "ws", workspaceName: "API fixture", providerAccountId: "do", region: "fra1", skus: ["s-2vcpu"],
-        reservedVmCount: 1, computeHourly: 0.1, computeMonthly: 72, storageMonthly: 2, projectedMonthly: 74, pricingStatus: "current",
+        reservedVmCount: 1, computeHourly: 0.1, computeMonthly: 72, storageMonthly: 2, projectedMonthly: 74, projectedAmount: 74, pricingStatus: "current",
         lines: [{ resource: "compute", resourceId: "vm", sku: "s-2vcpu", quantity: 1, source: "catalog", catalogEntryId: "droplet",
-          billingModel: "hourly", currency: "USD", amount: 72, status: "current" },
+          billingModel: "hourly", currency: "USD", amount: 72, periodAmount: 72, status: "current" },
         { resource: "storage", resourceId: "ws", quantity: 20, source: "fallback", billingModel: "monthly", currency: "USD", amount: 2,
-          status: "current" }] }],
+          periodAmount: 2, status: "current" }] }],
       excluded: [], warnings: ["1 workspace(s) have missing pricing; their cost is unknown."],
       assumptions: ["Budgets only inform: crossing a threshold never blocks creating or starting workspaces and never stops resources."],
       ...overrides,
@@ -47,6 +51,7 @@ beforeEach(() => {
   vi.mocked(listBudgets).mockResolvedValue([budget()]);
   vi.mocked(listProviders).mockResolvedValue([{ id: "do", organizationId: "org", name: "Droplets", providerType: "digital-ocean",
     enabled: true, validationStatus: "valid", revision: 1, planCount: 1 }]);
+  vi.mocked(listDevelopmentWorkspaces).mockResolvedValue([]);
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -111,6 +116,14 @@ it("shows provider-reported charges as not available when no account reported an
   expect(within(section).getByText("Not available yet")).toBeInTheDocument();
 });
 
+it("lists workspaces only to edit a scope or name scoped workspaces", async () => {
+  render(<BudgetsSettingsModule />);
+  await screen.findByLabelText("Budget Team");
+  expect(listDevelopmentWorkspaces).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Create budget" }));
+  await waitFor(() => expect(listDevelopmentWorkspaces).toHaveBeenCalledTimes(1));
+});
+
 it("is read-only for viewers", async () => {
   organization.role = "viewer";
   render(<BudgetsSettingsModule />);
@@ -129,18 +142,18 @@ it("lets owners create, edit with the current revision and delete after confirma
   await screen.findByLabelText("Budget Team");
   fireEvent.click(screen.getByRole("button", { name: "Create budget" }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Droplets" } });
-  fireEvent.change(screen.getByLabelText("Monthly amount"), { target: { value: "25.5" } });
+  fireEvent.change(screen.getByLabelText("Amount per month"), { target: { value: "25.5" } });
   fireEvent.change(screen.getByLabelText("Alert thresholds (%)"), { target: { value: "80, 100" } });
   fireEvent.click(screen.getByRole("checkbox", { name: /Droplets/ }));
   fireEvent.click(screen.getByRole("button", { name: "Create budget" }));
   await waitFor(() => expect(createBudget).toHaveBeenCalledWith({ organizationId: "org", currency: "USD", name: "Droplets",
-    monthlyAmount: 25.5, thresholds: [80, 100], providerAccountIds: ["do"], notifications: { inApp: true, webhook: false, email: false, emailAudience: "admins" } }));
+    amount: 25.5, period: "month", thresholds: [80, 100], providerAccountIds: ["do"], workspaceIds: [], vmIds: [], notifications: { inApp: true, webhook: false, email: false, emailAudience: "admins" } }));
 
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
-  fireEvent.change(screen.getByLabelText("Monthly amount"), { target: { value: "60" } });
+  fireEvent.change(screen.getByLabelText("Amount per month"), { target: { value: "60" } });
   fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
-  await waitFor(() => expect(updateBudget).toHaveBeenCalledWith("budget-1", { name: "Team", monthlyAmount: 60,
-    thresholds: [50, 80, 100], providerAccountIds: [], revision: 3, notifications: { inApp: true, webhook: false, email: false, emailAudience: "admins" } }));
+  await waitFor(() => expect(updateBudget).toHaveBeenCalledWith("budget-1", { name: "Team", amount: 60, period: "month",
+    thresholds: [50, 80, 100], providerAccountIds: [], workspaceIds: [], vmIds: [], revision: 3, notifications: { inApp: true, webhook: false, email: false, emailAudience: "admins" } }));
 
   fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
   expect(deleteBudget).not.toHaveBeenCalled();
@@ -177,7 +190,7 @@ it("configures a signed webhook, reveals the signing secret once and shows deliv
   await screen.findByLabelText("Budget Team");
   fireEvent.click(screen.getByRole("button", { name: "Create budget" }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Hooks" } });
-  fireEvent.change(screen.getByLabelText("Monthly amount"), { target: { value: "10" } });
+  fireEvent.change(screen.getByLabelText("Amount per month"), { target: { value: "10" } });
   fireEvent.click(screen.getByRole("checkbox", { name: "In-app alerts" }));
   fireEvent.click(screen.getByRole("checkbox", { name: "Signed webhook" }));
   fireEvent.click(screen.getByRole("button", { name: "Create budget" }));
@@ -253,4 +266,41 @@ it("sends budget email to a member audience and explains when the operator has n
   fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
   await waitFor(() => expect(updateBudget).toHaveBeenCalledWith("budget-1", expect.objectContaining({
     notifications: { inApp: true, webhook: false, email: true, emailAudience: "members" } })));
+});
+
+it("creates weekly budgets scoped to workspaces or single VMs and shows the period estimate", async () => {
+  const vm = (id: string, kind: "primary" | "ephemeral", sku: string) => ({ id, kind, sku, desiredState: "running" });
+  vi.mocked(listDevelopmentWorkspaces).mockResolvedValue([
+    { id: "ws-api", name: "API", region: "fra1", vms: [vm("vm-api", "primary", "s-2vcpu"), vm("vm-api-2", "ephemeral", "s-4vcpu")] },
+    { id: "ws-web", name: "Web", region: "nyc1", vms: [vm("vm-web", "primary", "s-2vcpu"), vm("vm-web-2", "ephemeral", "s-8vcpu")] },
+  ] as unknown as DevelopmentWorkspace[]);
+  const weekly = budget({ period: "2026-W49", periodType: "week", periodStart: "2026-11-30T00:00:00Z", periodEnd: "2026-12-07T00:00:00Z",
+    periodHours: 168, projectedAmount: 17.27, percentOfBudget: 172.7 }, { period: "week", amount: 10, workspaceIds: ["ws-api"], vmIds: ["vm-web-2"] });
+  vi.mocked(listBudgets).mockResolvedValue([weekly]);
+  vi.mocked(createBudget).mockResolvedValue(weekly);
+  render(<BudgetsSettingsModule />);
+  const card = await screen.findByLabelText("Budget Team");
+  expect(card).toHaveTextContent("$10.00 per week · All provider accounts · workspaces API · VMs Web ephemeral VM");
+  expect(card).toHaveTextContent("Estimated $17.27 of $10.00 for 2026-W49 (Nov 30 – Dec 6, UTC) (172.7%)");
+  expect(card).toHaveTextContent("($76.00/month)");
+  expect(within(card).getByRole("table", { name: "Team estimate by provider" })).toHaveTextContent("Estimated / week");
+
+  fireEvent.click(screen.getByRole("button", { name: "Create budget" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Sprint" } });
+  fireEvent.change(screen.getByLabelText("Period"), { target: { value: "week" } });
+  fireEvent.change(screen.getByLabelText("Amount per week"), { target: { value: "10" } });
+  fireEvent.click(await screen.findByRole("checkbox", { name: "VM API primary s-2vcpu" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Workspace API" }));
+  expect(screen.getByRole("checkbox", { name: "VM API primary s-2vcpu" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("checkbox", { name: "VM Web ephemeral s-8vcpu" }));
+  fireEvent.click(screen.getByRole("button", { name: "Create budget" }));
+  await waitFor(() => expect(createBudget).toHaveBeenCalledWith(expect.objectContaining({
+    name: "Sprint", amount: 10, period: "week", providerAccountIds: [], workspaceIds: ["ws-api"], vmIds: ["vm-web-2"] })));
+});
+
+it("names the budget period in the alert banner", async () => {
+  vi.mocked(listBudgets).mockResolvedValue([budget({ period: "2026-Q4", periodType: "quarter", projectedAmount: 228, percentOfBudget: 152 },
+    { period: "quarter", amount: 150 })]);
+  render(<BudgetAlertBanner />);
+  expect(await screen.findByRole("status")).toHaveTextContent("estimated at $228.00 of $150.00 this quarter (152%, crossed 100%)");
 });

@@ -247,6 +247,55 @@ public sealed partial class DevelopmentWorkspaceProcessorTests
         return workspace;
     }
 
+    [Fact]
+    public async Task BudgetWorkerAlertsWeeklyBudgetsOncePerIsoWeek()
+    {
+        var (budgets, worker, sender) = BudgetWorker();
+        await SeedBudgetMembers();
+        ConfigureBudgetEmail();
+        await StartedBudgetWorkspace();
+        await budgets.CreateAsync(new("org", "Weekly", 10m, null, [100],
+            Notifications: new(Webhook: true, WebhookUrl: BudgetHook, Email: true), Period: BudgetPeriods.Week), "actor", default);
+
+        await worker.RunOnceAsync(default);
+        await worker.RunOnceAsync(default);
+        var first = JsonDocument.Parse(Assert.Single(sender.Requests).Body).RootElement;
+        Assert.Equal(("week", 10m, 17.27m, 74m), (first.GetProperty("periodType").GetString(), first.GetProperty("amount").GetDecimal(),
+            first.GetProperty("projectedAmount").GetDecimal(), first.GetProperty("projectedMonthly").GetDecimal()));
+        var week = BudgetPeriods.For(BudgetPeriods.Week, clock.GetUtcNow());
+        Assert.Equal(week.Key, first.GetProperty("period").GetString());
+        var email = emailSender.Messages[0];
+        Assert.Contains($"for {week.Key}", email.Subject);
+        Assert.Contains($"Period: {BudgetPeriods.Describe(week)}", email.TextBody);
+        Assert.Contains("Budget amount: 10 USD per week", email.TextBody);
+        Assert.Contains("Projected this week: 17.27 USD (172.7% of budget); monthly run rate 74 USD", email.TextBody);
+        Assert.Contains("17.27 USD this week (74 USD per month)", email.TextBody);
+        Assert.DoesNotContain("UTC month", email.TextBody);
+
+        clock.Advance(TimeSpan.FromDays(7));
+        await worker.RunOnceAsync(default);
+        await worker.RunOnceAsync(default);
+        Assert.Equal(2, sender.Requests.Count);
+        var periods = (await db.BudgetNotifications.AsNoTracking().Where(x => x.Channel == BudgetNotification.InApp).ToListAsync())
+            .Select(x => x.Period).Order(StringComparer.Ordinal).ToList();
+        Assert.Equal(2, periods.Distinct().Count());
+        Assert.All(periods, x => Assert.Matches(@"^\d{4}-W\d{2}$", x));
+        Assert.Equal(2, await db.AuditEvents.AsNoTracking().CountAsync(x => x.Action == BudgetService.ThresholdCrossedEvent));
+    }
+
+    [Fact]
+    public void BudgetEmailRendersPayloadsQueuedBeforeBudgetPeriods()
+    {
+        var message = BudgetEmailContent.Render("owner@example.test", JsonSerializer.Serialize(new
+        {
+            budget = "Team", period = "2026-11", threshold = 80, currency = "USD", monthlyAmount = 100m, projectedMonthly = 85m,
+            percentOfBudget = 85m, projectedHourly = .12m
+        }), Budget.EmailAudienceAdmins);
+        Assert.Contains("Period: 2026-11 (UTC calendar month)", message.TextBody);
+        Assert.Contains("Budget amount: 100 USD per month", message.TextBody);
+        Assert.Contains("Projected this month: 85 USD (85% of budget); hourly run rate 0.12 USD", message.TextBody);
+    }
+
     private readonly BudgetEmailOptions budgetEmail = new();
     private readonly SyntheticEmailSender emailSender = new();
 

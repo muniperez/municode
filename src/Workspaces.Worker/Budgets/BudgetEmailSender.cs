@@ -66,16 +66,22 @@ public static class BudgetEmailContent
         var budget = Text(root, "budget");
         var period = Text(root, "period");
         var threshold = root.GetProperty("threshold").GetInt32();
+        var (noun, description) = Period(root, period);
+        var monthly = noun == BudgetPeriods.Month;
+        // Payloads queued before budget periods existed carry only monthlyAmount and the monthly projection.
+        var amount = root.TryGetProperty("amount", out _) ? "amount" : "monthlyAmount";
+        var projected = root.TryGetProperty("projectedAmount", out _) ? "projectedAmount" : "projectedMonthly";
         var body = new StringBuilder();
         body.AppendLine("Municode budget alert (estimate)").AppendLine();
         body.AppendLine($"Budget: {budget}");
-        body.AppendLine($"Period: {period} (UTC month)");
+        body.AppendLine($"Period: {description}");
         var crossed = root.TryGetProperty("crossedThresholds", out var list)
             ? string.Join(", ", list.EnumerateArray().Select(x => $"{x.GetInt32()}%")) : $"{threshold}%";
         body.AppendLine($"Threshold reached: {threshold}% (newly crossed: {crossed})");
-        body.AppendLine($"Budget amount: {Money(root, "monthlyAmount", currency)} per month");
-        body.AppendLine($"Projected this month: {Money(root, "projectedMonthly", currency)} " +
-            $"({Number(root, "percentOfBudget")}% of budget); hourly run rate {Money(root, "projectedHourly", currency)}");
+        body.AppendLine($"Budget amount: {Money(root, amount, currency)} per {noun}");
+        body.AppendLine($"Projected this {noun}: {Money(root, projected, currency)} ({Number(root, "percentOfBudget")}% of budget); " +
+            (monthly ? "" : $"monthly run rate {Money(root, "projectedMonthly", currency)}, ") +
+            $"hourly run rate {Money(root, "projectedHourly", currency)}");
         if (root.TryGetProperty("complete", out var complete) && !complete.GetBoolean())
             body.AppendLine("The estimate is incomplete because some workspaces have no pricing.");
 
@@ -84,7 +90,10 @@ public static class BudgetEmailContent
             body.AppendLine().AppendLine("Top contributors:");
             foreach (var item in contributors.EnumerateArray())
                 body.AppendLine($"- {Text(item, "workspace")} ({Text(item, "providerAccountId")}, {Text(item, "region")}): " +
-                    $"{Money(item, "projectedMonthly", currency)} per month, pricing {Text(item, "pricingStatus")}");
+                    (monthly || !item.TryGetProperty("projectedAmount", out _)
+                        ? $"{Money(item, "projectedMonthly", currency)} per month"
+                        : $"{Money(item, "projectedAmount", currency)} this {noun} ({Money(item, "projectedMonthly", currency)} per month)") +
+                    $", pricing {Text(item, "pricingStatus")}");
         }
         Section(body, root, "warnings", "Warnings:");
         Section(body, root, "assumptions", "Assumptions:");
@@ -94,6 +103,15 @@ public static class BudgetEmailContent
             : "You receive this as an owner or admin of the organization.");
         body.AppendLine("Owners and admins can change notification settings in Settings > Budgets.");
         return new(to, SingleLine($"Budget alert: {budget} estimate reached {threshold}% for {period}", 200), body.ToString());
+    }
+
+    private static (string Noun, string Description) Period(JsonElement root, string key)
+    {
+        var type = Text(root, "periodType");
+        if (!BudgetPeriods.IsValid(type) || !root.TryGetProperty("periodStart", out var start)
+            || !start.TryGetDateTimeOffset(out var startsAt))
+            return (BudgetPeriods.Month, $"{key} (UTC calendar month)");
+        return (type, BudgetPeriods.Describe(BudgetPeriods.For(type, startsAt)));
     }
 
     private static void Section(StringBuilder body, JsonElement root, string name, string title)

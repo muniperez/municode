@@ -256,8 +256,8 @@ namespace Workspaces.Common.Migrations.Postgres
                         .HasColumnName("id");
 
                     b.Property<string>("AlertPeriod")
-                        .HasMaxLength(7)
-                        .HasColumnType("character varying(7)")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
                         .HasColumnName("alert_period");
 
                     b.Property<int?>("AlertThresholdPercent")
@@ -267,6 +267,10 @@ namespace Workspaces.Common.Migrations.Postgres
                     b.Property<DateTimeOffset?>("AlertedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("alerted_at");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric")
+                        .HasColumnName("amount");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
@@ -297,10 +301,6 @@ namespace Workspaces.Common.Migrations.Postgres
                         .HasColumnType("boolean")
                         .HasColumnName("in_app_alerts_enabled");
 
-                    b.Property<decimal>("MonthlyAmount")
-                        .HasColumnType("numeric")
-                        .HasColumnName("monthly_amount");
-
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(128)
@@ -311,6 +311,14 @@ namespace Workspaces.Common.Migrations.Postgres
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("organization_id");
+
+                    b.Property<string>("Period")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("month")
+                        .HasColumnName("period");
 
                     b.Property<string>("ProviderAccountIdsJson")
                         .IsRequired()
@@ -330,6 +338,13 @@ namespace Workspaces.Common.Migrations.Postgres
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
+
+                    b.Property<string>("VmIdsJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("[]")
+                        .HasColumnName("vm_ids_json");
 
                     b.Property<bool>("WebhookEnabled")
                         .HasColumnType("boolean")
@@ -354,6 +369,13 @@ namespace Workspaces.Common.Migrations.Postgres
                         .HasMaxLength(2048)
                         .HasColumnType("character varying(2048)")
                         .HasColumnName("webhook_url");
+
+                    b.Property<string>("WorkspaceIdsJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("[]")
+                        .HasColumnName("workspace_ids_json");
 
                     b.HasKey("Id");
 
@@ -417,8 +439,8 @@ namespace Workspaces.Common.Migrations.Postgres
 
                     b.Property<string>("Period")
                         .IsRequired()
-                        .HasMaxLength(7)
-                        .HasColumnType("character varying(7)")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
                         .HasColumnName("period");
 
                     b.Property<string>("Recipient")

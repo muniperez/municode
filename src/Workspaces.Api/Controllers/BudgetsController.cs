@@ -98,7 +98,9 @@ public sealed class BudgetsController(WorkspaceDbContext db, ControlPlaneAuthori
     private Task SaveAuditAsync(Budget budget, string action, CancellationToken ct) =>
         audit.AppendAsync(budget.OrganizationId, Actor(), action, JsonSerializer.Serialize(new
         {
-            budgetId = budget.Id, budget.Name, budget.Currency, budget.MonthlyAmount, budget.Revision,
+            budgetId = budget.Id, budget.Name, budget.Currency, budget.Period, budget.Amount, budget.Revision,
+            providerAccountIds = JsonSerializer.Deserialize<string[]>(budget.ProviderAccountIdsJson),
+            workspaceIds = JsonSerializer.Deserialize<string[]>(budget.WorkspaceIdsJson), vmIds = JsonSerializer.Deserialize<string[]>(budget.VmIdsJson),
             inAppAlerts = budget.InAppAlertsEnabled, webhook = budget.WebhookEnabled, email = budget.EmailEnabled,
             emailAudience = budget.EmailAudience,
             webhookTarget = budget.WebhookUrl is null ? null : new Uri(budget.WebhookUrl).GetLeftPart(UriPartial.Authority)
