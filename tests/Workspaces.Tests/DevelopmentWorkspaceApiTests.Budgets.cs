@@ -369,6 +369,64 @@ public sealed partial class DevelopmentWorkspaceApiTests
     }
 
     [Fact]
+    public async Task BudgetScopesSelectWorkspacesOrVmsAndPeriodsAlertOncePerPeriodKey()
+    {
+        using var owner = Client(token);
+        var first = await Create(owner);
+        var second = await CreateNamed(owner, "Second");
+        foreach (var id in new[] { first.Id, second.Id })
+        {
+            var started = await owner.PostAsync($"{Root}/{id}/start?organizationId=org", null);
+            Assert.True(started.IsSuccessStatusCode, await started.Content.ReadAsStringAsync());
+        }
+        string secondVm;
+        await using (var scope = factory.Services.CreateAsyncScope())
+            secondVm = await scope.ServiceProvider.GetRequiredService<WorkspaceDbContext>().DevelopmentWorkspaceVms
+                .Where(x => x.WorkspaceId == second.Id).Select(x => x.Id).SingleAsync();
+        await AssertBudgetError(await owner.PostAsJsonAsync(Budgets, new CreateBudgetRequest("org", "Bad", 10m, Period: "daily")),
+            400, "budget_period_invalid");
+        await AssertBudgetError(await owner.PostAsJsonAsync(Budgets, new CreateBudgetRequest("org", "Bad", 10m,
+            WorkspaceIds: ["missing"])), 400, "budget_scope_invalid");
+        await AssertBudgetError(await owner.PostAsJsonAsync(Budgets, new CreateBudgetRequest("org", "Bad", 10m,
+            VmIds: [secondVm, "missing"])), 400, "budget_scope_invalid");
+
+        // 0.10/VM-hour for 168 hours plus 2.00/month of storage prorated to 168 of 720 hours.
+        var weekly = await CreateBudget(owner, new("org", "Weekly", 10m, Thresholds: [100], Period: "WEEK",
+            WorkspaceIds: [first.Id]));
+        Assert.Equal(("week", 10m), (weekly.Period, weekly.Amount));
+        Assert.Equal([first.Id], weekly.WorkspaceIds);
+        Assert.Matches(@"^\d{4}-W\d{2}$", weekly.Projection.Period);
+        Assert.Equal(("week", 168m, 17.27m, 74m, 100), (weekly.Projection.PeriodType, weekly.Projection.PeriodHours,
+            weekly.Projection.ProjectedAmount, weekly.Projection.ProjectedMonthly, weekly.Projection.CrossedThreshold));
+        Assert.Equal(TimeSpan.FromDays(7), weekly.Projection.PeriodEnd - weekly.Projection.PeriodStart);
+        Assert.Equal(DayOfWeek.Monday, weekly.Projection.PeriodStart.DayOfWeek);
+        Assert.Equal([first.Id], weekly.Projection.Contributors.Select(x => x.WorkspaceId));
+
+        var vmOnly = await CreateBudget(owner, new("org", "One VM", 1000m, Period: "quarter", VmIds: [secondVm]));
+        Assert.Matches(@"^\d{4}-Q[1-4]$", vmOnly.Projection.Period);
+        var contributor = Assert.Single(vmOnly.Projection.Contributors);
+        Assert.Equal((second.Id, 0m, 216m), (contributor.WorkspaceId, contributor.StorageMonthly, contributor.ProjectedAmount));
+        Assert.Null(vmOnly.Projection.CrossedThreshold);
+
+        Assert.Equal(1, await EvaluateBudgetsConcurrentlyAsync());
+        var kept = await PutBudget(owner, weekly.Id, new(weekly.Revision, "Weekly", 10m, [100]));
+        Assert.Equal(("week", weekly.Projection.Period), (kept.Period, kept.LastAlert!.Period));
+        Assert.Equal([first.Id], kept.WorkspaceIds);
+        Assert.Equal(0, await EvaluateBudgetsConcurrentlyAsync());
+
+        // A new period or scope is a new alert baseline, and the claim uses the new period key.
+        var monthly = await PutBudget(owner, weekly.Id, new(kept.Revision, "Weekly", 10m, [100], Period: "month", WorkspaceIds: []));
+        Assert.Null(monthly.LastAlert);
+        Assert.Equal(("month", 148m, 148m), (monthly.Period, monthly.Projection.ProjectedAmount, monthly.Projection.ProjectedMonthly));
+        Assert.Equal(1, await EvaluateBudgetsConcurrentlyAsync());
+        var periods = (await BudgetAlertsAsync()).Select(x => JsonDocument.Parse(x.Details!).RootElement)
+            .Select(x => (x.GetProperty("period").GetString(), x.GetProperty("periodType").GetString(), x.GetProperty("amount").GetDecimal()))
+            .Order().ToList();
+        Assert.Equal([(monthly.Projection.Period, "month", 10m), (weekly.Projection.Period, "week", 10m)], periods);
+        Assert.Matches(@"^\d{4}-\d{2}$", monthly.Projection.Period);
+    }
+
+    [Fact]
     public async Task BudgetsValidateAuditAndUseRevisions()
     {
         using var owner = Client(token);

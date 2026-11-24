@@ -7,10 +7,18 @@ public sealed class Budget
     public string OrganizationId { get; set; } = default!;
     public string Name { get; set; } = default!;
     public string Currency { get; set; } = default!;
-    public decimal MonthlyAmount { get; set; }
+    // "month" (calendar month), "week" (ISO week, Monday to Sunday) or "quarter" (calendar quarter), all in UTC.
+    public string Period { get; set; } = "month";
+    // Budget amount for one period.
+    public decimal Amount { get; set; }
     public string ThresholdsJson { get; set; } = "[]";
+    // Scope: provider accounts narrow the budget; selected workspaces (all their VMs and the volume) and individual VMs
+    // (compute only) narrow it further. Empty lists select everything.
     public string ProviderAccountIdsJson { get; set; } = "[]";
-    // Highest threshold already alerted in AlertPeriod (UTC "yyyy-MM"); dedupes alerts per threshold per month.
+    public string WorkspaceIdsJson { get; set; } = "[]";
+    public string VmIdsJson { get; set; } = "[]";
+    // Highest threshold already alerted in AlertPeriod (the period key, for example "2026-11", "2026-W48" or "2026-Q4");
+    // dedupes alerts per threshold per budget period.
     public string? AlertPeriod { get; set; }
     public int? AlertThresholdPercent { get; set; }
     public DateTimeOffset? AlertedAt { get; set; }

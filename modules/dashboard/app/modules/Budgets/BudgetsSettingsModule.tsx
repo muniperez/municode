@@ -12,9 +12,11 @@ import { PageScaffold } from "@/core/components/PageScaffold";
 import { useAuth } from "@/core/auth/AuthProvider";
 import {
   createBudget, deleteBudget, listBudgets, updateBudget, type Budget, type BudgetContributor, type BudgetEmailAudience,
-  type BudgetNotificationInput,
+  type BudgetNotificationInput, type BudgetPeriod, type BudgetProjection,
 } from "@/api/budgetsApi";
 import { listProviders, type ProviderAccount } from "@/api/providersApi";
+import { listDevelopmentWorkspaces } from "@/api/workspacesApi";
+import type { DevelopmentWorkspace } from "@/models/controlPlane";
 import { formatPrice } from "@/modules/Workspaces/WorkspaceCostEstimate";
 import { ProviderChargesSection } from "./ProviderChargesSection";
 
@@ -23,6 +25,34 @@ export function budgetStatus(budget: Budget) {
   if (projection.overBudget) return { label: "Over budget", variant: "destructive" as const };
   if (projection.crossedThreshold !== null) return { label: `Crossed ${projection.crossedThreshold}%`, variant: "secondary" as const };
   return { label: "Within budget", variant: "outline" as const };
+}
+
+const periodLabels = { month: "Monthly", week: "Weekly", quarter: "Quarterly" } as const;
+const periodNouns = { month: "month", week: "week", quarter: "quarter" } as const;
+const selectClass = "h-10 w-full rounded-md border border-input bg-background px-3 text-sm";
+
+/** For example "2026-W49 (Nov 30 – Dec 6, UTC)"; the end is exclusive. */
+export function periodLabel(projection: BudgetProjection) {
+  const day = (value: Date) => value.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  const start = new Date(projection.periodStart);
+  const last = new Date(new Date(projection.periodEnd).getTime() - 1);
+  return `${projection.period} (${day(start)} – ${day(last)}, UTC)`;
+}
+
+export function scopeLabel(budget: Budget, providers: ProviderAccount[], workspaces: DevelopmentWorkspace[]) {
+  const parts = [budget.providerAccountIds.length === 0 ? "All provider accounts"
+    : budget.providerAccountIds.map(id => providers.find(provider => provider.id === id)?.name ?? id).join(", ")];
+  if (budget.workspaceIds.length > 0)
+    parts.push(`workspaces ${budget.workspaceIds.map(id => workspaces.find(item => item.id === id)?.name ?? id).join(", ")}`);
+  if (budget.vmIds.length > 0) {
+    const names = budget.vmIds.map(id => {
+      const workspace = workspaces.find(item => item.vms.some(vm => vm.id === id));
+      const vm = workspace?.vms.find(item => item.id === id);
+      return workspace && vm ? `${workspace.name} ${vm.kind} VM` : id;
+    });
+    parts.push(`VMs ${names.join(", ")}`);
+  }
+  return parts.join(" · ");
 }
 
 export function pricingLabel(item: BudgetContributor) {
@@ -36,6 +66,7 @@ export function BudgetsSettingsModule() {
   const canManage = ["owner", "admin"].includes(selectedOrganization?.role?.toLowerCase() ?? "");
   const [budgets, setBudgets] = useState<Budget[] | null>(null);
   const [providers, setProviders] = useState<ProviderAccount[]>([]);
+  const [workspaces, setWorkspaces] = useState<DevelopmentWorkspace[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Budget | "new" | null>(null);
   const [revealed, setRevealed] = useState<{ name: string; secret: string } | null>(null);
@@ -62,6 +93,15 @@ export function BudgetsSettingsModule() {
     return () => controller.abort();
   }, [load]);
 
+  // Workspaces are only needed to pick a scope or to name scoped workspaces and VMs.
+  const needsWorkspaces = editing !== null || (budgets?.some(item => item.workspaceIds.length > 0 || item.vmIds.length > 0) ?? false);
+  useEffect(() => {
+    if (!organizationId || !needsWorkspaces) return;
+    const controller = new AbortController();
+    listDevelopmentWorkspaces(organizationId, controller.signal).then(setWorkspaces).catch(() => {});
+    return () => controller.abort();
+  }, [organizationId, needsWorkspaces]);
+
   return <PageScaffold breadcrumbs={[{ label: "Settings" }, { label: "Budgets" }]} title="Budgets"
     actions={canManage && editing === null ? <Button onClick={() => setEditing("new")}>Create budget</Button> : null}>
     <p className="text-sm text-muted-foreground">
@@ -71,7 +111,7 @@ export function BudgetsSettingsModule() {
     {!canManage && <p className="text-sm text-muted-foreground">You can view budgets. Owners and admins can change them.</p>}
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     {canManage && editing !== null && organizationId && <BudgetForm organizationId={organizationId}
-      budget={editing === "new" ? null : editing} providers={providers}
+      budget={editing === "new" ? null : editing} providers={providers} workspaces={workspaces}
       onCancel={() => setEditing(null)} onSaved={async saved => {
         setEditing(null);
         if (saved.webhookSigningSecret) setRevealed({ name: saved.name, secret: saved.webhookSigningSecret });
@@ -88,23 +128,23 @@ export function BudgetsSettingsModule() {
     </Card>}
     {budgets === null && !error && <p className="text-sm text-muted-foreground">Loading budgets…</p>}
     {budgets?.length === 0 && <EmptyState title="No budgets yet">
-      {canManage ? "Create a monthly budget to compare estimated spend with your thresholds." : "No budgets have been set for this organization."}
+      {canManage ? "Create a monthly, weekly or quarterly budget to compare estimated spend with your thresholds." : "No budgets have been set for this organization."}
     </EmptyState>}
-    {budgets?.map(budget => <BudgetCard key={budget.id} budget={budget} canManage={canManage} providers={providers}
+    {budgets?.map(budget => <BudgetCard key={budget.id} budget={budget} canManage={canManage} providers={providers} workspaces={workspaces}
       onEdit={() => setEditing(budget)} onDeleted={() => load()} onError={setError} />)}
   </PageScaffold>;
 }
 
-function BudgetCard({ budget, canManage, providers, onEdit, onDeleted, onError }: {
-  budget: Budget; canManage: boolean; providers: ProviderAccount[];
+function BudgetCard({ budget, canManage, providers, workspaces, onEdit, onDeleted, onError }: {
+  budget: Budget; canManage: boolean; providers: ProviderAccount[]; workspaces: DevelopmentWorkspace[];
   onEdit: () => void; onDeleted: () => Promise<void> | void; onError: (message: string) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const projection = budget.projection;
   const status = budgetStatus(budget);
   const money = (value: number) => formatPrice(value, budget.currency) ?? `${value} ${budget.currency}`;
-  const scope = budget.providerAccountIds.length === 0 ? "All provider accounts"
-    : budget.providerAccountIds.map(id => providers.find(provider => provider.id === id)?.name ?? id).join(", ");
+  const scope = scopeLabel(budget, providers, workspaces);
+  const monthly = budget.period === "month";
   async function remove() {
     try { await deleteBudget(budget.id); await onDeleted(); }
     catch (cause) { onError(cause instanceof Error ? cause.message : "Budget could not be deleted."); }
@@ -117,7 +157,7 @@ function BudgetCard({ budget, canManage, providers, onEdit, onDeleted, onError }
           <Badge variant={status.variant}>{status.label}</Badge>
           {!projection.complete && <Badge variant="outline">Incomplete estimate</Badge>}
         </CardTitle>
-        <CardDescription>{money(budget.monthlyAmount)} per month · {scope} · alerts at {budget.thresholds.map(x => `${x}%`).join(", ")}</CardDescription>
+        <CardDescription>{money(budget.amount)} per {periodNouns[budget.period]} · {scope} · alerts at {budget.thresholds.map(x => `${x}%`).join(", ")}</CardDescription>
         <CardDescription>Notifications: {channels(budget)}
           {budget.lastAlert ? ` · last alert ${budget.lastAlert.threshold}% for ${budget.lastAlert.period}` : ""}</CardDescription>
       </div>
@@ -131,8 +171,9 @@ function BudgetCard({ budget, canManage, providers, onEdit, onDeleted, onError }
     </CardHeader>
     <CardContent className="space-y-3 text-sm">
       <div>
-        <p><span className="font-medium">Estimated {money(projection.projectedMonthly)}</span> of {money(budget.monthlyAmount)} for {projection.period} ({projection.percentOfBudget}%)</p>
-        <p className="text-muted-foreground">Estimated current run rate {money(projection.projectedHourly)}/hour. The estimate does not include provider-reported charges.</p>
+        <p><span className="font-medium">Estimated {money(projection.projectedAmount)}</span> of {money(budget.amount)} for {periodLabel(projection)} ({projection.percentOfBudget}%)</p>
+        <p className="text-muted-foreground">Estimated current run rate {money(projection.projectedHourly)}/hour
+          {monthly ? "" : ` (${money(projection.projectedMonthly)}/month)`}. The estimate does not include provider-reported charges.</p>
         <div className="mt-2 h-2 overflow-hidden rounded bg-muted" role="progressbar" aria-label={`${budget.name} estimated spend`}
           aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, projection.percentOfBudget)}>
           <div className={`h-full ${projection.overBudget ? "bg-destructive" : "bg-primary"}`} style={{ width: `${Math.min(100, projection.percentOfBudget)}%` }} />
@@ -143,12 +184,14 @@ function BudgetCard({ budget, canManage, providers, onEdit, onDeleted, onError }
       </ul>}
       {projection.providers.length > 0 && <Table aria-label={`${budget.name} estimate by provider`}>
         <TableHeader><TableRow><TableHead>Provider account</TableHead><TableHead>Compute / month</TableHead>
-          <TableHead>Storage / month</TableHead><TableHead>Estimated / month</TableHead></TableRow></TableHeader>
+          <TableHead>Storage / month</TableHead><TableHead>Estimated / month</TableHead>
+          {!monthly && <TableHead>Estimated / {periodNouns[budget.period]}</TableHead>}</TableRow></TableHeader>
         <TableBody>{projection.providers.map(provider => <TableRow key={provider.providerAccountId}>
           <TableCell>{provider.providerName} <span className="text-muted-foreground">({provider.providerType})</span>
             {!provider.complete && <Badge variant="outline" className="ml-2">Missing prices</Badge>}</TableCell>
           <TableCell>{money(provider.computeMonthly)}</TableCell><TableCell>{money(provider.storageMonthly)}</TableCell>
           <TableCell>{money(provider.projectedMonthly)}</TableCell>
+          {!monthly && <TableCell>{money(provider.projectedAmount)}</TableCell>}
         </TableRow>)}</TableBody>
       </Table>}
       {projection.providers.some(provider => provider.assumptions.length > 0) && <Disclosure label="Pricing assumptions by provider">
@@ -161,12 +204,14 @@ function BudgetCard({ budget, canManage, providers, onEdit, onDeleted, onError }
       {projection.contributors.length > 0 && <Disclosure label={`Contributing workspaces (${projection.contributors.length})`}>
         <Table aria-label={`${budget.name} contributing workspaces`}>
           <TableHeader><TableRow><TableHead>Workspace</TableHead><TableHead>Region / SKU</TableHead>
-            <TableHead>Running VMs</TableHead><TableHead>Estimated / month</TableHead><TableHead>Pricing</TableHead></TableRow></TableHeader>
+            <TableHead>Running VMs</TableHead><TableHead>Estimated / month</TableHead>
+            {!monthly && <TableHead>Estimated / {periodNouns[budget.period]}</TableHead>}<TableHead>Pricing</TableHead></TableRow></TableHeader>
           <TableBody>{projection.contributors.map(item => <TableRow key={item.workspaceId}>
             <TableCell>{item.workspaceName}</TableCell>
             <TableCell>{item.region}{item.skus.length ? ` · ${item.skus.join(", ")}` : ""}</TableCell>
             <TableCell>{item.reservedVmCount}</TableCell>
             <TableCell>{money(item.projectedMonthly)}</TableCell>
+            {!monthly && <TableCell>{money(item.projectedAmount)}</TableCell>}
             <TableCell>{pricingLabel(item)}</TableCell>
           </TableRow>)}</TableBody>
         </Table>
@@ -209,15 +254,20 @@ function channels(budget: Budget) {
   return enabled.length ? enabled.join(", ") : "off";
 }
 
-function BudgetForm({ organizationId, budget, providers, onCancel, onSaved }: {
-  organizationId: string; budget: Budget | null; providers: ProviderAccount[];
+function BudgetForm({ organizationId, budget, providers, workspaces, onCancel, onSaved }: {
+  organizationId: string; budget: Budget | null; providers: ProviderAccount[]; workspaces: DevelopmentWorkspace[];
   onCancel: () => void; onSaved: (saved: Budget) => Promise<void> | void;
 }) {
   const [name, setName] = useState(budget?.name ?? "");
-  const [amount, setAmount] = useState(budget ? String(budget.monthlyAmount) : "");
+  const [amount, setAmount] = useState(budget ? String(budget.amount) : "");
+  const [period, setPeriod] = useState<BudgetPeriod>(budget?.period ?? "month");
   const [currency, setCurrency] = useState(budget?.currency ?? "USD");
   const [thresholds, setThresholds] = useState((budget?.thresholds ?? [50, 80, 100]).join(", "));
   const [scope, setScope] = useState<string[]>(budget?.providerAccountIds ?? []);
+  const [workspaceIds, setWorkspaceIds] = useState<string[]>(budget?.workspaceIds ?? []);
+  const [vmIds, setVmIds] = useState<string[]>(budget?.vmIds ?? []);
+  const toggle = (set: (update: (current: string[]) => string[]) => void, id: string, on: boolean) =>
+    set(current => on ? [...current.filter(item => item !== id), id] : current.filter(item => item !== id));
   const [inApp, setInApp] = useState(budget?.notifications.inApp ?? true);
   const [webhook, setWebhook] = useState(budget?.notifications.webhook ?? false);
   const [webhookUrl, setWebhookUrl] = useState("");
@@ -238,7 +288,10 @@ function BudgetForm({ organizationId, budget, providers, onCancel, onSaved }: {
     if (url && !removeWebhook) notifications.webhookUrl = url;
     else if (removeWebhook) notifications.webhookUrl = "";
     if (rotate && !removeWebhook) notifications.rotateWebhookSecret = true;
-    const input = { name, monthlyAmount: Number(amount), thresholds: parsed, providerAccountIds: scope, notifications };
+    // A whole selected workspace already includes its VMs.
+    const selectedVms = vmIds.filter(id => !workspaces.some(item => workspaceIds.includes(item.id) && item.vms.some(vm => vm.id === id)));
+    const input = { name, amount: Number(amount), period, thresholds: parsed, providerAccountIds: scope, workspaceIds,
+      vmIds: selectedVms, notifications };
     setSaving(true);
     setError(null);
     try {
@@ -252,14 +305,19 @@ function BudgetForm({ organizationId, budget, providers, onCancel, onSaved }: {
   }
   return <Card>
     <CardHeader><CardTitle>{budget ? `Edit ${budget.name}` : "Create budget"}</CardTitle>
-      <CardDescription>Alerts are informational: they are checked in the background every few minutes, sent once per threshold per month, and never block or stop workspaces.</CardDescription>
+      <CardDescription>Alerts are informational: they are checked in the background every few minutes, sent once per threshold per budget period, and never block or stop workspaces.</CardDescription>
     </CardHeader>
     <CardContent>
       <form className="grid gap-4" onSubmit={event => void submit(event)}>
         <div className="grid gap-2"><Label htmlFor="budget-name">Name</Label>
           <Input id="budget-name" value={name} maxLength={128} required onChange={event => setName(event.target.value)} /></div>
         <div className="grid gap-4 sm:grid-cols-2">
-          <div className="grid gap-2"><Label htmlFor="budget-amount">Monthly amount</Label>
+          <div className="grid gap-2"><Label htmlFor="budget-period">Period</Label>
+            <select id="budget-period" className={selectClass} value={period} onChange={event => setPeriod(event.target.value as BudgetPeriod)}>
+              {(Object.keys(periodLabels) as BudgetPeriod[]).map(value => <option key={value} value={value}>{periodLabels[value]}</option>)}
+            </select>
+            <p className="text-xs text-muted-foreground">UTC calendar months, ISO weeks (Monday to Sunday) or calendar quarters.</p></div>
+          <div className="grid gap-2"><Label htmlFor="budget-amount">Amount per {periodNouns[period]}</Label>
             <Input id="budget-amount" type="number" min="0.01" step="0.01" required value={amount} onChange={event => setAmount(event.target.value)} /></div>
           <div className="grid gap-2"><Label htmlFor="budget-currency">Currency</Label>
             <Input id="budget-currency" value={currency} maxLength={3} required disabled={budget !== null}
@@ -274,6 +332,26 @@ function BudgetForm({ organizationId, budget, providers, onCancel, onSaved }: {
               setScope(current => checked ? [...current, provider.id] : current.filter(id => id !== provider.id))} />
             {provider.name} <span className="text-muted-foreground">({provider.providerType})</span>
           </label>)}
+        </fieldset>}
+        {workspaces.length > 0 && <fieldset className="grid gap-2"><legend className="text-sm font-medium">Workspaces and VMs</legend>
+          <p className="text-xs text-muted-foreground">Leave all unchecked to include every workspace in the selected provider accounts.
+            A workspace includes its VMs and storage; a single VM includes only its compute.</p>
+          {workspaces.map(workspace => {
+            const whole = workspaceIds.includes(workspace.id);
+            return <div key={workspace.id} className="grid gap-1">
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox aria-label={`Workspace ${workspace.name}`} checked={whole}
+                  onCheckedChange={checked => toggle(setWorkspaceIds, workspace.id, checked === true)} />
+                {workspace.name} <span className="text-muted-foreground">({workspace.region})</span>
+              </label>
+              {workspace.vms.length > 0 && <div className="grid gap-1 pl-6">{workspace.vms.map(vm =>
+                <label key={vm.id} className="flex items-center gap-2 text-sm">
+                  <Checkbox aria-label={`VM ${workspace.name} ${vm.kind} ${vm.sku}`} disabled={whole} checked={whole || vmIds.includes(vm.id)}
+                    onCheckedChange={checked => toggle(setVmIds, vm.id, checked === true)} />
+                  {vm.kind} VM · {vm.sku} <span className="text-muted-foreground">({vm.desiredState})</span>
+                </label>)}</div>}
+            </div>;
+          })}
         </fieldset>}
         <fieldset className="grid gap-2"><legend className="text-sm font-medium">Notifications</legend>
           <label className="flex items-center gap-2 text-sm">

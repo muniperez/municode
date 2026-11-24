@@ -1,22 +1,28 @@
 namespace Workspaces.Common.Contracts;
 
-public sealed record CreateBudgetRequest(string OrganizationId, string Name, decimal MonthlyAmount, string? Currency = null,
+// Amount is per Period: "month" (default), "week" (ISO week, Monday to Sunday) or "quarter", all in UTC. WorkspaceIds and
+// VmIds narrow the scope to whole workspaces (their VMs and volume) or individual VMs (compute only); empty selects all.
+public sealed record CreateBudgetRequest(string OrganizationId, string Name, decimal Amount, string? Currency = null,
     IReadOnlyList<int>? Thresholds = null, IReadOnlyList<string>? ProviderAccountIds = null,
-    BudgetNotificationSettingsRequest? Notifications = null);
+    BudgetNotificationSettingsRequest? Notifications = null, string? Period = null, IReadOnlyList<string>? WorkspaceIds = null,
+    IReadOnlyList<string>? VmIds = null);
 
-public sealed record UpdateBudgetRequest(long Revision, string Name, decimal MonthlyAmount,
+// A null Period, WorkspaceIds or VmIds keeps the current value.
+public sealed record UpdateBudgetRequest(long Revision, string Name, decimal Amount,
     IReadOnlyList<int>? Thresholds = null, IReadOnlyList<string>? ProviderAccountIds = null,
-    BudgetNotificationSettingsRequest? Notifications = null);
+    BudgetNotificationSettingsRequest? Notifications = null, string? Period = null, IReadOnlyList<string>? WorkspaceIds = null,
+    IReadOnlyList<string>? VmIds = null);
 
 // Null fields keep the current value. WebhookUrl "" removes the webhook. The full URL is write-only.
 // EmailAudience is "admins" (owners and admins) or "members" (every current member).
 public sealed record BudgetNotificationSettingsRequest(bool? InApp = null, bool? Webhook = null, string? WebhookUrl = null,
     bool RotateWebhookSecret = false, bool? Email = null, string? EmailAudience = null);
 
-public sealed record BudgetResponse(string Id, string OrganizationId, string Name, string Currency, decimal MonthlyAmount,
+public sealed record BudgetResponse(string Id, string OrganizationId, string Name, string Currency, decimal Amount,
     IReadOnlyList<int> Thresholds, IReadOnlyList<string> ProviderAccountIds, long Revision, DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt, BudgetProjectionResponse Projection, BudgetNotificationSettingsResponse Notifications,
-    BudgetLastAlertResponse? LastAlert, IReadOnlyList<BudgetNotificationDeliveryResponse> Deliveries)
+    BudgetLastAlertResponse? LastAlert, IReadOnlyList<BudgetNotificationDeliveryResponse> Deliveries, string Period,
+    IReadOnlyList<string> WorkspaceIds, IReadOnlyList<string> VmIds)
 {
     // Returned once, only by the create or update call that generated or rotated the secret.
     public string? WebhookSigningSecret { get; init; }
@@ -37,23 +43,30 @@ public sealed record BudgetNotificationDeliveryResponse(string Id, string Channe
 
 // Every amount is an estimate derived from recorded rates. Provider-reported charges are never mixed in; see
 // BudgetResponse.ProviderCharges, so ProviderChargesAvailable stays false here.
+// Period is the key of the current budget period ("2026-11", "2026-W48" or "2026-Q4") covering [PeriodStart, PeriodEnd).
+// ProjectedAmount is the estimate for that whole period and is what PercentOfBudget, thresholds and OverBudget compare with
+// the budget amount; the *Monthly fields are the 720-hour monthly run rate for comparison.
 public sealed record BudgetProjectionResponse(string Period, bool Estimate, bool Complete, decimal ProjectedHourly,
     decimal ProjectedMonthly, decimal PercentOfBudget, int? CrossedThreshold, bool OverBudget, bool ProviderChargesAvailable,
     IReadOnlyList<BudgetProviderProjectionResponse> Providers, IReadOnlyList<BudgetContributorResponse> Contributors,
-    IReadOnlyList<BudgetExcludedWorkspaceResponse> Excluded, IReadOnlyList<string> Warnings, IReadOnlyList<string> Assumptions);
+    IReadOnlyList<BudgetExcludedWorkspaceResponse> Excluded, IReadOnlyList<string> Warnings, IReadOnlyList<string> Assumptions,
+    string PeriodType, DateTimeOffset PeriodStart, DateTimeOffset PeriodEnd, decimal PeriodHours, decimal ProjectedAmount);
 
 public sealed record BudgetProviderProjectionResponse(string ProviderAccountId, string ProviderName, string ProviderType,
     decimal ComputeMonthly, decimal StorageMonthly, decimal ProjectedMonthly, int WorkspaceCount, int ReservedVmCount,
-    bool Complete, IReadOnlyList<string> Assumptions);
+    bool Complete, IReadOnlyList<string> Assumptions, decimal ProjectedAmount);
 
 public sealed record BudgetContributorResponse(string WorkspaceId, string WorkspaceName, string ProviderAccountId, string Region,
     IReadOnlyList<string> Skus, int ReservedVmCount, decimal ComputeHourly, decimal ComputeMonthly, decimal StorageMonthly,
-    decimal ProjectedMonthly, string PricingStatus, DateTimeOffset? PricingUpdatedAt, IReadOnlyList<BudgetPriceLineResponse> Lines);
+    decimal ProjectedMonthly, string PricingStatus, DateTimeOffset? PricingUpdatedAt, IReadOnlyList<BudgetPriceLineResponse> Lines,
+    decimal ProjectedAmount);
 
 // Source is "catalog" or "fallback" (the rate recorded when the VM was selected). Status is "current", "stale" or
-// "missing"; a missing price has a null Amount and is never counted as zero.
+// "missing"; a missing price has null amounts and is never counted as zero. Amount is the monthly run rate and
+// PeriodAmount the estimate for the budget period.
 public sealed record BudgetPriceLineResponse(string Resource, string ResourceId, string? Sku, decimal Quantity, string Source,
-    string? CatalogEntryId, string BillingModel, string Currency, decimal? Amount, string Status, DateTimeOffset? PricedAt);
+    string? CatalogEntryId, string BillingModel, string Currency, decimal? Amount, string Status, DateTimeOffset? PricedAt,
+    decimal? PeriodAmount);
 
 public sealed record BudgetExcludedWorkspaceResponse(string WorkspaceId, string WorkspaceName, string Currency, string Reason);
 

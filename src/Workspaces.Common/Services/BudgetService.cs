@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -32,6 +31,7 @@ public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeP
     public const string ThresholdCrossedEvent = "budget.threshold_crossed";
     public const decimal HoursPerMonth = 720m;
     public const int MaxBudgetsPerOrganization = 20;
+    public const int MaxScopedResources = 50;
     private const int PayloadContributors = 10;
     private static readonly int[] DefaultThresholds = [50, 80, 100];
     private DevelopmentWorkspaceOptions Policy => options.Value;
@@ -55,16 +55,20 @@ public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeP
             throw new BudgetException("budget_currency_invalid", "Use a three-letter ISO 4217 currency code.");
         var name = ValidName(request.Name);
         var thresholds = ValidThresholds(request.Thresholds);
-        var amount = ValidAmount(request.MonthlyAmount);
+        var amount = ValidAmount(request.Amount);
+        var period = ValidPeriod(request.Period);
         var accounts = await ValidAccountsAsync(request.OrganizationId, request.ProviderAccountIds, ct);
+        var workspaces = await ValidWorkspacesAsync(request.OrganizationId, request.WorkspaceIds, ct);
+        var vms = await ValidVmsAsync(request.OrganizationId, request.VmIds, ct);
         if (await db.Budgets.CountAsync(x => x.OrganizationId == request.OrganizationId, ct) >= MaxBudgetsPerOrganization)
             throw new BudgetException("budget_limit_reached", $"An organization can have at most {MaxBudgetsPerOrganization} budgets.", 409);
         await EnsureNameFreeAsync(request.OrganizationId, name, null, ct);
         var budget = new Budget
         {
             Id = ids.NewId("budget"), OrganizationId = request.OrganizationId, Name = name, Currency = currency,
-            MonthlyAmount = amount, ThresholdsJson = JsonSerializer.Serialize(thresholds),
-            ProviderAccountIdsJson = JsonSerializer.Serialize(accounts), CreatedBy = actor, CreatedAt = Now, UpdatedAt = Now
+            Period = period, Amount = amount, ThresholdsJson = JsonSerializer.Serialize(thresholds),
+            ProviderAccountIdsJson = JsonSerializer.Serialize(accounts), WorkspaceIdsJson = JsonSerializer.Serialize(workspaces),
+            VmIdsJson = JsonSerializer.Serialize(vms), CreatedBy = actor, CreatedAt = Now, UpdatedAt = Now
         };
         var change = await ApplyNotificationsAsync(budget, request.Notifications, ct);
         db.Budgets.Add(budget);
@@ -78,21 +82,29 @@ public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeP
             throw new BudgetException("revision_conflict", "This budget changed. Reload it before saving.", 409);
         var name = ValidName(request.Name);
         var thresholds = ValidThresholds(request.Thresholds);
-        var amount = ValidAmount(request.MonthlyAmount);
+        var amount = ValidAmount(request.Amount);
+        var period = request.Period is null ? budget.Period : ValidPeriod(request.Period);
         var accounts = await ValidAccountsAsync(budget.OrganizationId, request.ProviderAccountIds, ct);
+        var workspacesJson = request.WorkspaceIds is null ? budget.WorkspaceIdsJson
+            : JsonSerializer.Serialize(await ValidWorkspacesAsync(budget.OrganizationId, request.WorkspaceIds, ct));
+        var vmsJson = request.VmIds is null ? budget.VmIdsJson
+            : JsonSerializer.Serialize(await ValidVmsAsync(budget.OrganizationId, request.VmIds, ct));
         await EnsureNameFreeAsync(budget.OrganizationId, name, budget.Id, ct);
         var thresholdsJson = JsonSerializer.Serialize(thresholds);
         var accountsJson = JsonSerializer.Serialize(accounts);
-        var baselineChanged = budget.MonthlyAmount != amount || budget.ThresholdsJson != thresholdsJson
-            || budget.ProviderAccountIdsJson != accountsJson;
+        var baselineChanged = budget.Amount != amount || budget.Period != period || budget.ThresholdsJson != thresholdsJson
+            || budget.ProviderAccountIdsJson != accountsJson || budget.WorkspaceIdsJson != workspacesJson || budget.VmIdsJson != vmsJson;
         var change = await ApplyNotificationsAsync(budget, request.Notifications, ct);
         budget.Name = name;
-        budget.MonthlyAmount = amount;
+        budget.Period = period;
+        budget.Amount = amount;
         budget.ThresholdsJson = thresholdsJson;
         budget.ProviderAccountIdsJson = accountsJson;
+        budget.WorkspaceIdsJson = workspacesJson;
+        budget.VmIdsJson = vmsJson;
         if (baselineChanged)
         {
-            // A changed amount, threshold or scope is a new alert baseline for the current period.
+            // A changed amount, period, threshold or scope is a new alert baseline for the current period.
             budget.AlertPeriod = null;
             budget.AlertThresholdPercent = null;
             budget.AlertedAt = null;
@@ -130,7 +142,8 @@ public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeP
         db.Budgets.AsNoTracking().Select(x => x.OrganizationId).Distinct().ToListAsync(ct);
 
     /// <summary>
-    /// Background evaluation: claims each newly crossed threshold once per budget baseline and period, then records the
+    /// Background evaluation: claims each newly crossed threshold once per budget baseline and budget period (calendar month,
+    /// ISO week or calendar quarter, identified by the period key), then records the
     /// in-app alert and queues enabled channels. Returns the number of alerts claimed by this call.
     /// </summary>
     public async Task<int> EvaluateAlertsAsync(string organizationId, CancellationToken ct)
@@ -218,14 +231,17 @@ public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeP
         DateTimeOffset now) => JsonSerializer.Serialize(new
     {
         type = ThresholdCrossedEvent, occurredAt = now, organizationId = budget.OrganizationId, budgetId = budget.Id,
-        budget = budget.Name, period = projection.Period, threshold, crossedThresholds = crossed, estimate = true,
-        complete = projection.Complete, currency = budget.Currency, monthlyAmount = budget.MonthlyAmount,
-        projectedHourly = projection.ProjectedHourly, projectedMonthly = projection.ProjectedMonthly,
+        budget = budget.Name, period = projection.Period, periodType = projection.PeriodType, periodStart = projection.PeriodStart,
+        periodEnd = projection.PeriodEnd, threshold, crossedThresholds = crossed, estimate = true,
+        complete = projection.Complete, currency = budget.Currency, amount = budget.Amount,
+        projectedAmount = projection.ProjectedAmount, projectedHourly = projection.ProjectedHourly,
+        projectedMonthly = projection.ProjectedMonthly,
         percentOfBudget = projection.PercentOfBudget, overBudget = projection.OverBudget,
         contributors = projection.Contributors.Take(PayloadContributors).Select(x => new
         {
             workspaceId = x.WorkspaceId, workspace = x.WorkspaceName, providerAccountId = x.ProviderAccountId, region = x.Region,
-            reservedVmCount = x.ReservedVmCount, projectedMonthly = x.ProjectedMonthly, pricingStatus = x.PricingStatus
+            reservedVmCount = x.ReservedVmCount, projectedAmount = x.ProjectedAmount, projectedMonthly = x.ProjectedMonthly,
+            pricingStatus = x.PricingStatus
         }),
         warnings = projection.Warnings, assumptions = projection.Assumptions
     }, PayloadJson);
@@ -321,29 +337,30 @@ public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeP
         var target = budget.WebhookUrl is null ? null : new Uri(budget.WebhookUrl).GetLeftPart(UriPartial.Authority);
         var lastAlert = budget.AlertPeriod is null || budget.AlertThresholdPercent is null || budget.AlertedAt is null ? null
             : new BudgetLastAlertResponse(budget.AlertPeriod, budget.AlertThresholdPercent.Value, budget.AlertedAt.Value);
-        return new(budget.Id, budget.OrganizationId, budget.Name, budget.Currency, budget.MonthlyAmount, Thresholds(budget),
+        return new(budget.Id, budget.OrganizationId, budget.Name, budget.Currency, budget.Amount, Thresholds(budget),
             AccountIds(budget), budget.Revision, budget.CreatedAt, budget.UpdatedAt, projection,
             new(budget.InAppAlertsEnabled, budget.WebhookEnabled, target, budget.WebhookSecretPath is not null,
                 budget.EmailEnabled, budget.EmailAudience, emailAvailable), lastAlert,
             deliveries[budget.Id].OrderByDescending(x => x.CreatedAt).ThenBy(x => x.Channel, StringComparer.Ordinal).Take(10)
                 .Select(x => new BudgetNotificationDeliveryResponse(x.Id, x.Channel, x.Period, x.Threshold, x.Status, x.Attempts,
                     x.LastError, x.CreatedAt, x.DeliveredAt, x.Status == BudgetNotification.Pending ? x.NextAttemptAt : null))
-                .ToList());
+                .ToList(), budget.Period, Ids(budget.WorkspaceIdsJson), Ids(budget.VmIdsJson));
     }
 
-    // Recent deliveries only (current and previous UTC month); ordering happens in memory for SQLite.
+    // Recent deliveries only (current and previous period of each type); ordering happens in memory for SQLite.
     private async Task<ILookup<string, BudgetNotification>> LoadDeliveriesAsync(IReadOnlyList<string> budgetIds,
         CancellationToken ct)
     {
-        var current = Now.UtcDateTime.ToString("yyyy-MM", CultureInfo.InvariantCulture);
-        var previous = Now.UtcDateTime.AddMonths(-1).ToString("yyyy-MM", CultureInfo.InvariantCulture);
+        var periods = BudgetPeriods.RecentKeys(Now);
         var rows = await db.BudgetNotifications.AsNoTracking()
-            .Where(x => budgetIds.Contains(x.BudgetId) && (x.Period == current || x.Period == previous)).ToListAsync(ct);
+            .Where(x => budgetIds.Contains(x.BudgetId) && periods.Contains(x.Period)).ToListAsync(ct);
         return rows.ToLookup(x => x.BudgetId, StringComparer.Ordinal);
     }
 
     private BudgetProjectionResponse Project(Budget budget, Inputs inputs) =>
-        BudgetProjector.Project(budget, Thresholds(budget), AccountIds(budget), inputs.Workspaces, inputs.Accounts, Policy, Now);
+        BudgetProjector.Project(budget, Thresholds(budget),
+            new BudgetScope(AccountIds(budget), Ids(budget.WorkspaceIdsJson), Ids(budget.VmIdsJson)), inputs.Workspaces,
+            inputs.Accounts, Policy, Now);
 
     private async Task<Inputs> LoadInputsAsync(string organizationId, CancellationToken ct)
     {
@@ -373,6 +390,42 @@ public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeP
         return accounts.Order(StringComparer.Ordinal).ToList();
     }
 
+    private async Task<List<string>> ValidWorkspacesAsync(string organizationId, IReadOnlyList<string>? requested, CancellationToken ct)
+    {
+        var selected = SelectedIds(requested, "workspaces");
+        if (selected.Count == 0) return selected;
+        var known = await db.DevelopmentWorkspaces.Where(x => x.OrganizationId == organizationId && selected.Contains(x.Id)
+            && x.VolumeStatus != "deleted").CountAsync(ct);
+        if (known != selected.Count)
+            throw new BudgetException("budget_scope_invalid", "Every selected workspace must exist in this organization.");
+        return selected;
+    }
+
+    private async Task<List<string>> ValidVmsAsync(string organizationId, IReadOnlyList<string>? requested, CancellationToken ct)
+    {
+        var selected = SelectedIds(requested, "VMs");
+        if (selected.Count == 0) return selected;
+        var known = await db.DevelopmentWorkspaceVms.Where(x => x.OrganizationId == organizationId && selected.Contains(x.Id)).CountAsync(ct);
+        if (known != selected.Count)
+            throw new BudgetException("budget_scope_invalid", "Every selected VM must exist in this organization.");
+        return selected;
+    }
+
+    private static List<string> SelectedIds(IReadOnlyList<string>? requested, string what)
+    {
+        var selected = (requested ?? []).Select(x => x?.Trim() ?? "").Distinct(StringComparer.Ordinal).ToList();
+        if (selected.Count > MaxScopedResources || selected.Any(x => x.Length is 0 or > 128))
+            throw new BudgetException("budget_scope_invalid", $"Select up to {MaxScopedResources} {what}, or none for all.");
+        return selected.Order(StringComparer.Ordinal).ToList();
+    }
+
+    private static string ValidPeriod(string? period)
+    {
+        var value = (period ?? BudgetPeriods.Month).Trim().ToLowerInvariant();
+        return BudgetPeriods.IsValid(value) ? value
+            : throw new BudgetException("budget_period_invalid", "Choose a budget period: month, week or quarter.");
+    }
+
     private static string ValidName(string? name)
     {
         var trimmed = name?.Trim() ?? "";
@@ -392,12 +445,13 @@ public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeP
     private static decimal ValidAmount(decimal amount)
     {
         if (amount <= 0 || amount > 1_000_000_000m || decimal.Round(amount, 2) != amount)
-            throw new BudgetException("budget_amount_invalid", "Use a positive monthly amount with at most two decimal places.");
+            throw new BudgetException("budget_amount_invalid", "Use a positive amount with at most two decimal places.");
         return amount;
     }
 
     private static List<int> Thresholds(Budget budget) => JsonSerializer.Deserialize<List<int>>(budget.ThresholdsJson) ?? [];
-    private static List<string> AccountIds(Budget budget) => JsonSerializer.Deserialize<List<string>>(budget.ProviderAccountIdsJson) ?? [];
+    private static List<string> AccountIds(Budget budget) => Ids(budget.ProviderAccountIdsJson);
+    private static List<string> Ids(string json) => JsonSerializer.Deserialize<List<string>>(json) ?? [];
 
     private sealed record Inputs(IReadOnlyList<DevelopmentWorkspace> Workspaces, IReadOnlyDictionary<string, ProviderAccount> Accounts);
 }

@@ -251,7 +251,7 @@ namespace Workspaces.Common.Migrations.Sqlite
                         .HasColumnName("id");
 
                     b.Property<string>("AlertPeriod")
-                        .HasMaxLength(7)
+                        .HasMaxLength(16)
                         .HasColumnType("TEXT")
                         .HasColumnName("alert_period");
 
@@ -262,6 +262,10 @@ namespace Workspaces.Common.Migrations.Sqlite
                     b.Property<DateTimeOffset?>("AlertedAt")
                         .HasColumnType("TEXT")
                         .HasColumnName("alerted_at");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("amount");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("TEXT")
@@ -292,10 +296,6 @@ namespace Workspaces.Common.Migrations.Sqlite
                         .HasColumnType("INTEGER")
                         .HasColumnName("in_app_alerts_enabled");
 
-                    b.Property<decimal>("MonthlyAmount")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("monthly_amount");
-
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(128)
@@ -306,6 +306,14 @@ namespace Workspaces.Common.Migrations.Sqlite
                         .IsRequired()
                         .HasColumnType("TEXT")
                         .HasColumnName("organization_id");
+
+                    b.Property<string>("Period")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("month")
+                        .HasColumnName("period");
 
                     b.Property<string>("ProviderAccountIdsJson")
                         .IsRequired()
@@ -325,6 +333,13 @@ namespace Workspaces.Common.Migrations.Sqlite
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("TEXT")
                         .HasColumnName("updated_at");
+
+                    b.Property<string>("VmIdsJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("[]")
+                        .HasColumnName("vm_ids_json");
 
                     b.Property<bool>("WebhookEnabled")
                         .HasColumnType("INTEGER")
@@ -349,6 +364,13 @@ namespace Workspaces.Common.Migrations.Sqlite
                         .HasMaxLength(2048)
                         .HasColumnType("TEXT")
                         .HasColumnName("webhook_url");
+
+                    b.Property<string>("WorkspaceIdsJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("[]")
+                        .HasColumnName("workspace_ids_json");
 
                     b.HasKey("Id");
 
@@ -412,7 +434,7 @@ namespace Workspaces.Common.Migrations.Sqlite
 
                     b.Property<string>("Period")
                         .IsRequired()
-                        .HasMaxLength(7)
+                        .HasMaxLength(16)
                         .HasColumnType("TEXT")
                         .HasColumnName("period");
 

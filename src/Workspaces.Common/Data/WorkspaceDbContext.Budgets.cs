@@ -17,7 +17,10 @@ public partial class WorkspaceDbContext
             entity.HasIndex(x => new { x.OrganizationId, x.Name }).IsUnique();
             entity.Property(x => x.Name).HasMaxLength(128);
             entity.Property(x => x.Currency).HasMaxLength(3);
-            entity.Property(x => x.AlertPeriod).HasMaxLength(7);
+            entity.Property(x => x.Period).HasMaxLength(16).HasDefaultValue("month");
+            entity.Property(x => x.AlertPeriod).HasMaxLength(16);
+            entity.Property(x => x.WorkspaceIdsJson).HasDefaultValue("[]");
+            entity.Property(x => x.VmIdsJson).HasDefaultValue("[]");
             entity.Property(x => x.Revision).IsConcurrencyToken();
             entity.Property(x => x.WebhookUrl).HasMaxLength(2048);
             entity.Property(x => x.WebhookSecretProvider).HasMaxLength(32);
@@ -33,7 +36,7 @@ public partial class WorkspaceDbContext
             entity.HasIndex(x => new { x.BudgetId, x.BudgetRevision, x.Period, x.Threshold, x.Channel, x.Recipient }).IsUnique();
             entity.HasIndex(x => new { x.Status, x.Channel });
             entity.Property(x => x.Channel).HasMaxLength(16);
-            entity.Property(x => x.Period).HasMaxLength(7);
+            entity.Property(x => x.Period).HasMaxLength(16);
             entity.Property(x => x.Recipient).HasMaxLength(128);
             entity.Property(x => x.Status).HasMaxLength(16);
             entity.Property(x => x.LastError).HasMaxLength(256);
