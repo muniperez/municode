@@ -31,7 +31,9 @@ export type ApiKeyScope =
   | "providers:read"
   | "providers:write"
   | "plans:read"
-  | "plans:write";
+  | "plans:write"
+  | "budgets:read"
+  | "budgets:write";
 
 export type ApiKeyResponse = {
   id: string;

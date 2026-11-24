@@ -55,6 +55,8 @@ const scopes: ApiKeyScope[] = [
   "providers:write",
   "plans:read",
   "plans:write",
+  "budgets:read",
+  "budgets:write",
   "github:read",
   "github:write",
 ];

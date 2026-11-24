@@ -50,6 +50,24 @@ base ref and recovered commit. Ignored or local-only files must not be assumed
 to survive. The dashboard or CLI must surface a failed or unknown operation
 instead of treating it as complete.
 
+## Budgets
+
+**Settings → Budgets** compares an estimated monthly cost with optional
+organization budgets. Every organization member can view budgets; only owners
+and admins create, edit or delete them (API key scopes `budgets:read` and
+`budgets:write`). Budgets only inform. Crossing a threshold never blocks
+creating or starting a workspace and never stops resources.
+
+The estimate is not an invoice and does not include provider-reported charges.
+It assumes every VM that currently reserves compute runs for a full 720-hour
+month at its recorded hourly rate. It adds each retained volume's recorded
+monthly storage rate and groups the total by provider account. Workspaces priced
+in another currency are excluded and listed separately. Missing pricing marks
+the estimate incomplete, and pricing older than the operator's limit is marked
+stale. The first time a threshold is crossed in a calendar month (UTC), the API
+records a `budget.threshold_crossed` audit event. The dashboard then shows a
+dismissible notice.
+
 ## Removing a checkout
 
 For a checkout with scratch-mounted build outputs, use the dashboard's confirmed

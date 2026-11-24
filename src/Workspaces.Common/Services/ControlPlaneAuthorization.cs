@@ -42,6 +42,8 @@ public sealed class ControlPlaneAuthorization(WorkspaceDbContext db)
         OrganizationAction.ManageProviders => ApiKeyScopes.ProvidersWrite,
         OrganizationAction.ReadPlans => ApiKeyScopes.PlansRead,
         OrganizationAction.ManagePlans => ApiKeyScopes.PlansWrite,
+        OrganizationAction.ReadBudgets => ApiKeyScopes.BudgetsRead,
+        OrganizationAction.ManageBudgets => ApiKeyScopes.BudgetsWrite,
         _ => null
     };
 
@@ -52,6 +54,8 @@ public sealed class ControlPlaneAuthorization(WorkspaceDbContext db)
         OrganizationAction.ReadProviders or OrganizationAction.ReadPlans => true,
         OrganizationAction.ManageProviders or OrganizationAction.ManagePlans => role is OrganizationRole.Owner or OrganizationRole.Admin,
         OrganizationAction.ReadWorkspaces => true,
+        OrganizationAction.ReadBudgets => true,
+        OrganizationAction.ManageBudgets => role is OrganizationRole.Owner or OrganizationRole.Admin,
         OrganizationAction.WriteWorkspaces => role is OrganizationRole.Owner or OrganizationRole.Admin or OrganizationRole.Developer,
         OrganizationAction.ReadApiKeys or OrganizationAction.WriteApiKeys or OrganizationAction.ManageMembers => role is OrganizationRole.Owner or OrganizationRole.Admin,
         _ => false
@@ -70,5 +74,7 @@ public enum OrganizationAction
     ReadProviders,
     ManageProviders,
     ReadPlans,
-    ManagePlans
+    ManagePlans,
+    ReadBudgets,
+    ManageBudgets
 }

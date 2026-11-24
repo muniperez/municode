@@ -12,6 +12,7 @@ import {
 import { AuthenticatedArea } from "../auth/AuthenticatedArea";
 import { SidebarNavigation } from "./SidebarNavigation";
 import { SettingsProvider } from "@/modules/Settings/SettingsProvider";
+import { BudgetAlertBanner } from "@/modules/Budgets/BudgetAlertBanner";
 export function AppShell() {
   const [open, setOpen] = useState(false);
   const main = useRef<HTMLElement>(null);
@@ -45,6 +46,7 @@ export function AppShell() {
               <span>Municode Workspaces</span>
             </header>
             <main ref={main} tabIndex={-1} className="mx-auto min-w-0 max-w-7xl p-4 md:p-6">
+              <BudgetAlertBanner />
               <Outlet />
             </main>
           </div>

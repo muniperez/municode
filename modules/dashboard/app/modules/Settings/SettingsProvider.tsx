@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { AccountFlowForm } from "@/modules/Auth/AccountFlowForm";
 import { SessionSettingsCard } from "@/modules/Auth/SessionSettingsCard";
 import { ApiKeysModule } from "@/modules/ApiKeys/ApiKeysModule";
+import { BudgetsSettingsModule } from "@/modules/Budgets/BudgetsSettingsModule";
 import { ProvidersModule } from "@/modules/Providers/ProvidersModule";
 import { GitHubSettingsModule } from "./GitHubSettingsModule";
 import { TeamSettingsModule } from "./TeamSettingsModule";
@@ -11,7 +12,8 @@ import { TeamSettingsModule } from "./TeamSettingsModule";
 const groups = [
   { label: "Account", items: [{ id: "account", label: "Account" }] },
   { label: "Workspace administration", items: [
-    { id: "plans", label: "Plans" }, { id: "team", label: "Team" }, { id: "api-keys", label: "API Keys" },
+    { id: "plans", label: "Plans" }, { id: "budgets", label: "Budgets" }, { id: "team", label: "Team" },
+    { id: "api-keys", label: "API Keys" },
   ] },
   { label: "Integrations", items: [{ id: "github", label: "GitHub" }] },
 ] as const;
@@ -106,6 +108,7 @@ export function SettingsProvider({ children, fallbackFocus }: PropsWithChildren<
               <SessionSettingsCard />
             </div>}
             {selected === "plans" && <ProvidersModule view={plansView} onViewChange={setPlansView} />}
+            {selected === "budgets" && <BudgetsSettingsModule />}
             {selected === "team" && <TeamSettingsModule />}
             {selected === "api-keys" && <ApiKeysModule />}
             {selected === "github" && <GitHubSettingsModule />}
