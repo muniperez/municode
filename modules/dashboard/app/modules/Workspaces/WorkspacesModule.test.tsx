@@ -75,11 +75,11 @@ function menuItems() {
   return items;
 }
 
-it("puts Refresh status and Stop all VMs under Workspace actions without lifecycle calls on load", async () => {
+it("puts Refresh status, Stop all VMs and Delete workspace under Workspace actions without lifecycle calls on load", async () => {
   loadDetail();
   await screen.findByRole("article", { name: "Workspace Coding" });
   expect(screen.queryByRole("button", { name: "Refresh status" })).not.toBeInTheDocument();
-  expect(menuItems()).toEqual(["Refresh status", "Stop all VMs"]);
+  expect(menuItems()).toEqual(["Refresh status", "Stop all VMs", "Delete workspace"]);
   expect(workspaceOperation).not.toHaveBeenCalled();
   vi.mocked(getWorkspace).mockResolvedValueOnce(workspace({ revision: 2, vms: [vm("primary", { phase: "ready" })] }));
   const refreshItem = within(openActions()).getByRole("menuitem", { name: "Refresh status" });
@@ -107,7 +107,7 @@ it("confirms stop all once from the page header and refreshes with the accepted 
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
-it("offers viewers and permanently deleting environments only Refresh status", async () => {
+it("offers viewers only Refresh status and deleting environments only a disabled Delete workspace besides it", async () => {
   auth.selectedOrganization = { id: "org-a", role: "viewer" };
   const view = loadDetail();
   await screen.findByRole("article", { name: "Workspace Coding" });
@@ -117,7 +117,8 @@ it("offers viewers and permanently deleting environments only Refresh status", a
   vi.mocked(getWorkspace).mockResolvedValue(workspace({ volumeStatus: "deleting", phase: "deleting" }));
   loadDetail();
   await screen.findByRole("article", { name: "Workspace Coding" });
-  expect(menuItems()).toEqual(["Refresh status"]);
+  expect(menuItems()).toEqual(["Refresh status", "Delete workspace"]);
+  expect(within(openActions()).getByRole("menuitem", { name: "Delete workspace" })).toHaveAttribute("aria-disabled", "true");
   expect(workspaceOperation).not.toHaveBeenCalled();
 });
 

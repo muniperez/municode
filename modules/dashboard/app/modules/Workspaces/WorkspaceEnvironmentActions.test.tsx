@@ -1,10 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { workspaceOperation } from "@/api/workspacesApi";
+import { deleteWorkspace, workspaceOperation } from "@/api/workspacesApi";
 import type { DevelopmentWorkspace, DevelopmentWorkspaceVm } from "@/models/controlPlane";
 import { WorkspaceEnvironmentActions } from "./WorkspaceEnvironmentActions";
 
-vi.mock("@/api/workspacesApi", () => ({ workspaceOperation: vi.fn() }));
+vi.mock("@/api/workspacesApi", () => ({ workspaceOperation: vi.fn(), deleteWorkspace: vi.fn() }));
 
 function vm(id: string, overrides: Partial<DevelopmentWorkspaceVm> = {}): DevelopmentWorkspaceVm {
   return {
@@ -26,9 +26,13 @@ function workspace(overrides: Partial<DevelopmentWorkspace> = {}): DevelopmentWo
 }
 const refreshAfterMutation = vi.fn<(observation?: DevelopmentWorkspace) => Promise<void>>();
 const onRefreshStatus = vi.fn();
-function actions(item = workspace(), canManage = true, refreshing = false) {
+function actions(item = workspace(), canManage = true, refreshing = false, canManageRole = canManage) {
   return <WorkspaceEnvironmentActions item={item} organizationId="org-a" refreshAfterMutation={refreshAfterMutation}
-    canManage={canManage} onRefreshStatus={onRefreshStatus} refreshing={refreshing} />;
+    canManage={canManage} canManageRole={canManageRole} onRefreshStatus={onRefreshStatus} refreshing={refreshing} />;
+}
+const stopped = { desiredState: "stopped", phase: "stopped", computeReserved: false } as const;
+function stoppedWorkspace(overrides: Partial<DevelopmentWorkspace> = {}) {
+  return workspace({ vms: [vm("primary", { kind: "primary", ...stopped }), vm("sibling-one", stopped)], ...overrides });
 }
 function openMenu() {
   fireEvent.pointerDown(screen.getByRole("button", { name: "Workspace actions" }), { button: 0, ctrlKey: false });
@@ -48,7 +52,7 @@ afterEach(() => { cleanup(); vi.resetAllMocks(); });
 it("offers Refresh status and Stop all VMs to managers and checks status on request", () => {
   render(actions());
   const menu = openMenu();
-  expect(within(menu).getAllByRole("menuitem").map(item => item.textContent)).toEqual(["Refresh status", "Stop all VMs"]);
+  expect(within(menu).getAllByRole("menuitem").map(item => item.textContent)).toEqual(["Refresh status", "Stop all VMs", "Delete workspace"]);
   fireEvent.click(within(menu).getByRole("menuitem", { name: "Refresh status" }));
   expect(onRefreshStatus).toHaveBeenCalledTimes(1);
   expect(screen.queryByRole("menu")).not.toBeInTheDocument();
@@ -60,6 +64,7 @@ it("offers viewers only Refresh status and disables it while a check is running"
   const view = render(actions(workspace(), false));
   let menu = openMenu();
   expect(within(menu).getAllByRole("menuitem").map(item => item.textContent)).toEqual(["Refresh status"]);
+  expect(within(menu).queryByRole("separator")).not.toBeInTheDocument();
   fireEvent.keyDown(menu, { key: "Escape" });
   view.rerender(actions(workspace(), false, true));
   menu = openMenu();
@@ -114,4 +119,61 @@ it("closes a stop-all confirmation when a VM generation changes and when managem
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(within(openMenu()).queryByRole("menuitem", { name: "Stop all VMs" })).not.toBeInTheDocument();
   expect(workspaceOperation).not.toHaveBeenCalled();
+});
+
+it("places a destructive Delete workspace last, below a separator after Stop all VMs, and disables it while VMs run", () => {
+  render(actions());
+  const menu = openMenu();
+  const remove = within(menu).getByRole("menuitem", { name: "Delete workspace" });
+  const separator = within(menu).getByRole("separator");
+  expect(separator.previousElementSibling).toBe(within(menu).getByRole("menuitem", { name: "Stop all VMs" }));
+  expect(separator.nextElementSibling).toBe(remove);
+  expect(remove.nextElementSibling).toBeNull();
+  expect(remove).toHaveClass("text-destructive");
+  expect(remove).toHaveAttribute("aria-disabled", "true");
+  fireEvent.click(remove);
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
+it("opens the existing delete confirmation once every VM is stopped and deletes only after the name is typed", async () => {
+  vi.mocked(deleteWorkspace).mockResolvedValue(stoppedWorkspace({ volumeStatus: "deleting" }));
+  render(actions(stoppedWorkspace()));
+  const remove = within(openMenu()).getByRole("menuitem", { name: "Delete workspace" });
+  expect(remove).not.toHaveAttribute("aria-disabled");
+  fireEvent.click(remove);
+  const dialog = await screen.findByRole("dialog", { name: "Delete Coding permanently?" });
+  const confirm = within(dialog).getByRole("button", { name: "Delete permanently" });
+  expect(confirm).toBeDisabled();
+  fireEvent.change(within(dialog).getByLabelText(/Type Coding to confirm/), { target: { value: "Coding" } });
+  fireEvent.click(confirm);
+  await waitFor(() => expect(deleteWorkspace).toHaveBeenCalledExactlyOnceWith("workspace", "org-a"));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(refreshAfterMutation).toHaveBeenCalledTimes(1);
+  expect(workspaceOperation).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Workspace actions" })).toHaveFocus());
+});
+
+it("cancels the delete confirmation without deleting", async () => {
+  render(actions(stoppedWorkspace()));
+  fireEvent.click(within(openMenu()).getByRole("menuitem", { name: "Delete workspace" }));
+  const dialog = await screen.findByRole("dialog", { name: "Delete Coding permanently?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(deleteWorkspace).not.toHaveBeenCalled();
+});
+
+it("follows the existing deletion rules for failed, in-progress and completed deletions", () => {
+  const failed = stoppedWorkspace({ volumeStatus: "deleting", vms: [vm("primary", { kind: "primary", ...stopped, phase: "delete_failed" })] });
+  const view = render(actions(failed, false, false, true));
+  let menu = openMenu();
+  expect(within(menu).getAllByRole("menuitem").map(item => item.textContent)).toEqual(["Refresh status", "Delete workspace"]);
+  expect(within(menu).getByRole("menuitem", { name: "Delete workspace" })).not.toHaveAttribute("aria-disabled");
+  fireEvent.keyDown(menu, { key: "Escape" });
+  view.rerender(actions(stoppedWorkspace({ volumeStatus: "deleting" }), false, false, true));
+  menu = openMenu();
+  expect(within(menu).getByRole("menuitem", { name: "Delete workspace" })).toHaveAttribute("aria-disabled", "true");
+  fireEvent.keyDown(menu, { key: "Escape" });
+  view.rerender(actions(stoppedWorkspace({ volumeStatus: "deleted" }), false, false, true));
+  menu = openMenu();
+  expect(within(menu).getAllByRole("menuitem").map(item => item.textContent)).toEqual(["Refresh status"]);
 });
