@@ -99,7 +99,7 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task DetailReportsAllowlistedStartupStageOfCurrentOperationEvenWhenBlocked()
+    public async Task DetailReportsAllowlistedStartupStageAndOperationStatusOfCurrentOperationEvenWhenBlocked()
     {
         using var owner = Client(token);
         var workspace = await Create(owner);
@@ -109,6 +109,7 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
         Assert.True(started.IsSuccessStatusCode, await started.Content.ReadAsStringAsync());
         var pending = Assert.Single((await owner.GetFromJsonAsync<DevelopmentWorkspaceResponse>(detail))!.Vms!);
         Assert.Equal("preparing_vm", pending.StartupStage);
+        Assert.Equal("pending", pending.StartupOperationStatus);
 
         await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<WorkspaceDbContext>();
@@ -126,10 +127,19 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
         var blocked = Assert.Single((await owner.GetFromJsonAsync<DevelopmentWorkspaceResponse>(detail))!.Vms!);
         Assert.Equal("blocked", blocked.Phase);
         Assert.Equal("checking_readiness", blocked.StartupStage);
+        Assert.Equal("pending", blocked.StartupOperationStatus);
+
+        operation.Status = "failed";
+        await db.SaveChangesAsync();
+        var failed = Assert.Single((await owner.GetFromJsonAsync<DevelopmentWorkspaceResponse>(detail))!.Vms!);
+        Assert.Equal("failed", failed.StartupOperationStatus);
+        Assert.Equal("checking_readiness", failed.StartupStage);
 
         machine.Generation++;
         await db.SaveChangesAsync();
-        Assert.Null(Assert.Single((await owner.GetFromJsonAsync<DevelopmentWorkspaceResponse>(detail))!.Vms!).StartupStage);
+        var superseded = Assert.Single((await owner.GetFromJsonAsync<DevelopmentWorkspaceResponse>(detail))!.Vms!);
+        Assert.Null(superseded.StartupStage);
+        Assert.Null(superseded.StartupOperationStatus);
     }
 
     [Fact]

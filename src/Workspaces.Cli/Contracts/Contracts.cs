@@ -65,4 +65,4 @@ public sealed record DevelopmentWorkspaceVmResponse(
     string? NextImageId, string? NextProfile, string? NextPlanId,
     decimal ComputeHourlyRate, decimal EstimatedMonthlyCompute, bool ComputeReserved,
     IReadOnlyList<DevelopmentWorkspaceTaskLeaseResponse>? TaskLeases = null,
-    bool StartAfterStop = false, string? StartupStage = null);
+    bool StartAfterStop = false, string? StartupStage = null, string? StartupOperationStatus = null);

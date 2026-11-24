@@ -291,7 +291,7 @@ public sealed partial class DevelopmentWorkspaceService(
         var operationIds = starting.Values.Select(vm => vm.OperationId!).ToArray();
         var operations = await db.DevelopmentWorkspaceOperations.AsNoTracking()
             .Where(op => op.WorkspaceId == workspace.Id && op.Kind == "start" && operationIds.Contains(op.Id))
-            .Select(op => new { op.Id, op.VmId, op.Generation, op.Step }).ToDictionaryAsync(op => op.Id, ct);
+            .Select(op => new { op.Id, op.VmId, op.Generation, op.Step, op.Status }).ToDictionaryAsync(op => op.Id, ct);
 
         return response with
         {
@@ -310,7 +310,9 @@ public sealed partial class DevelopmentWorkspaceService(
                         "bootstrap" => "setting_up",
                         "session" => "checking_readiness",
                         _ => null
-                    }
+                    },
+                    // pending/running after a blocked attempt means the worker is still retrying the same start.
+                    StartupOperationStatus = op.Status is "pending" or "running" or "failed" ? op.Status : null
                 };
             }).ToArray()
         };

@@ -97,7 +97,8 @@ public sealed record DevelopmentWorkspaceVmResponse(
     IReadOnlyList<DevelopmentWorkspaceTaskLeaseResponse>? TaskLeases = null,
     bool StartAfterStop = false,
     string? StartupStage = null,
-    DevelopmentWorkspaceVmResources? Resources = null);
+    DevelopmentWorkspaceVmResources? Resources = null,
+    string? StartupOperationStatus = null);
 
 public sealed record DevelopmentWorkspaceTaskLeaseResponse(
     string VmId, string TaskId, long Generation, string Status, DateTimeOffset ExpiresAt);

@@ -115,7 +115,8 @@ it("shows only reported startup stages, distinguishes failure, and waits for con
   expect(progress.querySelector("[aria-current=step]")).toHaveTextContent("Current: Preparing storage");
   expect(within(progress).getAllByText("Upcoming:")).toHaveLength(3);
 
-  view.rerender(card(vm({ kind: "primary", phase: "blocked", startupStage: "setting_up", errorCode: "workspace_reconciliation_required" })));
+  view.rerender(card(vm({ kind: "primary", phase: "blocked", startupStage: "setting_up", errorCode: "workspace_reconciliation_required",
+    startupOperationStatus: "failed" })));
   expectStatus("VM startup failed");
   expect(progress.querySelector("[aria-current=step]")).toHaveTextContent("Last reported: Setting up VM");
   expect(screen.getByText(/contact your operator/)).toBeInTheDocument();
@@ -156,7 +157,7 @@ it("shows why a newly created VM wasn't started and retries Start once for its g
 it("retries a failed startup on the same environment by stopping the attempt and queueing one start", async () => {
   const observation = { id: "workspace" } as DevelopmentWorkspace;
   vi.mocked(mutateWorkspaceVm).mockResolvedValueOnce({ id: "workspace" } as DevelopmentWorkspace).mockResolvedValueOnce(observation);
-  render(card(vm({ kind: "primary", generation: 1, phase: "blocked", startupStage: "setting_up",
+  render(card(vm({ kind: "primary", generation: 1, phase: "blocked", startupStage: "setting_up", startupOperationStatus: "failed",
     errorCode: "workspace_reconciliation_required", errorMessage: "Provider state is unconfirmed." })));
   expectStatus("VM startup failed");
   expect(screen.getByRole("alert")).toHaveTextContent("Provider state is unconfirmed.");
@@ -165,6 +166,34 @@ it("retries a failed startup on the same environment by stopping the attempt and
   expect(vi.mocked(mutateWorkspaceVm).mock.calls).toEqual([
     ["workspace", "task-vm", "org", "stop", { generation: 1 }], ["workspace", "task-vm", "org", "start", { generation: 1 }],
   ]);
+});
+
+it("shows a start that is still being retried as reconciling and offers Retry start only after terminal failure", () => {
+  const reconciling = vm({ kind: "primary", generation: 1, phase: "blocked", startupStage: "preparing_storage",
+    startupOperationStatus: "pending", errorCode: "workspace_reconciliation_required",
+    errorMessage: "Provider/runtime state is unconfirmed. Resources remain reserved and billed." });
+  const view = render(card(reconciling));
+  expectStatus("Still starting: reconciling…");
+  expect(screen.getByText("Still starting…")).toBeInTheDocument();
+  expect(screen.queryByText("VM startup failed")).not.toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.getByText(/Resources remain reserved and billed meanwhile/)).toHaveTextContent(
+    "Last reported stage: Preparing storage.");
+  expect(screen.getByText(/Reported reason: workspace_reconciliation_required/)).toBeInTheDocument();
+  expect(screen.getByRole("list", { name: "VM startup stages" }).querySelector("[aria-current=step]"))
+    .toHaveTextContent("Current: Preparing storage");
+  expect(screen.queryByRole("button", { name: "Retry start" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Start VM" })).not.toBeInTheDocument();
+
+  view.rerender(card({ ...reconciling, startupOperationStatus: "running", revision: 2 }));
+  expectStatus("Still starting: reconciling…");
+  expect(screen.queryByRole("button", { name: "Retry start" })).not.toBeInTheDocument();
+
+  view.rerender(card({ ...reconciling, startupOperationStatus: "failed", revision: 3 }));
+  expectStatus("VM startup failed");
+  expect(screen.getByRole("alert")).toHaveTextContent("workspace_reconciliation_required");
+  expect(screen.getByRole("button", { name: "Retry start" })).toBeEnabled();
+  expect(mutateWorkspaceVm).not.toHaveBeenCalled();
 });
 
 it("offers failed-startup retry only to managers of the primary VM", () => {

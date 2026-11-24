@@ -8,9 +8,10 @@ export function message(reason: unknown) {
 }
 
 export function phaseLabel(vm: DevelopmentWorkspaceVm) {
-  const { starting, failed, ready } = vmStartup(vm);
+  const { starting, reconciling, failed, ready } = vmStartup(vm);
   if (vm.phase === "awaiting_git_save") return "Git save blocked";
   if (failed) return "VM startup failed";
+  if (reconciling) return "Still starting…";
   if (starting) return "Starting VM…";
   if (vm.errorCode) return "Needs attention";
   if (ready) return "Running";
@@ -27,8 +28,9 @@ export function gitSaveLabel(vm: DevelopmentWorkspaceVm) {
 }
 
 export function phaseTone(vm: DevelopmentWorkspaceVm): "warning" | "destructive" | "success" | "neutral" {
-  const { failed, ready } = vmStartup(vm);
+  const { failed, reconciling, ready } = vmStartup(vm);
   if (vm.phase === "awaiting_git_save") return "warning";
+  if (reconciling) return "neutral";
   if (failed || vm.errorCode) return "destructive";
   return ready ? "success" : "neutral";
 }
