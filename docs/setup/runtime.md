@@ -54,6 +54,8 @@ outside this flow.
   to `/`. Use the returned expiry to determine whether a fresh launch is needed. The API
   checks organization authority, user/API key validity, generation, route expiry and runtime health.
   The gateway reauthorizes active sockets and ends streams when their route or bearer changes.
+  It returns 401 only when the API explicitly rejects the session; an unavailable or failing
+  API yields a retryable 503 and leaves the cookie intact.
 - Register named preview services in `DevelopmentWorkspaceWorker:PreviewServices` and request
   the corresponding service at launch. Each healthy service gets a separate origin from T3
   and from every other service. The optional `connect` service is restricted to a primary's

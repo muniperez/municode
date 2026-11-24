@@ -84,6 +84,57 @@ public sealed class GatewayRelayTests
         Assert.Equal(HttpStatusCode.Unauthorized, revoked.StatusCode);
     }
 
+    [Fact]
+    public async Task ControlPlaneUnavailabilityOnReloadIsRetryableInsteadOfUnauthorized()
+    {
+        await using var fixture = await Fixture.StartAsync();
+        fixture.Control.ResolveUnavailable = true;
+        using var reload = await fixture.SendAsync("/", authenticated: true);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, reload.StatusCode);
+        Assert.Equal("2", reload.Headers.GetValues("Retry-After").Single());
+        Assert.False(reload.Headers.Contains("Set-Cookie"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.ConnectAsync("/ws?orchestrationProtocol=2"));
+        Assert.Null(fixture.LastWebSocketQuery);
+        fixture.Control.ResolveUnavailable = false;
+        using var recovered = await fixture.SendAsync("/", authenticated: true);
+        Assert.Equal(HttpStatusCode.OK, recovered.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, false)]
+    [InlineData(HttpStatusCode.Forbidden, false)]
+    [InlineData(HttpStatusCode.InternalServerError, true)]
+    [InlineData(HttpStatusCode.BadGateway, true)]
+    [InlineData(HttpStatusCode.TooManyRequests, true)]
+    [InlineData(HttpStatusCode.NotFound, true)]
+    public async Task ControlPlaneDistinguishesExplicitRejectionFromUnavailability(HttpStatusCode status, bool unavailable)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseKestrel().UseUrls("http://127.0.0.1:0");
+        await using var api = builder.Build();
+        api.Run(context => { context.Response.StatusCode = (int)status; return Task.CompletedTask; });
+        await api.StartAsync();
+        var address = api.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
+        using var control = new GatewayControlPlane(Options.Create(new DevelopmentWorkspaceGatewayOptions
+        {
+            Enabled = true, GatewayDomain = "workspace.example", ServiceCredential = new string('c', 32), ControlPlaneUrl = address
+        }));
+        var host = new DevelopmentWorkspaceGatewayOptions { GatewayDomain = "workspace.example" }
+            .Host("workspacevm_0123456789abcdef0123456789abcdef", 1, "t3")!;
+        if (unavailable)
+        {
+            Assert.Equal(status, (await Assert.ThrowsAsync<HttpRequestException>(() =>
+                control.ResolveAsync(host, Fixture.Session, CancellationToken.None))).StatusCode);
+            await Assert.ThrowsAsync<HttpRequestException>(() => control.RedeemAsync(host, Fixture.Code, CancellationToken.None));
+        }
+        else
+        {
+            Assert.Null(await control.ResolveAsync(host, Fixture.Session, CancellationToken.None));
+            Assert.Null(await control.RedeemAsync(host, Fixture.Code, CancellationToken.None));
+        }
+    }
+
     [Theory]
     [InlineData("/ws?wsTicket=ticket-only&orchestrationProtocol=2")]
     [InlineData("/ws?orchestrationProtocol=2")]
@@ -412,7 +463,9 @@ public sealed class GatewayRelayTests
             Task.FromResult(requestedHost == host && code == Fixture.Code && Interlocked.Exchange(ref redeemed, 1) == 0
                 ? new DevelopmentWorkspaceGatewayRedemption(Fixture.Session, DateTimeOffset.UtcNow.AddMinutes(2)) : null);
         public Task<DevelopmentWorkspaceGatewayTarget?> ResolveAsync(string requestedHost, string session, CancellationToken ct) =>
-            Task.FromResult(requestedHost == host && session == Fixture.Session ? Target : null);
+            ResolveUnavailable ? throw new HttpRequestException("control plane unavailable", null, HttpStatusCode.InternalServerError)
+            : Task.FromResult(requestedHost == host && session == Fixture.Session ? Target : null);
+        public bool ResolveUnavailable { get; set; }
     }
 
     private sealed class Fixture : IAsyncDisposable

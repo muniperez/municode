@@ -104,7 +104,15 @@ public sealed class WorkspaceGatewayRelay : IDisposable
         lifetime.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(options.ConnectionLifetimeSeconds, 1, 3600)));
         try
         {
-            var target = await control.ResolveAsync(host, session, lifetime.Token);
+            DevelopmentWorkspaceGatewayTarget? target;
+            try { target = await control.ResolveAsync(host, session, lifetime.Token); }
+            catch (HttpRequestException)
+            {
+                // Keep the cookie: a transient control-plane failure must not look like a rejected session.
+                context.Response.StatusCode = 503;
+                context.Response.Headers.RetryAfter = "2";
+                return;
+            }
             if (!ValidTarget(target)) { context.Response.StatusCode = 401; return; }
             if (context.WebSockets.IsWebSocketRequest)
             {
