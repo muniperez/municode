@@ -257,6 +257,126 @@ it("authorizes T3 only on click and preserves the valid link without an immediat
   expect(screen.queryByRole("link")).not.toBeInTheDocument();
 });
 
+it("opens primary instance T3 from the same click, uses a fresh URL each time and never renders an intermediate link", async () => {
+  const popup = { opener: {}, location: { replace: vi.fn() }, close: vi.fn() };
+  const open = vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+  let resolve!: (value: { url: string; expiresAt: string }) => void;
+  vi.mocked(getWorkspaceLaunchUrl).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  render(card(vm({ kind: "primary" })));
+  expect(getWorkspaceLaunchUrl).not.toHaveBeenCalled();
+  const button = screen.getByRole("button", { name: "Open instance T3" });
+  fireEvent.click(button);
+  expect(open).toHaveBeenCalledExactlyOnceWith("about:blank", "_blank");
+  expect(getWorkspaceLaunchUrl).toHaveBeenCalledExactlyOnceWith("workspace", "task-vm", "org", 3, "t3");
+  expect(open.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(getWorkspaceLaunchUrl).mock.invocationCallOrder[0]);
+  expect(popup.opener).toBeNull();
+  expect(popup.location.replace).not.toHaveBeenCalled();
+  expect(button).toBeDisabled();
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  fireEvent.click(button);
+  expect(getWorkspaceLaunchUrl).toHaveBeenCalledTimes(1);
+  await act(async () => resolve({ url: "https://gateway.example/first", expiresAt: "2099-01-01T00:00:00Z" }));
+  expect(popup.location.replace).toHaveBeenCalledExactlyOnceWith("https://gateway.example/first");
+  expect(popup.close).not.toHaveBeenCalled();
+  expect(button).toBeEnabled();
+  expect(screen.queryByRole("link", { name: "Open T3" })).not.toBeInTheDocument();
+  fireEvent.click(button);
+  await waitFor(() => expect(popup.location.replace).toHaveBeenLastCalledWith("https://gateway.example/__municode/launch?code=synthetic"));
+  expect(getWorkspaceLaunchUrl).toHaveBeenCalledTimes(2);
+  expect(mutateWorkspaceVm).not.toHaveBeenCalled();
+  expect(refresh).not.toHaveBeenCalled();
+});
+
+it("reports a blocked primary popup and clears any previous preview authorization without requesting a launch", async () => {
+  vi.spyOn(window, "open").mockReturnValue(null);
+  render(card(vm({ kind: "primary" })));
+  fireEvent.click(screen.getByRole("button", { name: "Open preview" }));
+  fireEvent.change(screen.getByLabelText("Preview name"), { target: { value: "web" } });
+  fireEvent.click(screen.getByRole("button", { name: "Get preview link" }));
+  await screen.findByRole("link", { name: "Open preview" });
+  vi.mocked(getWorkspaceLaunchUrl).mockClear();
+  fireEvent.click(screen.getByRole("button", { name: "Open instance T3" }));
+  expect(screen.getByRole("alert")).toHaveTextContent(/browser blocked the new tab.*Allow popups/);
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  expect(getWorkspaceLaunchUrl).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Open instance T3" })).toBeEnabled();
+});
+
+it.each([
+  { url: "not a url", expiresAt: "2099-01-01T00:00:00Z" },
+  { url: "http://gateway.example/launch", expiresAt: "2099-01-01T00:00:00Z" },
+  { url: "https://user:secret@gateway.example/launch", expiresAt: "2099-01-01T00:00:00Z" },
+  { url: "https://", expiresAt: "2099-01-01T00:00:00Z" },
+  { url: "https://gateway.example/launch", expiresAt: "invalid" },
+  { url: "https://gateway.example/launch", expiresAt: "2000-01-01T00:00:00Z" },
+])("closes the primary popup and reports unsafe or expired launch authorization: %j", async result => {
+  const popup = { opener: null, location: { replace: vi.fn() }, close: vi.fn() };
+  vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+  vi.mocked(getWorkspaceLaunchUrl).mockResolvedValue(result);
+  render(card(vm({ kind: "primary" })));
+  fireEvent.click(screen.getByRole("button", { name: "Open instance T3" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("This didn't start the VM");
+  expect(popup.close).toHaveBeenCalled();
+  expect(popup.location.replace).not.toHaveBeenCalled();
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Get a new link" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Open instance T3" })).toBeEnabled();
+});
+
+it("closes a failed primary launch, clears preview authorization and permits a fresh one-click retry", async () => {
+  const popup = { opener: null, location: { replace: vi.fn() }, close: vi.fn() };
+  vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+  render(card(vm({ kind: "primary" })));
+  fireEvent.click(screen.getByRole("button", { name: "Open preview" }));
+  fireEvent.change(screen.getByLabelText("Preview name"), { target: { value: "web" } });
+  fireEvent.click(screen.getByRole("button", { name: "Get preview link" }));
+  await screen.findByRole("link", { name: "Open preview" });
+  vi.mocked(getWorkspaceLaunchUrl).mockRejectedValueOnce(new Error("synthetic-secret"));
+  fireEvent.click(screen.getByRole("button", { name: "Open instance T3" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't get a secure link");
+  expect(screen.getByRole("alert")).not.toHaveTextContent("synthetic-secret");
+  expect(popup.close).toHaveBeenCalled();
+  expect(popup.location.replace).not.toHaveBeenCalled();
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  popup.close.mockClear();
+  fireEvent.click(screen.getByRole("button", { name: "Open instance T3" }));
+  await waitFor(() => expect(popup.location.replace).toHaveBeenCalled());
+  expect(popup.close).not.toHaveBeenCalled();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(mutateWorkspaceVm).not.toHaveBeenCalled();
+});
+
+it("reports navigation failure and closes the primary popup", async () => {
+  const popup = { opener: null, location: { replace: vi.fn(() => { throw new Error("navigation failed"); }) }, close: vi.fn() };
+  vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+  render(card(vm({ kind: "primary" })));
+  fireEvent.click(screen.getByRole("button", { name: "Open instance T3" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't open instance T3 in the new tab");
+  expect(popup.close).toHaveBeenCalled();
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+});
+
+it.each([
+  { revision: 2 }, { generation: 4 }, { id: "replacement" }, { phase: "draining", desiredState: "stopped" },
+  { canManage: false }, { workspaceId: "other-workspace" }, { organizationId: "other-org" }, { unmount: true },
+])("closes the pending primary popup and never navigates a stale context: %j", async change => {
+  const popup = { opener: null, location: { replace: vi.fn() }, close: vi.fn() };
+  vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+  let resolve!: (value: { url: string; expiresAt: string }) => void;
+  vi.mocked(getWorkspaceLaunchUrl).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  const machine = vm({ kind: "primary" });
+  const view = render(card(machine));
+  fireEvent.click(screen.getByRole("button", { name: "Open instance T3" }));
+  if ("unmount" in change) view.unmount();
+  else view.rerender(<WorkspaceVmCard workspaceId="workspace" organizationId="org" vm={{ ...machine, ...change }}
+    currency="EUR" refresh={refresh} canManage {...change} />);
+  expect(popup.close).toHaveBeenCalled();
+  await act(async () => resolve({ url: "https://gateway.example/stale", expiresAt: "2099-01-01T00:00:00Z" }));
+  expect(popup.location.replace).not.toHaveBeenCalled();
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 it("uses the registered preview slug and invalidates authorization when the service changes", async () => {
   render(card());
   expect(screen.queryByLabelText("Preview name")).not.toBeInTheDocument();

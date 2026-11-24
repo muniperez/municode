@@ -28,14 +28,7 @@ function ScopedT3Connect({ workspaceId, vmId, organizationId, generation, ready,
     ++sequence.current; pending.current?.close(); pending.current = null;
     inFlight.current = false; setBusy(false); setError(null);
   }, [context]);
-  return <section aria-label="T3 Connect account linking" className="space-y-2 text-sm">
-    <h4 className="font-medium">T3 Connect (optional)</h4>
-    <p>Link this primary VM to your own T3 account. Your other signed-in devices can resume
-      the same projects and threads while the VM is running. Linking never starts a VM.</p>
-    <p>Linked devices get their own shell and provider access through T3, outside Municode's session controls.
-      Only the workspace's creator or an organization owner can manage linking.
-      Approval, link status and unlinking happen on a private page, never in recorded T3 terminal output.
-      Turning linking on restarts T3 on this VM and interrupts running turns and terminals.</p>
+  return <section aria-label="T3 Connect account linking" className="contents">
     <Button variant="outline" disabled={!ready || busy} onClick={() => {
       if (!ready || inFlight.current) return;
       const popup = window.open("about:blank", "_blank");
@@ -64,7 +57,15 @@ function ScopedT3Connect({ workspaceId, vmId, organizationId, generation, ready,
         if (pending.current === popup) pending.current = null;
         if (mounted.current && sequence.current === request) { inFlight.current = false; setBusy(false); }
       });
-    }}>Manage T3 Connect</Button>
-    {error && <p role="alert">{error}</p>}
+    }}>Connect T3 account</Button>
+    <div className="w-full space-y-2 text-sm">
+      <p>Link this primary VM to your own T3 account. Your other signed-in devices can resume
+        the same projects and threads while the VM is running. Linking never starts a VM.</p>
+      <p className="text-muted-foreground">Linked devices get their own shell and provider access through T3, outside Municode's session controls.
+        Only the workspace's creator or an organization owner can manage linking.
+        Approval, link status and unlinking happen on a private page, never in recorded T3 terminal output.
+        Turning linking on restarts T3 on this VM and interrupts running turns and terminals.</p>
+      {error && <p role="alert" className="text-destructive">{error}</p>}
+    </div>
   </section>;
 }

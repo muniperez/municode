@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getWorkspaceLaunchUrl, launchEphemeralVm, mutateWorkspaceVm, workspaceTask } from "@/api/workspacesApi";
 import type { DevelopmentWorkspaceVmResources } from "@/api/workspaceFilesystemApi";
@@ -39,9 +39,9 @@ function workspace(vms: DevelopmentWorkspaceVm[] = [search, primary, build, fail
   };
 }
 const refresh = vi.fn<() => Promise<void>>();
-function overview(item = workspace(), canManage = true) {
+function overview(item = workspace(), canManage = true, canManageConnect = true) {
   return <WorkspaceOverviewTab item={item} organizationId="org" refresh={refresh} refreshAfterMutation={refresh}
-    canManage={canManage} canManageConnect={false} actorId="actor" />;
+    canManage={canManage} canManageConnect={canManageConnect} actorId="actor" />;
 }
 const list = () => screen.getByRole("region", { name: "Virtual machines" });
 const detail = () => screen.getByRole("region", { name: "Selected VM" });
@@ -59,7 +59,65 @@ beforeEach(() => {
   refresh.mockResolvedValue(undefined);
   vi.mocked(getWorkspaceLaunchUrl).mockResolvedValue({ url: "https://gateway.example/launch", expiresAt: "2099-01-01T00:00:00Z" });
 });
-afterEach(() => { cleanup(); vi.resetAllMocks(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.resetAllMocks(); });
+
+it("groups exactly the two primary T3 actions and opens account management directly on one click", async () => {
+  const popup = { opener: {}, location: { replace: vi.fn() }, close: vi.fn() };
+  vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+  render(overview());
+  const t3 = within(detail()).getByRole("region", { name: "Primary VM T3" });
+  expect(within(t3).getAllByRole("button").map(button => button.textContent)).toEqual([
+    "Open instance T3", "Connect T3 account",
+  ]);
+  expect(t3).toHaveTextContent(/outside Municode's session controls/);
+  expect(t3).toHaveTextContent(/interrupts running turns and terminals/);
+  expect(t3).toHaveTextContent(/link status and unlinking/);
+  expect(screen.queryByRole("button", { name: "Manage T3 Connect" })).not.toBeInTheDocument();
+  expectNoMutations();
+  fireEvent.click(within(t3).getByRole("button", { name: "Connect T3 account" }));
+  expect(window.open).toHaveBeenCalledExactlyOnceWith("about:blank", "_blank");
+  expect(getWorkspaceLaunchUrl).toHaveBeenCalledExactlyOnceWith("workspace", "primary", "org", 3, "connect");
+  await waitFor(() => expect(popup.location.replace).toHaveBeenCalledWith("https://gateway.example/launch"));
+  expect(mutateWorkspaceVm).not.toHaveBeenCalled();
+  expect(refresh).not.toHaveBeenCalled();
+});
+
+it("preserves account-management permissions, primary-only entry and running/startup gates", () => {
+  const view = render(overview(workspace(), true, false));
+  expect(screen.queryByRole("button", { name: "Connect T3 account" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Open instance T3" })).toBeEnabled();
+  view.rerender(overview(workspace(), false));
+  expect(screen.queryByRole("button", { name: "Connect T3 account" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Open instance T3" })).toBeDisabled();
+  for (const phase of ["provisioning", "failed"]) {
+    view.rerender(overview(workspace([{ ...primary, phase }])));
+    expect(screen.queryByRole("button", { name: "Connect T3 account" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open instance T3" })).toBeDisabled();
+  }
+  view.rerender(overview(workspace([{ ...primary, desiredState: "stopped", phase: "stopped" }])));
+  expect(screen.getByRole("button", { name: "Connect T3 account" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Open instance T3" })).toBeDisabled();
+  view.rerender(overview());
+  select(/^feat\/search/);
+  expect(screen.queryByRole("button", { name: "Connect T3 account" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Open instance T3" })).not.toBeInTheDocument();
+  expectNoMutations();
+});
+
+it.each(["Open instance T3", "Connect T3 account"])("closes pending %s when the signed-in actor changes", async label => {
+  const popup = { opener: null, location: { replace: vi.fn() }, close: vi.fn() };
+  vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+  let resolve!: (value: { url: string; expiresAt: string }) => void;
+  vi.mocked(getWorkspaceLaunchUrl).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  const view = render(overview());
+  fireEvent.click(screen.getByRole("button", { name: label }));
+  view.rerender(<WorkspaceOverviewTab item={workspace()} organizationId="org" refresh={refresh} refreshAfterMutation={refresh}
+    canManage canManageConnect actorId="other-owner" />);
+  expect(popup.close).toHaveBeenCalled();
+  await act(async () => resolve({ url: "https://gateway.example/stale", expiresAt: "2099-01-01T00:00:00Z" }));
+  expect(popup.location.replace).not.toHaveBeenCalled();
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+});
 
 it("lists the primary VM first and selected, then temporary VMs by work branch with textual state", () => {
   render(overview());

@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import type { DevelopmentWorkspace, DevelopmentWorkspaceVm } from "@/models/controlPlane";
 import { WorkspaceLaunchLink } from "./WorkspaceLaunchLink";
 import { WorkspaceSelectionFields, type WorkspaceSelection } from "./WorkspaceSelectionFields";
+import { WorkspaceT3Connect } from "./WorkspaceT3Connect";
 import { WorkspaceVmResources } from "./WorkspaceVmResources";
 import { vmStartup, WorkspaceVmStartup } from "./WorkspaceVmStartup";
 import { gitSaveLabel, message, phaseLabel, phaseTone, relativeTime, vmName } from "./workspaceVmLabels";
@@ -23,6 +24,7 @@ type Props = {
   currency: string;
   refresh: (observation?: DevelopmentWorkspace) => Promise<void>;
   canManage: boolean;
+  canManageConnect?: boolean;
 };
 
 const lossDisclosure = "This VM has its own Git-only disk and can't see the primary VM's storage. Untracked files, files ignored by Git and unpushed work can be lost permanently. There is no backup.";
@@ -42,7 +44,7 @@ export function WorkspaceVmCard(props: Props) {
   return <VmGenerationCard key={`${props.organizationId}:${props.workspaceId}:${props.vm.id}:${props.vm.generation}`} {...props} />;
 }
 
-function VmGenerationCard({ workspaceId, organizationId, vm, currency, refresh, canManage }: Props) {
+function VmGenerationCard({ workspaceId, organizationId, vm, currency, refresh, canManage, canManageConnect = false }: Props) {
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selection, setSelection] = useState<WorkspaceSelection>({
@@ -64,6 +66,7 @@ function VmGenerationCard({ workspaceId, organizationId, vm, currency, refresh, 
   const mounted = useRef(true);
   const inFlight = useRef(false);
   const request = useRef(0);
+  const launchPopup = useRef<{ popup: Window; context: string } | null>(null);
   const { ready, starting, failed } = vmStartup(vm);
   const context = JSON.stringify([vm.revision, vm.generation, ready, canManage, service, previewSlug]);
   const currentContext = useRef(context);
@@ -87,7 +90,7 @@ function VmGenerationCard({ workspaceId, organizationId, vm, currency, refresh, 
 
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; ++request.current; };
+    return () => { mounted.current = false; ++request.current; launchPopup.current?.popup.close(); };
   }, []);
   useEffect(() => {
     setSelection({ imageId: vm.nextImageId ?? vm.imageId, profile: vm.nextProfile ?? vm.profile, planId: vm.nextPlanId ?? vm.planId });
@@ -97,6 +100,9 @@ function VmGenerationCard({ workspaceId, organizationId, vm, currency, refresh, 
   }, [canManage]);
   useEffect(() => {
     setLaunch(previous => previous?.context === context ? previous : null);
+    if (launchPopup.current && launchPopup.current.context !== context) {
+      launchPopup.current.popup.close(); launchPopup.current = null;
+    }
   }, [context]);
 
   const run = async (label: string, operation: () => Promise<DevelopmentWorkspace | void>, refreshAfter = true) => {
@@ -130,15 +136,30 @@ function VmGenerationCard({ workspaceId, organizationId, vm, currency, refresh, 
   };
   const authorize = (target: string) => {
     if (!ready || !target.trim() || inFlight.current || !canManage) return;
-    setService(target);
+    const oneClick = vm.kind === "primary" && target === "t3";
+    const popup = oneClick ? window.open("about:blank", "_blank") : null;
     setLaunch(null);
+    if (oneClick && !popup) {
+      setError("Couldn't open instance T3 because the browser blocked the new tab. Allow popups for Municode and try again. This didn't start the VM.");
+      return;
+    }
+    if (popup) popup.opener = null;
+    setService(target);
     const expectedContext = JSON.stringify([vm.revision, vm.generation, ready, canManage, target, previewSlug]);
+    if (popup) launchPopup.current = { popup, context: expectedContext };
     currentContext.current = expectedContext;
     const sequence = ++request.current;
     void run("Getting a secure link…", async () => {
       const current = () => mounted.current && sequence === request.current && currentContext.current === expectedContext && permission.current;
       const report = (error: string) => {
-        if (current()) setError(`${error} This didn't start the VM. Check that the VM is running and the preview name is registered, then try again or contact your operator.`);
+        popup?.close();
+        if (launchPopup.current?.popup === popup) launchPopup.current = null;
+        if (current()) {
+          setLaunch(null);
+          setError(`${error} This didn't start the VM. ${oneClick
+            ? "Check that the VM is running, then try again or contact your operator."
+            : "Check that the VM is running and the preview name is registered, then try again or contact your operator."}`);
+        }
       };
       let result: Awaited<ReturnType<typeof getWorkspaceLaunchUrl>>;
       try {
@@ -147,7 +168,7 @@ function VmGenerationCard({ workspaceId, organizationId, vm, currency, refresh, 
         report("Couldn't get a secure link.");
         return;
       }
-      if (!current()) return;
+      if (!current()) { popup?.close(); return; }
       let url: URL;
       try { url = new URL(result?.url); }
       catch { report("The link returned was invalid."); return; }
@@ -157,6 +178,13 @@ function VmGenerationCard({ workspaceId, organizationId, vm, currency, refresh, 
       }
       const deadline = Date.parse(result.expiresAt);
       if (!Number.isFinite(deadline)) { report("The link returned had an invalid expiry."); return; }
+      if (popup) {
+        if (deadline <= Date.now()) { report("The link returned had expired."); return; }
+        try { popup.location.replace(url.href); }
+        catch { report("Couldn't open instance T3 in the new tab."); return; }
+        if (launchPopup.current?.popup === popup) launchPopup.current = null;
+        return;
+      }
       const scope = { context: expectedContext, service: target };
       setLaunch(deadline > Date.now() ? { ...scope, state: "active", url: url.href, deadline } : { ...scope, state: "expired" });
     }, false);
@@ -201,8 +229,13 @@ function VmGenerationCard({ workspaceId, organizationId, vm, currency, refresh, 
         <dt className="text-muted-foreground">Git save</dt><dd>{gitSaveLabel(vm)}</dd>
       </dl>}
       <div className="flex flex-wrap items-center gap-2">
+        {vm.kind === "primary" && <section aria-label="Primary VM T3" className="flex w-full flex-wrap items-center gap-2">
+          <Button disabled={blocked || !ready} onClick={() => authorize("t3")}>Open instance T3</Button>
+          {canManage && canManageConnect && !starting && !failed && <WorkspaceT3Connect workspaceId={workspaceId}
+            vmId={vm.id} organizationId={organizationId} generation={vm.generation} revision={vm.revision} ready={ready && !busy} />}
+        </section>}
         {ready ? <section aria-label={`Connections for VM ${vm.id}`} className="flex flex-wrap items-center gap-2">
-          <Button disabled={blocked} onClick={() => authorize("t3")}>Connect to T3</Button>
+          {vm.kind !== "primary" && <Button disabled={blocked} onClick={() => authorize("t3")}>Connect to T3</Button>}
           <Button variant="outline" disabled={blocked} aria-expanded={previewOpen} onClick={() => {
             ++request.current; setLaunch(null); setPreviewOpen(previous => !previous);
           }}>Open preview</Button>
