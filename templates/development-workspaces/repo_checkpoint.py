@@ -24,6 +24,10 @@ checkpoint it was restored from. A save is published only for the first tree of 
 or for a tree whose lineage matches the current checkpoint. An empty tree on a replacement VM
 therefore can never overwrite the checkpoint it still has to restore.
 
+For off-host backups, backup_files lists the store files that hold only the current
+checkpoint. After such a store is restored onto a separate volume, adopt rebinds its checkpoint
+to that volume.
+
 Commands: save, verify, restore, prepare-tree, status. Each prints one JSON object. Exit status
 0 means success, 75 means deferred, and 1 means failed.
 """
@@ -738,7 +742,7 @@ class Store:
                 if digest.hexdigest() != sha:
                     raise Failed("Checkpoint data is missing or corrupt")
 
-    def publish(self, manifest):
+    def publish(self, manifest, keep_previous=True):
         data = canonical(manifest)
         manifest_sha = hashlib.sha256(data).hexdigest()
         checkpoint_id = manifest["checkpointId"]
@@ -757,7 +761,7 @@ class Store:
         fsync_path(os.path.join(self.path, "manifests"))
         fsync_path(os.path.join(self.path, "staging"))
         try:
-            previous = self.current()
+            previous = self.current() if keep_previous else None
         except Failed:
             previous = None
         history = [dict(checkpointId=checkpoint_id, manifestSha256=manifest_sha)] + \
@@ -1159,6 +1163,76 @@ def restore_file(store, entry, parent, name, uid, gid, chown):
     finally:
         os.close(source)
     return size
+
+
+def backup_files(store_path):
+    """The store files an off-host backup needs: the pointer, the current manifest and its objects.
+
+    Unfinished saves (tmp, staging), the lock, attempt status, older checkpoints and unreferenced
+    objects are left out. The current checkpoint is read back in full, so a backup never carries
+    a checkpoint that could not be restored. Paths are relative to the store."""
+    store = Store(store_path)
+    if not store.prepare(create=False):
+        raise Failed("No completed checkpoint")
+    store.lock(LOCK_SECONDS)
+    try:
+        manifest, manifest_sha = store.select()
+        store.check_objects(manifest, True)
+        objects = {entry["sha256"] for entry in manifest["entries"].values() if entry.get("type") == "file"}
+        files = ["current.json", "manifests/" + manifest["checkpointId"] + ".json",
+                 *("objects/%s/%s" % (sha[:2], sha) for sha in sorted(objects))]
+        return dict(checkpointId=manifest["checkpointId"], manifestSha256=manifest_sha,
+                    binding=manifest["binding"], directories=list(STORE_DIRS), files=files)
+    finally:
+        store.unlock()
+
+
+def adopt(store_path, source_volume, binding, operation_id, expected=None, clock=time.time_ns):
+    """Rebind the checkpoint of a store restored from an off-host backup to this volume.
+
+    The backed-up store is bound to its source volume, so restore would refuse it. The current
+    checkpoint must belong to source_volume and be complete. It is republished, with the same
+    entries, as the only checkpoint of the new volume under a new ID and tree token, so no tree
+    restored from the source volume can match its lineage. expected, when given, names the
+    checkpointId and manifestSha256 the backup recorded."""
+    binding = validate_binding(binding)
+    if not isinstance(source_volume, dict) or set(source_volume) != set(VOLUME_FIELDS):
+        raise Failed("Invalid checkpoint binding")
+    if not OPERATION.fullmatch(str(operation_id)):
+        raise Failed("Invalid operation ID")
+    if same_volume(source_volume, binding) or source_volume["workspaceId"] != binding["workspaceId"]:
+        raise Failed("Checkpoint can only move to a separate volume of the same workspace")
+    store = Store(store_path, clock)
+    if not store.prepare(create=False):
+        raise Failed("No completed checkpoint")
+    store.lock(LOCK_SECONDS)
+    try:
+        store.clear("tmp")
+        store.clear("staging")
+        manifest, manifest_sha = store.select()
+        if not same_volume(manifest["binding"], source_volume):
+            raise Failed("Checkpoint belongs to another workspace volume")
+        if expected is not None and (expected.get("checkpointId"), expected.get("manifestSha256")) != \
+                (manifest["checkpointId"], manifest_sha):
+            raise Failed("Checkpoint differs from the one the backup recorded")
+        store.check_objects(manifest, True)
+        for entry in manifest["entries"].values():
+            if entry.get("type") == "file":
+                os.chmod(store.object_path(entry["sha256"]), 0o400)
+        checkpoint_id = new_checkpoint_id(clock)
+        adopted = dict(manifest, checkpointId=checkpoint_id, binding=binding, operationId=operation_id,
+                       treeToken=secrets.token_hex(16), source={},
+                       adoptedFrom=dict(checkpointId=manifest["checkpointId"], manifestSha256=manifest_sha,
+                                        **{key: source_volume[key] for key in VOLUME_FIELDS}))
+        adopted_sha, pointer = store.publish(adopted, keep_previous=False)
+        store.collect(pointer)
+        return dict(checkpointId=checkpoint_id, manifestSha256=adopted_sha, binding=binding,
+                    adoptedFrom=adopted["adoptedFrom"], files=sum(
+                        1 for entry in manifest["entries"].values() if entry.get("type") == "file"))
+    except OSError as error:
+        raise Failed("Checkpoint adoption failed") from error
+    finally:
+        store.unlock()
 
 
 def status(store_path):

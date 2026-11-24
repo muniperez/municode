@@ -1046,7 +1046,8 @@ With `"storageLayout": 2` in the runtime configuration (primary only):
   and replays the outcome to the same operation. If a layout 2 `quiesce` times out, the
   worker keeps the VM running, reports `workspace_checkpoint_in_progress` and retries the
   same step.
-* Off-host restore is refused until the backup changes land.
+* Off-host backup and separate-volume restore carry the final checkpoint instead of the live
+  tree. See [Storage layout 2 backups](#storage-layout-2-backups).
 
 #### Periodic checkpoints and status
 
@@ -1478,6 +1479,33 @@ volume metadata or unresolved links are rejected. This preserves ordinary tool/v
 links without following them during privileged extraction or excluding user tool directories.
 The source volume's ownership marker and empty root `lost+found` are not restored over the
 target's metadata; nonempty recovery data blocks backup instead of being silently omitted.
+
+### Storage layout 2 backups
+
+In layout 2 the live checkouts are on the VM disk, so a backup holds the checkout tree only
+as the final checkpoint of the stop that froze the workspace:
+
+* Backup requires that stop's checkpoint and checks that it is still the current one before
+  and after the archive is written. It reads the whole checkpoint back first, so a damaged
+  checkpoint fails the backup instead of reaching the archive.
+* The archive keeps `repos` as an empty directory and never enters it, even if the checkout
+  tree is mounted on it. From the checkpoint store it takes only `current.json`, the current
+  manifest and the objects that manifest uses. Unfinished saves (`tmp`, `staging`), the lock,
+  the attempt status, the previous checkpoint and unused objects stay behind. The layout
+  marker names the source volume and is left out too. T3 state and the rest of `/workspace`
+  are archived as in layout 1.
+* The receipt adds `storageLayout: 2` and the checkpoint ID and manifest hash.
+* Restore requires a target with the same storage layout as the backup. Moving a layout 1
+  backup to layout 2 is a migration, not a restore.
+* After extraction and the representative hash check, the store is made root-only again and
+  its checkpoint is checked against the receipt and read back in full. It is then republished
+  under a new ID, bound to the target volume, with a new tree token, and the source volume's
+  manifest is removed. A tree restored from the source volume therefore never matches it. A
+  new layout marker records the new checkpoint as the volume's first one, and the receipt
+  returns it as `checkpoint` with `adoptedFrom`.
+* The checkpoint store and layout marker stay root-owned and `repos` stays the empty 0555
+  mount point. The next bootstrap restores the checkout tree onto the VM disk from the
+  checkpoint, as on any replacement VM.
 Archives stay on the volume's filesystem: a nested mount (such as a scratch build-output
 mount) is recorded as an empty directory and never entered.
 

@@ -1122,6 +1122,24 @@ class RuntimeTests(unittest.TestCase):
         source["receiptId"] = rt.digest(source)
         self.assert_blocked("restore", "separate", authorizedRestore=True, backupReceipt=source)
 
+    def test_restore_never_changes_the_storage_layout(self):
+        self.runtime = self.primary()
+        self.runtime.s["phase"] = "New"
+        source = dict(type="PrimaryBackup", kind="primary", sourceVolumeId="vol-source",
+                      sourceFilesystemUuid="source-fs", volumeOwner={"workspaceId": "workspace"},
+                      freshness="VerifiedOffHost", representativeHashes={"t3/state": "0" * 64}, storageLayout=2,
+                      checkpoint=dict(checkpointId="c-1", manifestSha256="0" * 64))
+        source["receiptId"] = rt.digest(source)
+        self.assert_blocked("restore", "storage layout differs", authorizedRestore=True,
+                            independentRecoveryKeyConfirmed=True, backupReceipt=source)
+        self.runtime.c["storageLayout"] = 2
+        self.runtime.local = True
+        old = {key: value for key, value in source.items() if key not in ("receiptId", "storageLayout", "checkpoint")}
+        old["receiptId"] = rt.digest(old)
+        self.assert_blocked("restore", "storage layout differs", authorizedRestore=True,
+                            independentRecoveryKeyConfirmed=True, backupReceipt=old)
+        self.assertNotIn("mount", self.adapter.events)
+
     def make_streaming_backup(self, acknowledge=True):
         self.runtime = self.primary()
         self.runtime.c["backup"] = dict(transport="management-ssh-stream",
@@ -1129,10 +1147,10 @@ class RuntimeTests(unittest.TestCase):
                                        keyRecoveryId="operator-independent-key",
                                        destinationIdentity="operator-offhost-storage", retentionDays=7)
         self.request("bootstrap")
-        def fake_encrypt(source, output, recipient):
+        def fake_encrypt(source, output, recipient, scope=None):
             # Use the real archive writer, but do not claim cryptographic validation.
             with output.open("wb") as stream:
-                rt.write_backup_archive(source, stream)
+                rt.write_backup_archive(source, stream, scope)
         with patch.object(rt, "encrypt_archive", side_effect=fake_encrypt):
             self.assert_blocked("quiesce", "off-host acknowledgement", backupRequired=True)
         prepared = self.request("backup")
@@ -1170,9 +1188,9 @@ class RuntimeTests(unittest.TestCase):
         receipt, _ = self.make_streaming_backup()
         self.request("resume", deletionNotCommitted=True)
         (self.repo / "file.txt").write_text("new writes after the acknowledged backup\n")
-        def fake_encrypt(source, output, recipient):
+        def fake_encrypt(source, output, recipient, scope=None):
             with output.open("wb") as stream:
-                rt.write_backup_archive(source, stream)
+                rt.write_backup_archive(source, stream, scope)
         with patch.object(rt, "encrypt_archive", side_effect=fake_encrypt):
             self.assert_blocked("quiesce", "off-host acknowledgement", backupRequired=True)
         prepared = self.request("backup")
@@ -1479,6 +1497,101 @@ class LocalCheckoutTests(unittest.TestCase):
             self.attach(replacement)
         self.assertEqual([], self.commands)
         self.assertFalse((self.root / "vm-b/repos").exists())
+
+    def test_offhost_backup_carries_the_final_checkpoint_and_restores_it_on_a_separate_volume(self):
+        local = self.root / "vm-a"
+        source = self.adapter(local)
+        self.attach(source)
+        (local / "repos/project").mkdir()
+        (local / "repos/project/edit.txt").write_text("uncommitted edit")
+        final = source.checkpoint_repos("stop-1")
+        (self.workspace / "t3").mkdir()
+        (self.workspace / "t3/state.sqlite").write_bytes(b"durable T3 state")
+        store = self.workspace / rt.CHECKPOINT_STORE
+        (store / "tmp/unfinished").write_bytes(b"partial object")
+        (store / "staging/c-00000000000000000000-0000000000000000.json").write_text("{}")
+        (store / "objects/ff").mkdir()
+        (store / "objects/ff" / ("f" * 64)).write_bytes(b"unreferenced")
+        # Stands for the live VM-disk tree mounted on the same device: never entered.
+        (self.workspace / "repos/live.txt").write_text("live tree")
+        runtime = rt.Runtime(dict(self.config, uid=2000, gid=2000, backup=dict(
+            transport="management-ssh-stream", recipient="age1fixture", keyRecoveryId="external-key",
+            retentionDays=7, destinationIdentity="operator")), self.root / "state-a", source, git=object())
+        runtime.s.update(freezeCompleted=True, reposCheckpoint=final)
+        archive = io.BytesIO()
+
+        def encrypt(path, output, recipient, scope=None):
+            rt.write_backup_archive(path, archive, scope)
+            output.write_bytes(archive.getvalue())
+        with patch.object(rt, "encrypt_archive", side_effect=encrypt):
+            prepared = runtime.backup("stop-1")
+        self.assertEqual((2, dict(checkpointId=final["checkpointId"], manifestSha256=final["manifestSha256"])),
+                         (prepared["storageLayout"], prepared["checkpoint"]))
+        names = set(rt.tarfile.open(fileobj=io.BytesIO(archive.getvalue())).getnames())
+        prefix = "data/" + rt.CHECKPOINT_STORE + "/"
+        self.assertEqual(set(rc.backup_files(str(store))["files"]),
+                         {name[len(prefix):] for name in names
+                          if name.startswith(prefix) and (store / name[len(prefix):]).is_file()})
+        self.assertTrue({"data/repos", "data/t3/state.sqlite", prefix + "tmp", prefix + "staging"} <= names)
+        self.assertFalse(any(name.startswith(("data/repos/", prefix + "tmp/", prefix + "staging/")) or
+                             "f" * 64 in name for name in names))
+        self.assertNotIn("data/" + rt.LAYOUT_MARKER, names)
+        self.assertNotIn(prefix + "lock", names)
+        self.assertNotIn(prefix + "status.json", names)
+
+        receipt = {key: value for key, value in prepared.items() if key != "receiptId"}
+        receipt.update(type="PrimaryBackup", freshness="VerifiedOffHost", verifiedAt=1)
+        receipt["receiptId"] = rt.digest(receipt)
+        target = self.root / "workspace-b"
+        target.mkdir()
+        (target / ".workspaces-volume.json").write_text("target ownership")
+        volume = dict(providerVolumeId="vol-2", filesystemUuid="fs-2",
+                      owner=dict(workspaceId="ws-1", providerVolumeId="vol-2"))
+        changes = dict(workspace=str(target), volume=volume, vmId="vm-b", generation=4)
+        successor = self.adapter(self.root / "vm-b", **changes)
+        for name in ("mount", "verify_workspace_mount"):
+            patcher = patch.object(successor, name)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        restoring = rt.Runtime(dict(runtime.c, **changes), self.root / "state-b", successor, git=object())
+        restoring.restore(dict(operationId="restore-1", authorizedRestore=True,
+                               independentRecoveryKeyConfirmed=True, backupReceipt=receipt))
+        with patch.object(rt.os, "chown") as chown:
+            restored = restoring.restore_import("restore-1", io.BytesIO(archive.getvalue()))
+        adopted = restored["checkpoint"]
+        self.assertEqual(final["checkpointId"], adopted["adoptedFrom"]["checkpointId"])
+        self.assertEqual(dict(schemaVersion=1, storageLayout=2, workspaceId="ws-1", providerVolumeId="vol-2",
+                              filesystemUuid="fs-2", initialCheckpoint=adopted["checkpointId"]),
+                         json.loads((target / rt.LAYOUT_MARKER).read_text()))
+        self.assertFalse(any(rt.CHECKPOINT_STORE in str(call.args[0]) or rt.LAYOUT_MARKER in str(call.args[0])
+                             for call in chown.call_args_list))
+        chown.assert_any_call(target / "repos", 0, 0)
+        self.assertEqual(b"durable T3 state", (target / "t3/state.sqlite").read_bytes())
+        self.assertEqual([], list((target / "repos").iterdir()))
+        self.assertEqual(0o700, (target / rt.CHECKPOINT_STORE).stat().st_mode & 0o777)
+        # The bootstrap of the replacement VM restores the checkout tree from the adopted checkpoint.
+        attached = self.attach(successor)
+        self.assertEqual(("restored", adopted["checkpointId"]), (attached["action"], attached["checkpointId"]))
+        self.assertEqual("uncommitted edit", (self.root / "vm-b/repos/project/edit.txt").read_text())
+
+    def test_layout_2_backup_requires_the_current_final_checkpoint(self):
+        local = self.root / "vm-a"
+        source = self.adapter(local)
+        self.attach(source)
+        final = source.checkpoint_repos("stop-1")
+        rc.save(str(local / "repos"), str(self.workspace / rt.CHECKPOINT_STORE), source.repos_binding(),
+                str(local / "repos.lineage.json"), fenced=True, operation_id="later")
+        runtime = rt.Runtime(dict(self.config, uid=2000, gid=2000, backup=dict(
+            transport="management-ssh-stream", recipient="age1fixture", keyRecoveryId="external-key",
+            retentionDays=7, destinationIdentity="operator")), self.root / "state-a", source, git=object())
+        runtime.s.update(freezeCompleted=True)
+        with patch.object(rt, "encrypt_archive") as encrypt:
+            with self.assertRaisesRegex(rt.Blocked, "final checkout checkpoint"):
+                runtime.backup("stop-1")
+            runtime.s["reposCheckpoint"] = final
+            with self.assertRaisesRegex(rt.Blocked, "no longer the current checkpoint"):
+                runtime.backup("stop-1")
+        encrypt.assert_not_called()
 
     def test_layout_keeps_the_mountpoint_root_owned_and_refuses_old_layout_data(self):
         adapter = rt.Linux(self.config)
