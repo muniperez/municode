@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ChevronRight, Terminal } from "lucide-react";
+import { ChevronRight, MoreHorizontal, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { useSettings } from "@/modules/Settings/SettingsProvider";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { PageScaffold } from "@/core/components/PageScaffold";
 import { CollectionToolbar } from "@/core/components/CollectionToolbar";
@@ -43,6 +45,9 @@ function OrganizationWorkspaces({ organizationId, workspaceId, canManage }: {
   const [actionError, setActionError] = useState<string | null>(null);
   const [query, setQuery] = useCollectionQuery(`${organizationId}:workspaces`, "name", "asc");
   const navigate = useNavigate();
+  const { openSettings } = useSettings();
+  const moreButton = useRef<HTMLButtonElement>(null);
+  const openingSettings = useRef(false);
   const active = useRef(true);
   const request = useRef<{ controller: AbortController; done: Promise<void> } | null>(null);
   const refresh = useCallback((observation?: DevelopmentWorkspace) => {
@@ -152,6 +157,21 @@ function OrganizationWorkspaces({ organizationId, workspaceId, canManage }: {
           ]} sorts={[{ value: "name", label: "Name" }, { value: "activity", label: "Last activity" }]} /></div>
         <CreateWorkspaceDialog organizationId={organizationId} canManage={canManage}
           onCreated={workspace => navigate(`/workspaces/${encodeURIComponent(workspace.id)}`)} />
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button ref={moreButton} variant="outline" aria-label="More">
+              <MoreHorizontal className="h-4 w-4" aria-hidden="true" />More
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" onCloseAutoFocus={event => {
+            if (openingSettings.current) { event.preventDefault(); openingSettings.current = false; }
+          }}>
+            <DropdownMenuItem onSelect={() => {
+              openingSettings.current = true;
+              openSettings("plans", moreButton.current ?? undefined);
+            }}>Plans</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       <p className="text-sm text-muted-foreground">{filtered.length} of {items.length} workspaces</p>
     </>}

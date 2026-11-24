@@ -246,7 +246,10 @@ function ProviderMark({ type, types }: { type: string; types: ProviderType[] }) 
   );
 }
 
-export function ProvidersModule({ view }: { view?: "plans" | "accounts" } = {}) {
+export function ProvidersModule({ view, onViewChange }: {
+  view?: "plans" | "accounts";
+  onViewChange?: (view: "plans" | "accounts") => void;
+} = {}) {
   const { selectedOrganization } = useAuth();
   const organizationId = selectedOrganization?.id;
   const location = useLocation();
@@ -254,6 +257,10 @@ export function ProvidersModule({ view }: { view?: "plans" | "accounts" } = {}) 
 
   const activeView: "plans" | "accounts" =
     view ?? (location.pathname.startsWith("/plans/accounts") ? "accounts" : "plans");
+  const changeView = (next: "plans" | "accounts") => {
+    if (onViewChange) onViewChange(next);
+    else navigate(next === "accounts" ? "/plans/accounts" : "/plans");
+  };
 
   const canManage = ["owner", "admin"].includes(
     selectedOrganization?.role?.toLowerCase() ?? "",
@@ -825,7 +832,7 @@ export function ProvidersModule({ view }: { view?: "plans" | "accounts" } = {}) 
         account: account.id,
       },
     });
-    navigate("/plans");
+    changeView("plans");
   }
 
   const hasActivePlanFilters =
@@ -884,7 +891,7 @@ export function ProvidersModule({ view }: { view?: "plans" | "accounts" } = {}) 
             secondary={{
               id: "provider-accounts",
               label: "Provider accounts",
-              onClick: () => navigate("/plans/accounts"),
+              onClick: () => changeView("accounts"),
             }}
             primary={{
               id: "add-plan",
@@ -1125,7 +1132,9 @@ export function ProvidersModule({ view }: { view?: "plans" | "accounts" } = {}) 
       ) : (
         <PageScaffold
           breadcrumbs={[
-            { label: "Plans", to: "/plans" },
+            onViewChange
+              ? { label: "Plans", onClick: () => changeView("plans") }
+              : { label: "Plans", to: "/plans" },
             { label: "Provider accounts" },
           ]}
           title="Provider accounts"
@@ -1168,7 +1177,7 @@ export function ProvidersModule({ view }: { view?: "plans" | "accounts" } = {}) 
             secondary={{
               id: "back-to-plans",
               label: "Back to plans",
-              onClick: () => navigate("/plans"),
+              onClick: () => changeView("plans"),
             }}
             primary={{
               id: "add-account",
@@ -1492,7 +1501,7 @@ export function ProvidersModule({ view }: { view?: "plans" | "accounts" } = {}) 
                     disabled={dialogBusy}
                     onClick={() => {
                       closeEditor();
-                      navigate("/plans/accounts");
+                      changeView("accounts");
                     }}
                   >
                     Provider accounts

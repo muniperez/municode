@@ -10,7 +10,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "../auth/AuthProvider";
-import { dashboardRoutes, navigationRoutes, settingsRoutes } from "../routing/dashboardRoutes";
+import { navigationRoutes } from "../routing/dashboardRoutes";
+import { useSettings } from "@/modules/Settings/SettingsProvider";
 
 function getFallbackName(email?: string | null) {
   const localPart = email?.split("@")[0];
@@ -36,6 +37,7 @@ function getInitials(name: string) {
 
 export function SidebarNavigation({ onNavigate }: { onNavigate: () => void }) {
   const { selectedOrganization, profile, logout } = useAuth();
+  const { openSettings } = useSettings();
   const email = profile?.email;
   const userName = profile?.displayName || getFallbackName(email);
 
@@ -75,39 +77,41 @@ export function SidebarNavigation({ onNavigate }: { onNavigate: () => void }) {
         </DropdownMenu>
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-        {[navigationRoutes, settingsRoutes].map((routes, index) => (
-          <nav
-            key={index}
-            aria-label={index ? "Workspace administration" : "Primary"}
-            className="relative flex w-full min-w-0 flex-col p-2"
-          >
-            <p className="flex h-8 shrink-0 items-center rounded-md px-2 text-xs font-medium text-sidebar-foreground/70">
-              {index ? "Workspace administration" : "Platform"}
-            </p>
-            <div className="w-full text-sm">
-              <div className="flex w-full min-w-0 flex-col gap-1">
-                {routes.map((route) => {
-                  const Icon = route.nav?.icon;
-                  return (
-                    <NavLink
-                      key={route.key}
-                      to={route.path}
-                      onClick={onNavigate}
-                      className={({ isActive }) =>
-                        `flex h-8 w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring ${isActive ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground" : "text-sidebar-foreground"}`
-                      }
-                    >
-                      {Icon ? <Icon className="size-4 shrink-0" /> : null}
-                      <span className="truncate">{route.nav?.label}</span>
-                    </NavLink>
-                  );
-                })}
-              </div>
+        <nav
+          aria-label="Primary"
+          className="relative flex w-full min-w-0 flex-col p-2"
+        >
+          <p className="flex h-8 shrink-0 items-center rounded-md px-2 text-xs font-medium text-sidebar-foreground/70">
+            Platform
+          </p>
+          <div className="w-full text-sm">
+            <div className="flex w-full min-w-0 flex-col gap-1">
+              {navigationRoutes.map((route) => {
+                const Icon = route.nav?.icon;
+                return (
+                  <NavLink
+                    key={route.key}
+                    to={route.path}
+                    onClick={onNavigate}
+                    className={({ isActive }) =>
+                      `flex h-8 w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring ${isActive ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground" : "text-sidebar-foreground"}`
+                    }
+                  >
+                    {Icon ? <Icon className="size-4 shrink-0" /> : null}
+                    <span className="truncate">{route.nav?.label}</span>
+                  </NavLink>
+                );
+              })}
             </div>
-          </nav>
-        ))}
+          </div>
+        </nav>
       </div>
       <div className="mt-auto p-2">
+        <button type="button" onClick={event => openSettings("account", event.currentTarget)}
+          className="mb-2 flex h-8 w-full items-center gap-2 rounded-md p-2 text-left text-sm outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring">
+          <Settings className="size-4 shrink-0" aria-hidden="true" />
+          Settings
+        </button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
@@ -140,12 +144,6 @@ export function SidebarNavigation({ onNavigate }: { onNavigate: () => void }) {
               </span>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
-              <NavLink to={dashboardRoutes.settings.path} onClick={onNavigate}>
-                <Settings aria-hidden="true" />
-                Settings
-              </NavLink>
-            </DropdownMenuItem>
             <DropdownMenuItem asChild>
               <a href={runtimeConfig.sourceUrl}>
                 <Code aria-hidden="true" />

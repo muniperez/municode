@@ -42,14 +42,19 @@ describe("SidebarNavigation", () => {
     expect(screen.getByRole("button", { name: /Municode Workspaces.*MuniVentures/i })).toBeInTheDocument();
     expect(screen.getByText("Platform")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Workspaces" })).toHaveAttribute("aria-current", "page");
+    const settings = screen.getByRole("button", { name: "Settings" });
+    const userMenu = screen.getByRole("button", { name: /example developer.*muni@example.test/i });
+    expect(settings.nextElementSibling).toBe(userMenu);
+    expect(settings.closest("nav")).toBeNull();
+    for (const name of ["Plans", "GitHub", "API Keys", "Team"]) {
+      expect(screen.queryByRole("link", { name })).not.toBeInTheDocument();
+    }
     fireEvent.pointerDown(screen.getByRole("button", { name: /example developer.*muni@example.test/i }), {
       button: 0,
       ctrlKey: false,
     });
-    expect(await screen.findByRole("menuitem", { name: "Settings" })).toHaveAttribute(
-      "href",
-      "/settings/account",
-    );
+    await screen.findByRole("menuitem", { name: "Log out" });
+    expect(screen.queryByRole("menuitem", { name: "Settings" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("menuitem", { name: "Log out" }));
 
     expect(logout).toHaveBeenCalledOnce();

@@ -3,7 +3,7 @@ import { buildDashboardPath, dashboardRoutes, navigationRoutes } from "./dashboa
 
 describe("dashboardRoutes", () => {
   it("builds workspace paths without retaining app-hosting routes", () => {
-    expect(navigationRoutes.map((route) => route.key)).toEqual(["workspaces", "plans"]);
+    expect(navigationRoutes.map((route) => route.key)).toEqual(["workspaces"]);
     expect(dashboardRoutes).not.toHaveProperty("apps");
     expect(dashboardRoutes).not.toHaveProperty("deployments");
     expect(dashboardRoutes).not.toHaveProperty("databases");
