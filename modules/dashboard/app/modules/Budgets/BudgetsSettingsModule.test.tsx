@@ -22,9 +22,15 @@ function budget(overrides: Partial<Budget["projection"]> = {}, extra: Partial<Bu
       period: "2026-11", estimate: true, complete: false, projectedHourly: 0.1056, projectedMonthly: 76, percentOfBudget: 152,
       crossedThreshold: 100, overBudget: true, providerChargesAvailable: false,
       providers: [{ providerAccountId: "do", providerName: "Droplets", providerType: "digital-ocean", computeMonthly: 72,
-        storageMonthly: 4, projectedMonthly: 76, workspaceCount: 2, reservedVmCount: 1 }],
+        storageMonthly: 4, projectedMonthly: 76, workspaceCount: 2, reservedVmCount: 1, complete: false,
+        assumptions: ["Compute s-2vcpu in all regions: billed per started hour at 0.10 USD/VM-hour.",
+          "Fallback rate: 1 volume(s) have no storage catalog entry, so the monthly storage rate recorded when the workspace was created is used."] }],
       contributors: [{ workspaceId: "ws", workspaceName: "API fixture", providerAccountId: "do", region: "fra1", skus: ["s-2vcpu"],
-        reservedVmCount: 1, computeHourly: 0.1, computeMonthly: 72, storageMonthly: 2, projectedMonthly: 74, pricingStatus: "unknown" }],
+        reservedVmCount: 1, computeHourly: 0.1, computeMonthly: 72, storageMonthly: 2, projectedMonthly: 74, pricingStatus: "current",
+        lines: [{ resource: "compute", resourceId: "vm", sku: "s-2vcpu", quantity: 1, source: "catalog", catalogEntryId: "droplet",
+          billingModel: "hourly", currency: "USD", amount: 72, status: "current" },
+        { resource: "storage", resourceId: "ws", quantity: 20, source: "fallback", billingModel: "monthly", currency: "USD", amount: 2,
+          status: "current" }] }],
       excluded: [], warnings: ["1 workspace(s) have missing pricing; their cost is unknown."],
       assumptions: ["Budgets only inform: crossing a threshold never blocks creating or starting workspaces and never stops resources."],
       ...overrides,
@@ -53,6 +59,13 @@ it("labels projections as estimates with provider breakdown, warnings and over-b
   expect(within(card).getByText(/Provider-reported charges are not available yet/)).toBeInTheDocument();
   expect(within(card).getByRole("table", { name: "Team estimate by provider" })).toHaveTextContent("Droplets (digital-ocean)");
   expect(within(card).getByText(/missing pricing/)).toBeInTheDocument();
+  expect(within(card).getByText("Missing prices")).toBeInTheDocument();
+  fireEvent.click(within(card).getByRole("button", { name: /Pricing assumptions by provider/ }));
+  const assumptions = within(card).getByRole("region", { name: "Droplets pricing assumptions" });
+  expect(assumptions).toHaveTextContent("billed per started hour at 0.10 USD/VM-hour");
+  expect(assumptions).toHaveTextContent("Fallback rate: 1 volume(s)");
+  fireEvent.click(within(card).getByRole("button", { name: /Contributing workspaces/ }));
+  expect(within(card).getByRole("table", { name: "Team contributing workspaces" })).toHaveTextContent("Current · fallback rate");
   expect(screen.getByText(/Budgets only inform\. Crossing a threshold never blocks/)).toBeInTheDocument();
 });
 

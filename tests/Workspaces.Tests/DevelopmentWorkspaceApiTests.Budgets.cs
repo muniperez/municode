@@ -169,14 +169,15 @@ public sealed partial class DevelopmentWorkspaceApiTests
             await db.DevelopmentWorkspaces.Where(x => x.Id == stale.Id)
                 .ExecuteUpdateAsync(x => x.SetProperty(w => w.PricingUpdatedAt, DateTimeOffset.UtcNow.AddDays(-60)));
             await db.DevelopmentWorkspaces.Where(x => x.Id == unknown.Id).ExecuteUpdateAsync(x => x
-                .SetProperty(w => w.PricingUpdatedAt, (DateTimeOffset?)null).SetProperty(w => w.ProviderAccountId, "second"));
+                .SetProperty(w => w.PricingUpdatedAt, (DateTimeOffset?)null).SetProperty(w => w.StorageMonthlyRate, 0m)
+                .SetProperty(w => w.ProviderAccountId, "second"));
         }
 
         var all = await CreateBudget(owner, new("org", "All", 50m, "usd"));
         Assert.Equal("USD", all.Currency);
         Assert.Equal([50, 80, 100], all.Thresholds);
         Assert.False(all.Projection.Complete);
-        Assert.Equal(4m, all.Projection.ProjectedMonthly);
+        Assert.Equal(2m, all.Projection.ProjectedMonthly);
         Assert.Equal(euro.Id, Assert.Single(all.Projection.Excluded).WorkspaceId);
         Assert.Equal(3, all.Projection.Warnings.Count);
         Assert.Equal(["digital-ocean", "hetzner"], all.Projection.Providers.Select(x => x.ProviderType).Order());
@@ -185,9 +186,74 @@ public sealed partial class DevelopmentWorkspaceApiTests
 
         var scoped = await CreateBudget(owner, new("org", "Droplets only", 50m, ProviderAccountIds: ["second"]));
         var provider = Assert.Single(scoped.Projection.Providers);
-        Assert.Equal(("second", "Droplets", "digital-ocean", 2m), (provider.ProviderAccountId, provider.ProviderName,
-            provider.ProviderType, provider.ProjectedMonthly));
+        Assert.Equal(("second", "Droplets", "digital-ocean", 0m, false), (provider.ProviderAccountId, provider.ProviderName,
+            provider.ProviderType, provider.ProjectedMonthly, provider.Complete));
+        Assert.Contains(provider.Assumptions, x => x.StartsWith("Missing price: 1 resource(s)", StringComparison.Ordinal));
+        Assert.Null(scoped.Projection.Contributors.Single().Lines.Single().Amount);
         Assert.Empty(scoped.Projection.Excluded);
+    }
+
+    [Fact]
+    public async Task BudgetAcrossTwoProviderBillingModelsShowsAssumptionsAndAlertsWithoutBlockingCreateOrStart()
+    {
+        var effective = DateTimeOffset.UtcNow.AddDays(-7);
+        factory.Policy.PriceCatalog = new()
+        {
+            ["hetzner-cx-test"] = new() { Provider = "hetzner", Region = "nbg1", Sku = "cx-test", BillingModel = BudgetPricing.HourlyMonthlyCap,
+                HourlyRate = .1m, MonthlyRate = 50m, Currency = "USD", Source = "Synthetic Hetzner list", EffectiveFrom = effective },
+            ["hetzner-volumes"] = new() { Provider = "hetzner", Resource = BudgetPricing.Storage, BillingModel = BudgetPricing.Monthly,
+                MonthlyRate = .05m, Currency = "USD", Source = "Synthetic Hetzner list", EffectiveFrom = effective },
+            ["droplet-s-test"] = new() { Provider = "digital-ocean", Sku = "s-test", BillingModel = BudgetPricing.Hourly,
+                HourlyRate = .2m, Currency = "USD", Source = "Synthetic DigitalOcean list", EffectiveFrom = effective }
+        };
+        using var owner = Client(token);
+        var hetzner = await Create(owner);
+        var droplet = await CreateNamed(owner, "Droplet");
+        foreach (var id in new[] { hetzner.Id, droplet.Id })
+        {
+            var started = await owner.PostAsync($"{Root}/{id}/start?organizationId=org", null);
+            Assert.True(started.IsSuccessStatusCode, await started.Content.ReadAsStringAsync());
+        }
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<WorkspaceDbContext>();
+            db.ProviderAccounts.Add(new ProviderAccount { Id = "second", OrganizationId = "org", Name = "Droplets",
+                ProviderType = CloudProvider.DigitalOcean, CredentialPath = "sensitive/second", CredentialGeneration = "synthetic" });
+            await db.SaveChangesAsync();
+            await db.DevelopmentWorkspaces.Where(x => x.Id == droplet.Id).ExecuteUpdateAsync(x => x.SetProperty(w => w.ProviderAccountId, "second"));
+            await db.DevelopmentWorkspaceVms.Where(x => x.WorkspaceId == droplet.Id)
+                .ExecuteUpdateAsync(x => x.SetProperty(v => v.ProviderAccountId, "second").SetProperty(v => v.Sku, "s-test"));
+        }
+
+        var budget = await CreateBudget(owner, new("org", "Team", 100m, null, [80, 100]));
+        var projection = budget.Projection;
+        Assert.Equal((197m, 197m, 100, true, true), (projection.ProjectedMonthly, projection.PercentOfBudget,
+            projection.CrossedThreshold, projection.OverBudget, projection.Complete));
+        var capped = projection.Providers.Single(x => x.ProviderType == "hetzner");
+        Assert.Equal((50m, 1m), (capped.ComputeMonthly, capped.StorageMonthly));
+        Assert.Contains(capped.Assumptions, x => x.Contains("capped at 50.00 USD/VM per month", StringComparison.Ordinal));
+        Assert.Contains(capped.Assumptions, x => x.StartsWith("Storage in all regions: billed monthly at 0.05 USD/GB", StringComparison.Ordinal));
+        Assert.DoesNotContain(capped.Assumptions, x => x.StartsWith("Fallback rate", StringComparison.Ordinal));
+        var hourly = projection.Providers.Single(x => x.ProviderType == "digital-ocean");
+        Assert.Equal((144m, 2m), (hourly.ComputeMonthly, hourly.StorageMonthly));
+        Assert.Contains(hourly.Assumptions, x => x.StartsWith("Compute s-test in all regions: billed per started hour at 0.20 USD/VM-hour.", StringComparison.Ordinal));
+        Assert.Contains(hourly.Assumptions, x => x.StartsWith("Fallback rate: 1 volume(s)", StringComparison.Ordinal));
+        Assert.DoesNotContain(hourly.Assumptions, x => x.Contains("capped", StringComparison.Ordinal));
+        Assert.Empty(await BudgetAlertsAsync());
+        Assert.Equal(1, await EvaluateBudgetsConcurrentlyAsync());
+        Assert.Equal(100, (await ListBudgets(owner)).Single().LastAlert!.Threshold);
+
+        var later = await CreateNamed(owner, "After alert");
+        var restarted = await owner.PostAsync($"{Root}/{later.Id}/start?organizationId=org", null);
+        Assert.True(restarted.IsSuccessStatusCode, await restarted.Content.ReadAsStringAsync());
+        await using var verify = factory.Services.CreateAsyncScope();
+        var store = verify.ServiceProvider.GetRequiredService<WorkspaceDbContext>();
+        var vms = await store.DevelopmentWorkspaceVms.ToListAsync();
+        Assert.Equal(3, vms.Count);
+        Assert.All(vms, vm => Assert.True(vm.ComputeReserved && vm.DesiredState == "running"));
+        var alert = Assert.Single(await store.AuditEvents.Where(x => x.Action == BudgetService.ThresholdCrossedEvent).ToListAsync());
+        var details = JsonDocument.Parse(alert.Details!).RootElement;
+        Assert.Equal((100, 197m), (details.GetProperty("threshold").GetInt32(), details.GetProperty("projectedMonthly").GetDecimal()));
     }
 
     [Fact]

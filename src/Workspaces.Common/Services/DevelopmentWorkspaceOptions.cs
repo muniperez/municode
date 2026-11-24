@@ -12,6 +12,9 @@ public sealed class DevelopmentWorkspaceOptions
     public string Currency { get; set; } = "USD";
     public DateTimeOffset? PricingUpdatedAt { get; set; }
     public int MaxPricingAgeDays { get; set; } = 30;
+    // Budget estimates only; keyed by a stable entry ID. Never consulted when creating or starting workspaces.
+    public Dictionary<string, BudgetPriceCatalogEntry> PriceCatalog { get; set; } = new(StringComparer.Ordinal);
+    public int PriceCatalogMaxAgeDays { get; set; } = 90;
     public int IdleGraceMinutes { get; set; } = 360;
     public int TaskLeaseSeconds { get; set; } = 300;
     public int HeartbeatTimeoutSeconds { get; set; } = 120;

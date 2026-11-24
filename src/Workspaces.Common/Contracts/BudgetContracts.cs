@@ -36,10 +36,16 @@ public sealed record BudgetProjectionResponse(string Period, bool Estimate, bool
     IReadOnlyList<BudgetExcludedWorkspaceResponse> Excluded, IReadOnlyList<string> Warnings, IReadOnlyList<string> Assumptions);
 
 public sealed record BudgetProviderProjectionResponse(string ProviderAccountId, string ProviderName, string ProviderType,
-    decimal ComputeMonthly, decimal StorageMonthly, decimal ProjectedMonthly, int WorkspaceCount, int ReservedVmCount);
+    decimal ComputeMonthly, decimal StorageMonthly, decimal ProjectedMonthly, int WorkspaceCount, int ReservedVmCount,
+    bool Complete, IReadOnlyList<string> Assumptions);
 
 public sealed record BudgetContributorResponse(string WorkspaceId, string WorkspaceName, string ProviderAccountId, string Region,
     IReadOnlyList<string> Skus, int ReservedVmCount, decimal ComputeHourly, decimal ComputeMonthly, decimal StorageMonthly,
-    decimal ProjectedMonthly, string PricingStatus, DateTimeOffset? PricingUpdatedAt);
+    decimal ProjectedMonthly, string PricingStatus, DateTimeOffset? PricingUpdatedAt, IReadOnlyList<BudgetPriceLineResponse> Lines);
+
+// Source is "catalog" or "fallback" (the rate recorded when the VM was selected). Status is "current", "stale" or
+// "missing"; a missing price has a null Amount and is never counted as zero.
+public sealed record BudgetPriceLineResponse(string Resource, string ResourceId, string? Sku, decimal Quantity, string Source,
+    string? CatalogEntryId, string BillingModel, string Currency, decimal? Amount, string Status, DateTimeOffset? PricedAt);
 
 public sealed record BudgetExcludedWorkspaceResponse(string WorkspaceId, string WorkspaceName, string Currency, string Reason);

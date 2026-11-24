@@ -3,11 +3,19 @@ import { apiRequest } from "./apiClient";
 export type BudgetProviderProjection = {
   providerAccountId: string; providerName: string; providerType: string; computeMonthly: number; storageMonthly: number;
   projectedMonthly: number; workspaceCount: number; reservedVmCount: number;
+  /** False when a resource has a missing price; its cost is left out, never counted as zero. */
+  complete: boolean; assumptions: string[];
+};
+/** One priced resource: from the operator's price catalog or the rate recorded when it was selected (fallback). */
+export type BudgetPriceLine = {
+  resource: "compute" | "storage"; resourceId: string; sku?: string | null; quantity: number; source: "catalog" | "fallback";
+  catalogEntryId?: string | null; billingModel: string; currency: string; amount: number | null;
+  status: "current" | "stale" | "missing"; pricedAt?: string | null;
 };
 export type BudgetContributor = {
   workspaceId: string; workspaceName: string; providerAccountId: string; region: string; skus: string[]; reservedVmCount: number;
   computeHourly: number; computeMonthly: number; storageMonthly: number; projectedMonthly: number;
-  pricingStatus: "current" | "stale" | "unknown"; pricingUpdatedAt?: string | null;
+  pricingStatus: "current" | "stale" | "unknown"; pricingUpdatedAt?: string | null; lines: BudgetPriceLine[];
 };
 export type BudgetExcludedWorkspace = { workspaceId: string; workspaceName: string; currency: string; reason: string };
 /** Every amount is an estimate from recorded rates; provider-reported charges are not available yet. */

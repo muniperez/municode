@@ -322,66 +322,8 @@ public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeP
         return rows.ToLookup(x => x.BudgetId, StringComparer.Ordinal);
     }
 
-    private BudgetProjectionResponse Project(Budget budget, Inputs inputs)
-    {
-        var thresholds = Thresholds(budget);
-        var scope = AccountIds(budget);
-        var period = Now.UtcDateTime.ToString("yyyy-MM", CultureInfo.InvariantCulture);
-        var staleBefore = Now.AddDays(-Math.Max(1, Policy.MaxPricingAgeDays));
-        var contributors = new List<BudgetContributorResponse>();
-        var excluded = new List<BudgetExcludedWorkspaceResponse>();
-        var warnings = new List<string>();
-        decimal computeHourly = 0, storageMonthly = 0;
-        foreach (var workspace in inputs.Workspaces.Where(x => scope.Count == 0 || scope.Contains(x.ProviderAccountId)))
-        {
-            if (!string.Equals(workspace.Currency, budget.Currency, StringComparison.OrdinalIgnoreCase))
-            {
-                excluded.Add(new(workspace.Id, workspace.Name, workspace.Currency,
-                    $"Priced in {workspace.Currency}; this budget is in {budget.Currency}. It is not converted or summed."));
-                continue;
-            }
-            var reserved = workspace.Vms.Where(x => x.ComputeReserved).ToList();
-            var hourly = reserved.Sum(x => Math.Max(0, x.ComputeHourlyRate));
-            var storage = Math.Max(0, workspace.StorageMonthlyRate);
-            var status = workspace.PricingUpdatedAt is null || reserved.Any(x => x.ComputeHourlyRate <= 0)
-                || (workspace.VolumeSizeGb > 0 && workspace.StorageMonthlyRate <= 0) ? "unknown"
-                : workspace.PricingUpdatedAt < staleBefore ? "stale" : "current";
-            computeHourly += hourly;
-            storageMonthly += storage;
-            contributors.Add(new(workspace.Id, workspace.Name, workspace.ProviderAccountId, workspace.Region,
-                reserved.Select(x => x.Sku).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(),
-                reserved.Count, Money(hourly, 4), Money(hourly * HoursPerMonth), Money(storage),
-                Money(hourly * HoursPerMonth + storage), status, workspace.PricingUpdatedAt));
-        }
-        var unknown = contributors.Count(x => x.PricingStatus == "unknown");
-        var stale = contributors.Count(x => x.PricingStatus == "stale");
-        if (unknown > 0)
-            warnings.Add($"{unknown} workspace(s) have missing pricing; their cost is unknown, so this projection is incomplete and may be too low.");
-        if (stale > 0)
-            warnings.Add($"{stale} workspace(s) use pricing older than {Math.Max(1, Policy.MaxPricingAgeDays)} days; actual provider prices may differ.");
-        if (excluded.Count > 0)
-            warnings.Add($"{excluded.Count} workspace(s) are priced in another currency and are excluded from this budget.");
-        var missingScope = scope.Count(id => !inputs.Accounts.ContainsKey(id));
-        if (missingScope > 0)
-            warnings.Add($"{missingScope} scoped provider account(s) no longer exist.");
-        var providers = contributors.GroupBy(x => x.ProviderAccountId).Select(group =>
-        {
-            inputs.Accounts.TryGetValue(group.Key, out var account);
-            var compute = group.Sum(x => x.ComputeMonthly);
-            var storageTotal = group.Sum(x => x.StorageMonthly);
-            return new BudgetProviderProjectionResponse(group.Key, account?.Name ?? "Unknown provider account",
-                account is null ? "unknown" : ProviderAccountService.WireType(account.ProviderType), compute, storageTotal,
-                compute + storageTotal, group.Count(), group.Sum(x => x.ReservedVmCount));
-        }).OrderByDescending(x => x.ProjectedMonthly).ThenBy(x => x.ProviderName, StringComparer.OrdinalIgnoreCase).ToList();
-        var monthly = computeHourly * HoursPerMonth + storageMonthly;
-        var percent = budget.MonthlyAmount > 0 ? monthly / budget.MonthlyAmount * 100m : 0;
-        int? crossed = thresholds.Where(x => percent >= x).Select(x => (int?)x).Max();
-        var projection = new BudgetProjectionResponse(period, true, unknown == 0, Money(computeHourly + storageMonthly / HoursPerMonth, 4),
-            Money(monthly), Math.Round(percent, 1, MidpointRounding.AwayFromZero), crossed, monthly > budget.MonthlyAmount, false,
-            providers, contributors.OrderByDescending(x => x.ProjectedMonthly).ThenBy(x => x.WorkspaceName, StringComparer.OrdinalIgnoreCase).ToList(),
-            excluded, warnings, Assumptions(period));
-        return projection;
-    }
+    private BudgetProjectionResponse Project(Budget budget, Inputs inputs) =>
+        BudgetProjector.Project(budget, Thresholds(budget), AccountIds(budget), inputs.Workspaces, inputs.Accounts, Policy, Now);
 
     private async Task<Inputs> LoadInputsAsync(string organizationId, CancellationToken ct)
     {
@@ -436,16 +378,6 @@ public sealed class BudgetService(WorkspaceDbContext db, IIdGenerator ids, TimeP
 
     private static List<int> Thresholds(Budget budget) => JsonSerializer.Deserialize<List<int>>(budget.ThresholdsJson) ?? [];
     private static List<string> AccountIds(Budget budget) => JsonSerializer.Deserialize<List<string>>(budget.ProviderAccountIdsJson) ?? [];
-    private static decimal Money(decimal value, int decimals = 2) => Math.Round(value, decimals, MidpointRounding.AwayFromZero);
-
-    private static List<string> Assumptions(string period) =>
-    [
-        $"Estimate for calendar month {period} (UTC), not an invoice or provider-reported charge.",
-        $"Every VM currently reserving compute is assumed to keep running for a full {HoursPerMonth:0}-hour month at the hourly rate recorded when it started.",
-        "Every retained workspace volume is charged at the monthly storage rate recorded when it was created.",
-        "Rates come from operator-configured pricing, grouped by provider account; taxes, traffic, snapshots, backups, discounts and minimum charges are not included.",
-        "Budgets only inform: crossing a threshold never blocks creating or starting workspaces and never stops resources."
-    ];
 
     private sealed record Inputs(IReadOnlyList<DevelopmentWorkspace> Workspaces, IReadOnlyDictionary<string, ProviderAccount> Accounts);
 }
