@@ -699,19 +699,20 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
 
         runtime.Inventory = "IdleCandidate";
         t3Threads = [new { status = "running", activeRunId = "fixture-run", pendingRuntimeRequest = (object?)null }];
-        await AssertHold("workspace_drain_t3_activity", "T3");
+        await AssertHold("workspace_drain_t3_activity", "active or queued run");
         t3Threads = [new { status = "idle", activeRunId = (string?)null, pendingRuntimeRequest = new { id = "fixture-request" } }];
-        await AssertHold("workspace_drain_t3_activity", "T3");
+        await AssertHold("workspace_drain_t3_activity", "pending request");
 
         t3Threads = Enumerable.Range(1, 2).Select(i => (object)new
             { status = "queued", latestRunId = $"queued-{i}", activeRunId = (string?)null, pendingRuntimeRequest = (object?)null }).ToArray();
-        await AssertHold("workspace_drain_t3_activity", "T3");
+        await AssertHold("workspace_drain_t3_activity", "active or queued run");
         t3Threads = [new
         {
             status = "completed", activeRunId = (string?)null, pendingRuntimeRequest = (object?)null,
             pendingBackgroundTasks = Enumerable.Range(1, 6).Select(i => new { taskId = $"background-{i}" })
         }];
-        await AssertHold("workspace_drain_t3_activity", "T3");
+        await AssertHold("workspace_drain_t3_activity", "pending background work");
+        Assert.DoesNotContain("background-1", (await CurrentVm(vm.Id)).ErrorMessage);
         Assert.DoesNotContain("quiesce", runtime.Actions);
 
         t3Threads = [];
@@ -723,7 +724,7 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         t3Threads = [new { status = "idle", activeRunId = (string?)null, pendingRuntimeRequest = new { id = "late-request" } }];
         clock.Advance(TimeSpan.FromSeconds(76));
         await Hop("quiesce");
-        await AssertHold("workspace_drain_t3_activity", "T3");
+        await AssertHold("workspace_drain_t3_activity", "pending request");
         Assert.DoesNotContain("quiesce", runtime.Actions);
         t3Threads = [];
         await Hop("gateway-drain");

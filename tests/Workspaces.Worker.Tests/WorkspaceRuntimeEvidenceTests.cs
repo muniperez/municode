@@ -182,14 +182,17 @@ public sealed class WorkspaceRuntimeEvidenceTests
     }
 
     [Theory]
-    [InlineData("""{"schemaVersion":1,"snapshotSequence":7,"threads":[],"archivedThreads":[{"status":"running","activeRunId":"run","pendingRuntimeRequest":null}]}""")]
-    [InlineData("""{"schemaVersion":1,"snapshotSequence":7,"threads":[{"status":"idle","activeRunId":null,"pendingRuntimeRequest":{"kind":"approval"}}],"archivedThreads":[]}""")]
-    [InlineData("""{"schemaVersion":1,"snapshotSequence":7,"threads":[{"status":"idle","activeRunId":null,"pendingRuntimeRequest":null,"pendingBackgroundTasks":[{}]}],"archivedThreads":[]}""")]
-    [InlineData("""{"schemaVersion":1,"snapshotSequence":7,"threads":[{"status":"idle","activeRunId":null}],"archivedThreads":[]}""")]
-    [InlineData("""{"threads":[],"archivedThreads":[]}""")]
-    public void PendingWorkArchivedRunsAndUnknownSnapshotsNeverAuthorizeShutdown(string json)
+    [InlineData("""{"schemaVersion":1,"snapshotSequence":7,"threads":[],"archivedThreads":[{"status":"running","activeRunId":"run","pendingRuntimeRequest":null}]}""", nameof(T3IdleBlocker.ActiveRun))]
+    [InlineData("""{"schemaVersion":1,"snapshotSequence":7,"threads":[{"status":"completed","activeRunId":null,"pendingRuntimeRequest":null,"activityRunStatus":"queued"}],"archivedThreads":[]}""", nameof(T3IdleBlocker.ActiveRun))]
+    [InlineData("""{"schemaVersion":1,"snapshotSequence":7,"threads":[{"status":"idle","activeRunId":null,"pendingRuntimeRequest":{"kind":"approval"}}],"archivedThreads":[]}""", nameof(T3IdleBlocker.PendingRequest))]
+    [InlineData("""{"schemaVersion":1,"snapshotSequence":7,"threads":[{"status":"idle","activeRunId":null,"pendingRuntimeRequest":null,"blockedOnThreadWait":true}],"archivedThreads":[]}""", nameof(T3IdleBlocker.PendingRequest))]
+    [InlineData("""{"schemaVersion":1,"snapshotSequence":7,"threads":[{"status":"idle","activeRunId":null,"pendingRuntimeRequest":null,"pendingBackgroundTasks":[{}]}],"archivedThreads":[]}""", nameof(T3IdleBlocker.PendingBackgroundTasks))]
+    [InlineData("""{"schemaVersion":1,"snapshotSequence":7,"threads":[{"status":"idle","activeRunId":null}],"archivedThreads":[]}""", nameof(T3IdleBlocker.UnverifiedSnapshot))]
+    [InlineData("""{"threads":[],"archivedThreads":[]}""", nameof(T3IdleBlocker.UnverifiedSnapshot))]
+    public void PendingWorkArchivedRunsAndUnknownSnapshotsNeverAuthorizeShutdown(string json, string expected)
     {
         using var document = JsonDocument.Parse(json);
         Assert.False(T3WorkspaceEvidence.IsIdle(document.RootElement));
+        Assert.Equal(expected, T3WorkspaceEvidence.Blocker(document.RootElement)?.ToString());
     }
 }

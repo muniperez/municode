@@ -83,9 +83,9 @@ public sealed partial class DevelopmentWorkspaceProcessor
                     var port = await tunnels.EnsureAsync(Target(vm), ct);
                     using var client = T3Client(port, await SecretAsync(vm.RuntimeCredentialRef!, ct));
                     var snapshot = await GetJsonAsync(client, "/api/orchestration/shell", ct);
-                    if (!T3WorkspaceEvidence.IsIdle(snapshot))
+                    if (T3Hold(snapshot) is { } t3Blocker)
                     {
-                        await ReopenAfterFailedFreezeAsync(workspace, vm, op, evidence, false, ct, T3NotIdle);
+                        await ReopenAfterFailedFreezeAsync(workspace, vm, op, evidence, false, ct, t3Blocker);
                         break;
                     }
                     evidence.T3SnapshotSequence = snapshot.GetProperty("snapshotSequence").GetInt64();

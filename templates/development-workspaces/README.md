@@ -913,8 +913,11 @@ hosted acceptance or rollout. No hosted/provider changes are part of #42.
 While a stop is `Draining`, the workspace and CLI report whether unresolved control-plane
 tasks, guest work inventory, or the T3 orchestration snapshot is holding the stop. These
 holds retry automatically. Stop detached work cleanly and resolve T3 runs or pending requests
-through T3; a provider process exiting does not by itself prove orchestration is idle. Stop
-must finish before permanent workspace deletion is allowed.
+through T3; a provider process exiting does not by itself prove orchestration is idle. A T3
+hold names its category (active or queued run, pending request, or pending background work)
+without thread or task identifiers. Cancel stale queued runs normally; if a completed thread
+still lists background work that is no longer running, use T3 **Force Stop** on that thread.
+Stop must finish before permanent workspace deletion is allowed.
 
 ### JSON control protocol
 

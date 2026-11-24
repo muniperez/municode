@@ -275,8 +275,18 @@ public sealed partial class DevelopmentWorkspaceProcessor
 
     private sealed record DrainBlocker(string Code, string Message);
 
-    private static readonly DrainBlocker T3NotIdle = new("workspace_drain_t3_activity",
-        "T3 has active work or pending requests, or its idle state could not be verified. Resolve outstanding work or requests before stopping.");
+    private static DrainBlocker? T3Hold(JsonElement snapshot) => T3WorkspaceEvidence.Blocker(snapshot) switch
+    {
+        null => null,
+        T3IdleBlocker.ActiveRun => new("workspace_drain_t3_activity",
+            "A T3 thread has an active or queued run. Let it finish or cancel it in T3 so draining can continue."),
+        T3IdleBlocker.PendingRequest => new("workspace_drain_t3_activity",
+            "A T3 thread is waiting on a pending request. Answer or cancel it in T3 so draining can continue."),
+        T3IdleBlocker.PendingBackgroundTasks => new("workspace_drain_t3_activity",
+            "A T3 thread still lists pending background work. Let it finish, or use Force Stop on that thread in T3 if the work is no longer running."),
+        _ => new("workspace_drain_t3_activity",
+            "T3 orchestration state could not be verified as idle. Check T3 for outstanding work before stopping."),
+    };
 
     private async Task<DrainBlocker?> GetRuntimeIdleBlockerAsync(DevelopmentWorkspaceVm vm, string operationId, CancellationToken ct)
     {
@@ -300,7 +310,7 @@ public sealed partial class DevelopmentWorkspaceProcessor
         }
         var port = await tunnels.EnsureAsync(Target(vm), ct);
         using var client = T3Client(port, await SecretAsync(vm.RuntimeCredentialRef!, ct));
-        return T3WorkspaceEvidence.IsIdle(await GetJsonAsync(client, "/api/orchestration/shell", ct)) ? null : T3NotIdle;
+        return T3Hold(await GetJsonAsync(client, "/api/orchestration/shell", ct));
     }
 
     public async Task MonitorReadyAsync(CancellationToken ct)
