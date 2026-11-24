@@ -49,3 +49,17 @@ Ephemeral Git-backed workspaces are safe only for the selected repository,
 base ref and recovered commit. Ignored or local-only files must not be assumed
 to survive. The dashboard or CLI must surface a failed or unknown operation
 instead of treating it as complete.
+
+## Removing a checkout
+
+For a checkout with scratch-mounted build outputs, use the dashboard's confirmed
+**Delete folder** operation on the checkout under `/workspace/repos`. Finish work
+and close processes using it first, fetch disk usage, verify and type the exact
+folder path, and acknowledge permanent deletion. Wait for **Folder deleted**
+before cloning to the same path again. A failed, cancelled, partial or unknown
+result requires another scan to inspect what remains, not an assumption of success.
+
+Ordinary `rm -rf` can exit nonzero with `EBUSY` while scratch outputs are mounted;
+later watcher cleanup cannot change that exit status. Confirmed checkout deletion
+requires a qualified image containing this support and refuses unsafe mount,
+identity or active-use conditions rather than deleting across them.
