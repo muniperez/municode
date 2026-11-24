@@ -219,6 +219,45 @@ class CheckpointTests(unittest.TestCase):
         with self.assertRaisesRegex(rc.Failed, "Invalid checkpoint binding"):
             rc.verify(self.store, dict(BINDING, generation="3"))
 
+    def test_backup_takes_only_the_current_checkpoint_and_adopt_binds_it_to_a_separate_volume(self):
+        (self.source / "file.txt").write_text("older\n")
+        self.save()
+        (self.source / "file.txt").write_text("newer\n")
+        current = self.save()
+        plan = rc.backup_files(self.store)
+        self.assertEqual((current["checkpointId"], current["manifestSha256"]),
+                         (plan["checkpointId"], plan["manifestSha256"]))
+        manifest = json.loads(Path(self.store, "manifests", current["checkpointId"] + ".json").read_bytes())
+        sha = manifest["entries"]["file.txt"]["sha256"]
+        self.assertEqual(["current.json", "manifests/" + current["checkpointId"] + ".json",
+                          "objects/%s/%s" % (sha[:2], sha)], plan["files"])
+
+        source = {key: BINDING[key] for key in rc.VOLUME_FIELDS}
+        target = dict(BINDING, providerVolumeId="vol-2", filesystemUuid="uuid-2", vmId="vm-2", generation=4,
+                      writerGeneration=4)
+        expected = dict(checkpointId=current["checkpointId"], manifestSha256=current["manifestSha256"])
+        for volume, binding, reason in (
+                (source, BINDING, "separate volume"),
+                (source, dict(target, workspaceId="ws-2"), "separate volume"),
+                (dict(source, providerVolumeId="vol-3"), target, "another workspace volume")):
+            with self.subTest(reason=reason), self.assertRaisesRegex(rc.Failed, reason):
+                rc.adopt(self.store, volume, binding, "restore-1", expected=expected)
+        with self.assertRaisesRegex(rc.Failed, "differs from the one the backup recorded"):
+            rc.adopt(self.store, source, target, "restore-1", expected=dict(expected, manifestSha256="0" * 64))
+
+        adopted = rc.adopt(self.store, source, target, "restore-1", expected=expected)
+        self.assertEqual(dict(source, **expected), adopted["adoptedFrom"])
+        self.assertEqual(adopted["checkpointId"],
+                         rc.verify(self.store, target, operation_id="restore-1", deep=True)["checkpointId"])
+        self.assertEqual([adopted["checkpointId"] + ".json"], os.listdir(Path(self.store, "manifests")))
+        # The source volume's trees and bindings no longer match the store.
+        with self.assertRaisesRegex(rc.Failed, "another workspace volume"):
+            self.save()
+        with self.assertRaisesRegex(rc.Failed, "another workspace volume"):
+            self.restore("copy", BINDING)
+        self.restore("copy", target)
+        self.assertEqual("newer\n", (self.base / "copy" / "file.txt").read_text())
+
     def test_restore_is_retryable_and_refuses_existing_target_or_corrupt_data(self):
         (self.source / "file.txt").write_text("data\n")
         result = self.save()

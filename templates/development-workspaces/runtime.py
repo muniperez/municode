@@ -1067,6 +1067,39 @@ class Linux:
                 checkpoints.status(store).get("checkpointId") == checkpoint["checkpointId"],
                 "Final checkout checkpoint is no longer the current checkpoint")
 
+    def backup_scope(self):
+        import repo_checkpoint as checkpoints
+        try:
+            return LocalBackupScope(checkpoints.backup_files(str(self.workspace / CHECKPOINT_STORE)))
+        except (checkpoints.Failed, checkpoints.Deferred) as error:
+            raise Blocked("Checkout checkpoint cannot be backed up: " + error.reason) from error
+
+    def adopt_checkpoint(self, source, operation):
+        """Bind the checkpoint restored from an off-host backup to this volume and mark its layout.
+
+        The archive was extracted as root, but directory modes are not restored, so the store is
+        made root-only again first. Only directories and regular files may be in it."""
+        import repo_checkpoint as checkpoints
+        store = self.workspace / CHECKPOINT_STORE
+        require(not os.path.lexists(self.workspace / LAYOUT_MARKER), "Restore target already has a storage layout")
+        require(store.is_dir() and not store.is_symlink(), "Backup lacks the checkout checkpoint store")
+        for path in (store, *store.rglob("*")):
+            info = path.lstat()
+            require(stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode) and info.st_nlink == 1,
+                    "Restored checkpoint store is unsafe")
+            path.chmod(0o700 if stat.S_ISDIR(info.st_mode) else 0o600)
+        volume = dict(workspaceId=source["volumeOwner"].get("workspaceId"),
+                      providerVolumeId=source["sourceVolumeId"], filesystemUuid=source["sourceFilesystemUuid"])
+        try:
+            result = checkpoints.adopt(str(store), volume, self.repos_binding(), operation,
+                                       expected=source["checkpoint"])
+        except (checkpoints.Failed, checkpoints.Deferred) as error:
+            raise Blocked("Restored checkout checkpoint is unusable: " + error.reason) from error
+        marker = self.layout_marker(create=True)
+        atomic_json(self.workspace / LAYOUT_MARKER, dict(marker, initialCheckpoint=result["checkpointId"]))
+        return dict(checkpointId=result["checkpointId"], manifestSha256=result["manifestSha256"],
+                    adoptedFrom=result["adoptedFrom"], files=result["files"])
+
     def mount(self, claim):
         device = self.probe_volume(claim)
         self.workspace.mkdir(mode=0o755, parents=True, exist_ok=True)
@@ -1144,8 +1177,13 @@ class Linux:
         directory.chmod(0o555)
 
     def restore_ownership(self):
+        # The checkpoint store and layout marker stay root-only; layout() owns the repos mount point.
+        skipped = {self.workspace / ".workspaces-volume.json", self.workspace / "lost+found"}
+        if self.local_layout():
+            skipped |= {self.workspace / LAYOUT_MARKER, self.workspace / "repos"}
         for path in self.workspace.rglob("*"):
-            if path in (self.workspace / ".workspaces-volume.json", self.workspace / "lost+found"):
+            if path in skipped or self.local_layout() and \
+                    path.relative_to(self.workspace).parts[0] == CHECKPOINT_STORE:
                 continue
             os.chown(path, self.config["uid"], self.config["gid"], follow_symlinks=False)
 
@@ -2134,7 +2172,6 @@ class Runtime:
         if action == "restore":
             require(self.c["kind"] == "primary" and self.s["phase"] == "New",
                     "Restore only into a new, separate primary target")
-            require(not self.local, "Off-host restore of local checkouts is not supported yet")
             return self.restore(request)
         raise Blocked("Unknown action")
 
@@ -2202,14 +2239,27 @@ class Runtime:
                 "Independent off-host destination required")
         transport = None if streaming else SshArchive(policy, self.root, self.identity())
         source = Path(self.c["workspace"])
-        validate_backup_tree(source)
-        hashes = representative_hashes(source)
+        scope, layout = None, {}
+        if self.local:
+            # The live checkout tree is on the VM disk; the final checkpoint stands for it.
+            checkpoint = self.s.get("reposCheckpoint")
+            require(checkpoint, "Backup requires the final checkout checkpoint")
+            self.adapter.verify_checkpoint(checkpoint, checkpoint["operationId"])
+            scope = self.adapter.backup_scope()
+            layout = dict(storageLayout=2, checkpoint=dict(checkpointId=checkpoint["checkpointId"],
+                                                           manifestSha256=checkpoint["manifestSha256"]))
+            require(dict(checkpointId=scope.checkpoint_id, manifestSha256=scope.manifest_sha) ==
+                    layout["checkpoint"], "Backup checkpoint is not the final checkout checkpoint")
+        validate_backup_tree(source, scope)
+        hashes = representative_hashes(source, scope)
         require(hashes, "No representative files available for backup verification")
         object_id = str(uuid.uuid4()) + ".tar.age"
         encrypted = self.root / object_id
         try:
             # Only encrypted bytes leave the VM. Never put private encryption keys in the VM image.
-            encrypt_archive(source, encrypted, policy["recipient"])
+            encrypt_archive(source, encrypted, policy["recipient"], scope=scope)
+            if self.local:
+                self.adapter.verify_checkpoint(checkpoint, checkpoint["operationId"])
             sha = file_hash(encrypted)
             if transport:
                 transport.upload(encrypted, object_id, sha)
@@ -2220,7 +2270,7 @@ class Runtime:
                                   destinationIdentity=policy["destinationIdentity"],
                                   sourceVolumeId=self.c["volume"]["providerVolumeId"],
                                   sourceFilesystemUuid=self.c["volume"]["filesystemUuid"],
-                                  volumeOwner=self.c["volume"]["owner"],
+                                  volumeOwner=self.c["volume"]["owner"], **layout,
                                   keyRecoveryId=policy["keyRecoveryId"],
                                   retentionUntil=now + policy["retentionDays"] * 86400,
                                   freshness="AwaitingOffHostAcknowledgement" if streaming else "VerifiedUpload",
@@ -2255,6 +2305,11 @@ class Runtime:
                 "Backup receipt corrupt")
         require(source.get("freshness") in ("VerifiedOffHost", "VerifiedUpload") and
                 source.get("representativeHashes"), "A verified off-host backup with hashes is required")
+        # Changing the storage layout is a migration, never a side effect of a restore.
+        require((source.get("storageLayout") == 2) == self.local,
+                "Backup storage layout differs from the restore target")
+        require(not self.local or isinstance(source.get("checkpoint"), dict),
+                "Backup lacks the final checkout checkpoint")
         require(request.get("independentRecoveryKeyConfirmed") is True,
                 "Restore decryption must occur off VM with the independent recovery key")
         self.adapter.mount(target)
@@ -2287,10 +2342,12 @@ class Runtime:
                     require(member.name.startswith("data/") or member.name == "data",
                             "Unexpected archive member")
                     member.name = member.name.removeprefix("data").lstrip("/")
-                    if not member.name or member.name == ".workspaces-volume.json":
-                        continue
+                    if not member.name or member.name in (".workspaces-volume.json", LAYOUT_MARKER):
+                        continue  # Both name the source volume; the target has or gets its own.
                     require(Path(member.name).parts and Path(member.name).parts[0] != "lost+found",
                             "Archive contains filesystem metadata")
+                    require(not self.local or Path(member.name).parts[0] != CHECKPOINT_STORE or
+                            member.isfile() or member.isdir(), "Archive checkpoint store contains links")
                     if member.issym():
                         # Validate the destination without following the archived link target.
                         checked = tarfile.data_filter(member.replace(linkname="."), workspace)
@@ -2319,6 +2376,10 @@ class Runtime:
                     "Archive symlink conflicts with restored data or another link")
             for path in links:
                 path.parent.mkdir(parents=True, exist_ok=True)
+            adopted = {}
+            if self.local:
+                # The bootstrap that follows restores the checkout tree from this checkpoint.
+                adopted = dict(storageLayout=2, checkpoint=self.adapter.adopt_checkpoint(source, operation))
             self.adapter.restore_ownership()
             self.adapter.layout()
             require(all(not path.exists() and not path.is_symlink() for path in links),
@@ -2332,7 +2393,7 @@ class Runtime:
             return self.receipt("PrimaryRestored", operation,
                                 sourceBackupReceiptId=source["receiptId"],
                                 targetVolumeId=target["providerVolumeId"],
-                                representativeHashesVerified=True)
+                                representativeHashesVerified=True, **adopted)
         except Exception:
             self.s["phase"] = "RestoreFailed"
             self.save()
@@ -2361,9 +2422,36 @@ def file_hash(path):
 BACKUP_EXCLUDED = (".workspaces-volume.json", "lost+found")
 
 
-def backup_paths(source):
+class LocalBackupScope:
+    """What a storage layout 2 backup takes from the checkout side of the volume.
+
+    The checkout mount point is kept as an empty directory and never entered, even when nothing is
+    mounted on it. The checkpoint store contributes only the committed current checkpoint: its
+    pointer, manifest and objects. Unfinished saves, the lock, attempt status and older checkpoints
+    stay behind. The layout marker names the source volume; a restore writes its own."""
+    def __init__(self, checkpoint):
+        self.checkpoint_id = checkpoint["checkpointId"]
+        self.manifest_sha = checkpoint["manifestSha256"]
+        store = Path(CHECKPOINT_STORE)
+        self.files = {store / name for name in checkpoint["files"]}
+        self.directories = {store, *(store / name for name in checkpoint["directories"])} | \
+            {parent for path in self.files for parent in path.parents if parent != Path(".")}
+
+    def include(self, relative, info):
+        if relative == Path(LAYOUT_MARKER):
+            return False
+        if relative.parts[0] != CHECKPOINT_STORE:
+            return True
+        return relative in (self.directories if stat.S_ISDIR(info.st_mode) else self.files)
+
+    def enter(self, relative):
+        return relative != Path("repos")
+
+
+def backup_paths(source, scope=None):
     """Sorted one-file-system walk (tarfile order). Nested mount points are kept as empty
-    directories, never entered: scratch build outputs and other mounts stay out of backups."""
+    directories, never entered: scratch build outputs and other mounts stay out of backups.
+    scope (a LocalBackupScope) further limits what a storage layout 2 backup contains."""
     root = Path(source)
     info = root.lstat()
     device = info.st_dev
@@ -2375,29 +2463,32 @@ def backup_paths(source):
             pending.pop()
             continue
         info = path.lstat()
+        relative = path.relative_to(root)
+        if scope is not None and not scope.include(relative, info):
+            continue
         yield path, info
-        if stat.S_ISDIR(info.st_mode) and info.st_dev == device:
+        if stat.S_ISDIR(info.st_mode) and info.st_dev == device and (scope is None or scope.enter(relative)):
             pending.append(iter([path / name for name in sorted(os.listdir(path))]))
 
 
-def write_backup_archive(source, stream):
+def write_backup_archive(source, stream, scope=None):
     lost = Path(source) / "lost+found"
     require(not lost.is_symlink() and (not lost.exists() or lost.is_dir() and not any(lost.iterdir())),
             "Backup filesystem metadata is unsafe or contains recovered data")
     with tarfile.open(fileobj=stream, mode="w|") as archive:
-        for path, _ in backup_paths(source):
+        for path, _ in backup_paths(source, scope):
             relative = path.relative_to(source)
             archive.add(path, arcname="data" if relative == Path(".") else "data/" + relative.as_posix(),
                         recursive=False)
 
 
-def encrypt_archive(source, output, recipient):
+def encrypt_archive(source, output, recipient, scope=None):
     process = None
     try:
         process = subprocess.Popen(["age", "--encrypt", "--recipient", recipient,
                                     "--output", str(output)], stdin=subprocess.PIPE,
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        write_backup_archive(source, process.stdin)
+        write_backup_archive(source, process.stdin, scope)
         process.stdin.close()
         require(process.wait(timeout=600) == 0, "Age encryption failed")
     except (OSError, subprocess.SubprocessError) as error:
@@ -2408,15 +2499,15 @@ def encrypt_archive(source, output, recipient):
             process.wait()
 
 
-def validate_backup_tree(source):
-    for _, info in backup_paths(source):
+def validate_backup_tree(source, scope=None):
+    for _, info in backup_paths(source, scope):
         mode = info.st_mode
         require(stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode),
                 "Backup contains unsupported live socket/device/FIFO")
 
 
-def representative_hashes(root):
-    files = sorted(p for p, info in backup_paths(root) if stat.S_ISREG(info.st_mode)
+def representative_hashes(root, scope=None):
+    files = sorted(p for p, info in backup_paths(root, scope) if stat.S_ISREG(info.st_mode)
                    and under(p, root) and p.name != ".workspaces-volume.json")
     first_per_category = {}
     for path in files:
