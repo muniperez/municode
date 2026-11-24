@@ -50,6 +50,7 @@ class CheckpointTests(unittest.TestCase):
         self.base = Path(os.path.realpath(self.temporary.name))
         self.source = self.base / "repos"
         self.store = str(self.base / "store")
+        self.lineage = str(self.base / "repos.lineage.json")
         self.source.mkdir()
         for name, value in (("RACY_NS", 50_000_000), ("TICK_MARGIN_NS", 20_000_000)):
             patcher = patch.object(rc, name, value)
@@ -60,7 +61,12 @@ class CheckpointTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def save(self, **extra):
-        return rc.save(str(self.source), self.store, dict(BINDING), logical_root=str(self.source), **extra)
+        return rc.save(str(self.source), self.store, dict(BINDING), self.lineage, logical_root=str(self.source),
+                       **extra)
+
+    def restore(self, name="repos", binding=BINDING, **extra):
+        lineage = self.lineage if name == "repos" else str(self.base / (name + ".lineage.json"))
+        return rc.restore(self.store, str(self.base), name, dict(binding), lineage, **extra)
 
     def make_app(self):
         app = self.source / "app"
@@ -109,7 +115,7 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual([], result["externalReferences"])
 
         self.source.rename(self.base / "repos.old")
-        restored = rc.restore(self.store, str(self.base), "repos", dict(BINDING, vmId="vm-2", generation=4))
+        restored = self.restore("repos", dict(BINDING, vmId="vm-2", generation=4))
         self.assertEqual(result["checkpointId"], restored["checkpointId"])
         self.assertEqual(expected, snapshot_tree(self.source))
         after = {command: git(directory, *command.split())
@@ -128,7 +134,7 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual("ready", rc.status(self.store)["state"])
         rc.verify(self.store, checkpoint_id=first["checkpointId"], deep=True)
         self.source.rename(self.base / "old")
-        rc.restore(self.store, str(self.base), "repos", BINDING)
+        self.restore("repos", BINDING)
         self.assertFalse((self.source / "notes").exists())
         self.assertTrue((self.source / "app" / "untracked.txt").exists())
 
@@ -185,9 +191,9 @@ class CheckpointTests(unittest.TestCase):
         with self.assertRaisesRegex(rc.Failed, "not taken by this operation"):
             rc.verify(self.store, BINDING, operation_id="stop-2")
         with self.assertRaisesRegex(rc.Failed, "another workspace volume"):
-            rc.restore(self.store, str(self.base), "other", dict(BINDING, providerVolumeId="vol-2"))
+            self.restore("other", dict(BINDING, providerVolumeId="vol-2"))
         with self.assertRaisesRegex(rc.Failed, "another workspace volume"):
-            rc.save(str(self.source), self.store, dict(BINDING, workspaceId="ws-2"))
+            rc.save(str(self.source), self.store, dict(BINDING, workspaceId="ws-2"), self.lineage)
         with self.assertRaisesRegex(rc.Failed, "Invalid checkpoint binding"):
             rc.verify(self.store, dict(BINDING, generation="3"))
 
@@ -196,11 +202,11 @@ class CheckpointTests(unittest.TestCase):
         result = self.save()
         staging = self.base / ".restore-staging"
         (staging / "junk").mkdir(parents=True)
-        rc.restore(self.store, str(self.base), "copy", BINDING)
+        self.restore("copy", BINDING)
         self.assertEqual("data\n", (self.base / "copy" / "file.txt").read_text())
         self.assertFalse(staging.exists())
         with self.assertRaisesRegex(rc.Failed, "already exists"):
-            rc.restore(self.store, str(self.base), "copy", BINDING)
+            self.restore("copy", BINDING)
 
         manifest = json.loads(Path(self.store, "manifests", result["checkpointId"] + ".json").read_bytes())
         sha = manifest["entries"]["file.txt"]["sha256"]
@@ -208,7 +214,7 @@ class CheckpointTests(unittest.TestCase):
         corrupt.chmod(0o600)
         corrupt.write_text("DATA\n")
         with self.assertRaisesRegex(rc.Failed, "missing or corrupt"):
-            rc.restore(self.store, str(self.base), "second", BINDING)
+            self.restore("second", BINDING)
         self.assertFalse((self.base / "second").exists())
         with self.assertRaisesRegex(rc.Failed, "missing or corrupt"):
             rc.verify(self.store, BINDING, deep=True)
@@ -221,7 +227,7 @@ class CheckpointTests(unittest.TestCase):
         pointer.write_text("{")
         self.assertEqual("corrupt", rc.status(self.store)["state"])
         with self.assertRaisesRegex(rc.Failed, "pointer is corrupt"):
-            rc.restore(self.store, str(self.base), "copy", BINDING)
+            self.restore("copy", BINDING)
         pointer.unlink()
         self.assertEqual(("corrupt", "Checkpoint pointer is missing"),
                          tuple(rc.status(self.store)[key] for key in ("state", "reason")))
@@ -250,9 +256,75 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual([("app/escape", "symlink"), ("app/outside", "symlink"), ("linked/.git", "gitdir")],
                          [(item["path"], item["kind"]) for item in result["externalReferences"]])
         self.source.rename(self.base / "old")
-        rc.restore(self.store, str(self.base), "repos", BINDING)
+        self.restore("repos", BINDING)
         self.assertTrue((self.source / "app" / "node_modules" / "kept.js").exists())
         self.assertFalse((self.source / "app" / "pipe").exists())
+
+    def test_empty_replacement_tree_never_overwrites_the_checkpoint_to_restore(self):
+        (self.source / "work.txt").write_text("uncommitted\n")
+        first = self.save()["checkpointId"]
+        self.source.rename(self.base / "lost-vm-disk")
+        self.source.mkdir()
+        with self.assertRaisesRegex(rc.Failed, "replaced after it was restored"):
+            self.save()
+        os.unlink(self.lineage)
+        with self.assertRaisesRegex(rc.Failed, "not restored from the current checkpoint"):
+            self.save(fenced=True)
+        self.assertEqual(first, rc.verify(self.store, BINDING, deep=True)["checkpointId"])
+        Path(self.store, "current.json").write_text("{")
+        with self.assertRaisesRegex(rc.Failed, "pointer is corrupt"):
+            self.save()
+        Path(self.store, "current.json").unlink()
+        with self.assertRaisesRegex(rc.Failed, "not restored from the current checkpoint"):
+            self.save()
+        self.assertFalse(os.path.exists(self.lineage))
+
+    def test_restored_tree_saves_but_a_tree_from_an_older_checkpoint_does_not(self):
+        (self.source / "work.txt").write_text("one\n")
+        first = self.save()["checkpointId"]
+        (self.source / "work.txt").write_text("two\n")
+        self.save()
+        self.restore("old", checkpoint_id=first)
+        with self.assertRaisesRegex(rc.Failed, "not restored from the current checkpoint"):
+            rc.save(str(self.base / "old"), self.store, dict(BINDING), str(self.base / "old.lineage.json"))
+        self.source.rename(self.base / "lost-vm-disk")
+        self.restore("repos")
+        (self.source / "work.txt").write_text("three\n")
+        self.save()
+        self.save()
+        self.assertEqual("three\n", (self.source / "work.txt").read_text())
+
+    def test_prepare_tree_initializes_keeps_or_restores_and_detects_a_missing_checkpoint(self):
+        def prepare(allow_empty=False):
+            return rc.prepare_tree(self.store, str(self.base), "live", dict(BINDING), self.lineage, allow_empty,
+                                   logical_root=str(self.base / "live"))
+
+        with self.assertRaisesRegex(rc.Failed, "Checkpoint is missing"):
+            prepare()
+        self.assertFalse((self.base / "live").exists())
+        initialized = prepare(allow_empty=True)
+        self.assertEqual(("initialized", "ready"), (initialized["action"], rc.status(self.store)["state"]))
+        live = self.base / "live"
+        self.source = live
+        (live / "saved.txt").write_text("saved\n")
+        saved = self.save()["checkpointId"]
+        (live / "newer.txt").write_text("not yet checkpointed\n")
+        self.assertEqual(dict(action="kept", checkpointId=saved), prepare())
+        self.assertTrue((live / "newer.txt").exists())
+
+        live.rename(self.base / "lost-vm-disk")
+        restored = prepare()
+        self.assertEqual(("restored", saved), (restored["action"], restored["checkpointId"]))
+        self.assertEqual(["saved.txt"], os.listdir(live))
+        self.save()
+
+        shutil.rmtree(live)
+        live.mkdir()
+        with self.assertRaisesRegex(rc.Failed, "replaced after it was restored"):
+            prepare()
+        shutil.rmtree(self.store)
+        with self.assertRaisesRegex(rc.Failed, "Checkpoint is missing"):
+            prepare()
 
     def test_rebuildable_names_match_the_scratch_output_allowlist(self):
         self.assertEqual(sm.ALLOWLIST, rc.REBUILDABLE)
@@ -263,7 +335,8 @@ class CheckpointTests(unittest.TestCase):
         (self.source / "file.txt").write_text("data\n")
         command = [sys.executable, "-B", str(HERE / "repo_checkpoint.py")]
         saved = subprocess.run(command + ["save", "--store", self.store, "--binding", str(binding),
-                                          "--source", str(self.source), "--logical-root", str(self.source)],
+                                          "--source", str(self.source), "--logical-root", str(self.source),
+                                          "--lineage", self.lineage],
                                capture_output=True, text=True)
         self.assertEqual(0, saved.returncode, saved.stdout)
         self.assertTrue(json.loads(saved.stdout)["ok"])
@@ -271,7 +344,8 @@ class CheckpointTests(unittest.TestCase):
         holder.lock(0)
         try:
             deferred = subprocess.run(command + ["save", "--store", self.store, "--binding", str(binding),
-                                                 "--source", str(self.source)], capture_output=True, text=True)
+                                                 "--source", str(self.source), "--lineage", self.lineage],
+                                      capture_output=True, text=True)
         finally:
             holder.unlock()
         self.assertEqual((rc.EX_DEFERRED, "Deferred"), (deferred.returncode, json.loads(deferred.stdout)["state"]))

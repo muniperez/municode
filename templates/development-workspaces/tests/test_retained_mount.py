@@ -44,6 +44,19 @@ class MountRecoveryTests(unittest.TestCase):
         self.assertEqual(1, self.adapter.mount.call_count)
         self.assertTrue(self.claim["initializeOwner"])
 
+    def test_local_checkouts_reattach_only_kept_trees_after_reboot(self):
+        config = dict(self.config, storageLayout=2)
+        self.state["configDigest"] = rt.digest(config)
+        self.device.exists.return_value = True
+        self.adapter.workspace = Path("/workspace")
+        rt.mount_for_services(config, self.state_dir)
+        self.adapter.attach_repos.assert_called_once_with(restore=False)
+        # A tree that must be restored waits for bootstrap; the volume is not left half-attached.
+        self.adapter.attach_repos.side_effect = rt.Blocked("Checkout tree must be restored")
+        with patch.object(rt, "run") as command, self.assertRaisesRegex(rt.Blocked, "must be restored"):
+            rt.mount_for_services(config, self.state_dir)
+        command.assert_called_once_with(["umount", "/workspace"], timeout=30)
+
     def test_missing_device_times_out_without_mount_or_fallback(self):
         self.device.exists.return_value = False
         with patch.object(rt.time, "monotonic", side_effect=[100, 145]), \

@@ -189,8 +189,9 @@ class Walk:
                 self.links_approximate = True
         return info.st_blocks * 512
 
-    def measure(self, fd, info):
+    def measure(self, fd, info, device=None):
         """Returns (bytes, complete, categories) for a directory already opened without following links."""
+        device = self.device if device is None else device
         total = self.allocated(info)
         complete = True
         categories = set()
@@ -217,7 +218,7 @@ class Walk:
                                 continue
                             if (child.st_dev, child.st_ino) in self.skip:
                                 continue
-                            if child.st_dev != self.device:
+                            if child.st_dev != device:
                                 categories.add("separate_mount")
                                 complete = False
                                 continue
@@ -269,7 +270,7 @@ def open_chain(root_fd, device, components):
                     raise Refused("symbolic_link")
                 raise
             fds.append(fd)
-            if os.fstat(fd).st_dev != device:
+            if device is not None and os.fstat(fd).st_dev != device:
                 raise Refused("separate_mount")
         return fds
     except OSError as error:
@@ -290,7 +291,24 @@ def open_chain(root_fd, device, components):
         raise
 
 
-def scan(workspace, components, expect=None, budget=None, scratch=None):
+def open_target(root_fd, root, components, local_repos):
+    """Returns (fds, device). With local checkouts, /workspace/repos is the one VM-disk mount that
+    may be entered; every other mount crossing below it is still refused."""
+    if not (local_repos and components and components[0] == "repos"):
+        return open_chain(root_fd, root.st_dev, components), root.st_dev
+    fds = open_chain(root_fd, None, components[:1])
+    device = os.fstat(fds[1]).st_dev
+    if device == root.st_dev:
+        os.close(fds[1])
+        raise Refused("io_error")  # The checkout mount is missing; never measure the volume instead.
+    try:
+        return [root_fd] + open_chain(fds[1], device, components[1:]), device
+    except Refused:
+        os.close(fds[1])
+        raise
+
+
+def scan(workspace, components, expect=None, budget=None, scratch=None, local_repos=False):
     components = validate_path(components)
     budget = budget or Budget(SCAN_SECONDS)
     workspace = os.path.normpath(workspace)
@@ -307,11 +325,11 @@ def scan(workspace, components, expect=None, budget=None, scratch=None):
     root_fd, root = open_root(workspace)
     fds = [root_fd]
     try:
-        fds = open_chain(root_fd, root.st_dev, components)
+        fds, device = open_target(root_fd, root, components, local_repos)
         target = os.fstat(fds[-1])
         if expect and (target.st_dev, target.st_ino) != (expect.get("dev"), expect.get("ino")):
             raise Refused("target_changed")
-        walk = Walk(root.st_dev, budget, frozenset(skip))
+        walk = Walk(device, budget, frozenset(skip))
         files_here = walk.allocated(target)
         rows = []
         complete = True
@@ -345,7 +363,16 @@ def scan(workspace, components, expect=None, budget=None, scratch=None):
                 row.update(state="excluded", selectable=False, storage="scratch")
                 row["errors"].append("separate_mount")
                 continue
-            if info.st_dev != root.st_dev:
+            row_device = device
+            if local_repos and not components and entry.name == "repos":
+                if info.st_dev == root.st_dev:
+                    row.update(state="unreadable", selectable=False)
+                    row["errors"].append("io_error")
+                    complete = False
+                    continue
+                row_device = info.st_dev
+                row["storage"] = "local"
+            if info.st_dev != row_device:
                 row.update(state="excluded", selectable=False)
                 row["errors"].append("separate_mount")
                 continue
@@ -367,7 +394,7 @@ def scan(workspace, components, expect=None, budget=None, scratch=None):
                     row["errors"].append("changed_during_scan")
                     complete = False
                     continue
-                size, finished, categories = walk.measure(fd, check)
+                size, finished, categories = walk.measure(fd, check, row_device)
             finally:
                 os.close(fd)
             row["bytes"] = size
@@ -427,7 +454,7 @@ def pathname_chain(workspace, components):
             os.close(item)
 
 
-def delete(workspace, components, expect, budget=None, chain=None):
+def delete(workspace, components, expect, budget=None, chain=None, local_repos=False):
     components = validate_path(components)
     if not deletable_path(components):
         raise Refused("protected_path")
@@ -456,7 +483,7 @@ def delete(workspace, components, expect, budget=None, chain=None):
     removed = dict(entries=0, bytes=0)
     errors = {}
     try:
-        fds = open_chain(root_fd, root.st_dev, components[:-1])
+        fds, device = open_target(root_fd, root, components[:-1], local_repos)
         # systemd makes each allowed user-data root a writable bind in the job namespace.
         if any(mount_id(parent) != mount_id(child) for parent, child in zip(fds[1:], fds[2:])):
             raise Refused("separate_mount")
@@ -465,7 +492,7 @@ def delete(workspace, components, expect, budget=None, chain=None):
             info = os.stat(name, dir_fd=parent, follow_symlinks=False)
         except FileNotFoundError:
             raise Refused("not_found")
-        if not stat.S_ISDIR(info.st_mode) or info.st_dev != root.st_dev or \
+        if not stat.S_ISDIR(info.st_mode) or info.st_dev != device or \
                 (info.st_dev, info.st_ino) != (expect["dev"], expect["ino"]):
             raise Refused("target_changed")
         if info.st_uid != CODING_UID:
@@ -492,7 +519,7 @@ def delete(workspace, components, expect, budget=None, chain=None):
                 return True
             if mount_id(parent) != mount_id(target):
                 raise Refused("separate_mount")
-            _remove_contents(target, root.st_dev, budget, removed, errors, 0, guard)
+            _remove_contents(target, device, budget, removed, errors, 0, guard)
         finally:
             os.close(target)
         gone = False
@@ -602,10 +629,14 @@ def run(request):
     workspace = request.get("workspace")
     if not isinstance(workspace, str) or not workspace.startswith("/"):
         raise Refused("invalid_workspace")
+    local_repos = request.get("localRepos", False)
+    if not isinstance(local_repos, bool):
+        raise Refused("invalid_request")
     if mode == "scan":
-        return scan(workspace, request.get("path"), request.get("expect"))
+        return scan(workspace, request.get("path"), request.get("expect"), local_repos=local_repos)
     if mode == "delete":
-        return delete(workspace, request.get("path"), request.get("expect"), chain=request.get("chain"))
+        return delete(workspace, request.get("path"), request.get("expect"), chain=request.get("chain"),
+                      local_repos=local_repos)
     raise Refused("unknown_mode")
 
 

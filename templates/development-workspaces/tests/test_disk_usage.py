@@ -28,6 +28,15 @@ def write(path, size):
         stream.write(os.urandom(size))
 
 
+OPEN_ROOT = du.open_root
+
+
+def volume_root(workspace):
+    """Fixtures are one filesystem; this makes the workspace root look like a separate volume."""
+    fd, info = OPEN_ROOT(workspace)
+    return fd, SimpleNamespace(st_dev=info.st_dev + 1, st_ino=info.st_ino)
+
+
 def identity(path):
     info = os.stat(path, follow_symlinks=False)
     return dict(dev=info.st_dev, ino=info.st_ino)
@@ -341,6 +350,34 @@ class DiskUsageTests(unittest.TestCase):
             with self.assertRaises(du.Refused) as error:
                 du.delete(str(self.workspace), ["repos", "small"], identity(self.workspace / "repos/small"))
         self.assertEqual("not_owned_by_coding_user", error.exception.code)
+
+    def test_local_checkout_mount_is_measured_and_deletable_on_its_own_device(self):
+        with patch.object(du, "open_root", side_effect=volume_root):
+            top = {row["name"]: row for row in self.scan(local_repos=True)["entries"]}
+            self.assertEqual(("complete", "local", []),
+                             (top["repos"]["state"], top["repos"].get("storage"), top["repos"]["errors"]))
+            self.assertGreater(top["repos"]["bytes"], 256 * 1024)
+            rows = {row["name"]: row for row in self.scan("repos", local_repos=True)["entries"]}
+            self.assertTrue(rows["big"]["deletable"])
+            with self.assertRaises(du.Refused) as caught:
+                self.scan("repos")
+            self.assertEqual("separate_mount", caught.exception.code)
+            result = du.delete(str(self.workspace), ["repos", "small"], identity(self.workspace / "repos/small"),
+                               local_repos=True)
+        self.assertEqual("succeeded", result["outcome"])
+        self.assertFalse((self.workspace / "repos/small").exists())
+
+    def test_missing_local_checkout_mount_is_never_measured_as_volume_data(self):
+        top = {row["name"]: row for row in self.scan(local_repos=True)["entries"]}
+        self.assertEqual(("unreadable", None, ["io_error"]),
+                         (top["repos"]["state"], top["repos"]["bytes"], top["repos"]["errors"]))
+        for call in (lambda: self.scan("repos", local_repos=True),
+                     lambda: du.delete(str(self.workspace), ["repos", "big"], identity(self.workspace / "repos/big"),
+                                       local_repos=True)):
+            with self.assertRaises(du.Refused) as caught:
+                call()
+            self.assertEqual("io_error", caught.exception.code)
+        self.assertTrue((self.workspace / "repos/big").exists())
 
     def test_limits_report_partial_results_and_bounded_rows(self):
         result = self.scan("repos", budget=du.Budget(30, entries=3))
@@ -761,6 +798,31 @@ class RuntimeFilesystemJobTests(unittest.TestCase):
             linux.filesystem_launch("fixture-unit", payload, self.root / "denied")
         no_launch.assert_not_called()
         self.assertEqual(denied, json.loads((self.root / "denied").read_text()))
+
+    def test_local_checkout_jobs_skip_scratch_preparation(self):
+        config = dict(self.config, kind="primary", storageLayout=2, ignoredDataAcknowledged=False,
+                      volume=dict(providerVolumeId="vol-1"))
+        self.adapter.verify_workspace_mount = lambda: None
+        self.adapter.filesystem_prepare = lambda payload: self.fail("Layout 2 has no scratch preparation")
+        self.adapter.filesystem_finish = lambda record: self.fail("Layout 2 has no scratch release")
+        runtime = rt.Runtime(config, self.root / "local-state", self.adapter, git=object(), clock=lambda: 1000)
+        runtime.s["phase"] = "Ready"
+        target = identity(self.workspace / "repos/project")
+        with patch.object(du, "open_root", side_effect=volume_root):
+            deleted = runtime.handle(dict(vmId="vm-a", generation=3, operationId="op", action="fs-job-start",
+                                          jobId="job-local-1", mode="delete", path=["repos", "project"],
+                                          expect=target))
+        self.assertTrue(self.adapter.launches[-1]["localRepos"])
+        self.assertEqual("succeeded", deleted["result"]["outcome"])
+        linux = rt.Linux(config)
+        payload = dict(mode="delete", workspace=str(self.workspace), path=["repos", "x"], expect=target,
+                       jobId="job-local-2", vmId="vm-a", generation=3, localRepos=True)
+        with patch.object(linux, "filesystem_scratch", side_effect=AssertionError), \
+                patch.object(rt, "run") as launch:
+            self.assertIsNone(linux.filesystem_launch("unit", payload, self.root / "out"))
+            launch.assert_called_once()
+            with self.assertRaisesRegex(rt.Blocked, "storage layout"):
+                linux.filesystem_launch("unit", dict(payload, localRepos=False), self.root / "out")
 
     def test_runtime_retains_inhibition_on_cancel_partial_and_lost_jobs(self):
         self.adapter.hold = True
