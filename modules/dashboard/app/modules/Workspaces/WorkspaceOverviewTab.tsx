@@ -20,7 +20,7 @@ const dotClass = {
   warning: "bg-warning", destructive: "bg-destructive", success: "bg-success", neutral: "bg-muted-foreground/50",
 } as const;
 
-export function WorkspaceOverviewTab({ item, organizationId, refresh, refreshAfterMutation, canManage, actorId }: Props) {
+export function WorkspaceOverviewTab({ item, organizationId, refresh, refreshAfterMutation, canManage, canManageConnect, actorId }: Props) {
   const vms = item.vms ?? [];
   const primary = vms.find(vm => vm.id === item.primaryVmId) ?? vms.find(vm => vm.kind === "primary");
   const ephemeral = vms.filter(vm => vm.kind === "ephemeral" && vm.id !== primary?.id);
@@ -45,7 +45,8 @@ export function WorkspaceOverviewTab({ item, organizationId, refresh, refreshAft
     </section>
     <section aria-label="Selected VM" className="min-w-0">
       {selected ? <WorkspaceVmCard key={`${selected.id}:${selected.generation}:${actorId ?? ""}`} workspaceId={item.id}
-        organizationId={organizationId} vm={selected} currency={item.currency} refresh={refresh} canManage={canManage} />
+        organizationId={organizationId} vm={selected} currency={item.currency} refresh={refresh} canManage={canManage}
+        canManageConnect={selected.kind === "primary" && canManageConnect} />
         : <Card><CardContent className="space-y-2 p-6 text-sm">
           <p className="font-medium">No primary VM reported.</p>
           <p className="text-muted-foreground">Select Refresh status to load it. A temporary VM is never used instead. Storage: {item.volumeSizeGb} GB · {item.volumeStatus ?? "status unavailable"}.</p>

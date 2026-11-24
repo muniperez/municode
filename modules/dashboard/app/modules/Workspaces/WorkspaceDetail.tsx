@@ -67,7 +67,7 @@ function ScopedWorkspaceDetail({ item, organizationId, refresh, canManage: canMa
       </TabsContent>
       <TabsContent value="settings" className="pt-4">
         <WorkspaceSettingsTab item={item} organizationId={organizationId} refresh={refresh} refreshAfterMutation={refreshAfterMutation}
-          canManage={canManage} canManageRole={canManageRole} canManageConnect={canManageConnect} deletion={deletion} actorId={profile?.id} />
+          canManage={canManage} canManageRole={canManageRole} deletion={deletion} />
       </TabsContent>
     </Tabs>
   </div>;

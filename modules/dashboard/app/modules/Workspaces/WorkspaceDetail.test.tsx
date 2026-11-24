@@ -103,6 +103,20 @@ it("releases the previous primary management context when the signed-in actor ch
   expect(vmCards).toHaveBeenLastCalledWith(expect.objectContaining({ vm: expect.objectContaining({ id: "primary" }) }));
 });
 
+it.each([
+  ["owner", "other-creator", true],
+  ["member", "creator", true],
+  ["member", "other-creator", false],
+])("passes T3 account-management permission to Overview for %s / %s", (role, createdBy, allowed) => {
+  auth.selectedOrganization = { id: "org-a", role };
+  const view = render(detail(workspace({ createdBy })));
+  expect(vmCards).toHaveBeenLastCalledWith(expect.objectContaining({ canManageConnect: allowed }));
+  view.rerender(detail(workspace({ createdBy }), false));
+  expect(vmCards).toHaveBeenLastCalledWith(expect.objectContaining({ canManageConnect: false }));
+  view.rerender(detail(workspace({ createdBy }), true, "org-b"));
+  expect(vmCards).toHaveBeenLastCalledWith(expect.objectContaining({ canManageConnect: false }));
+});
+
 it("resolves the primary by identity, selects it by default and shows only the selected VM without starting compute", () => {
   const item = workspace();
   const view = render(detail(item));

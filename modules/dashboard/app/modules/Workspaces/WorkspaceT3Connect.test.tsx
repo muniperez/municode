@@ -9,7 +9,7 @@ const props = { workspaceId: "workspace", vmId: "primary", organizationId: "org"
 
 it("does not link or start compute on view and cannot launch management while offline", () => {
   render(<WorkspaceT3Connect {...props} ready={false} />);
-  expect(screen.getByRole("button", { name: "Manage T3 Connect" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Connect T3 account" })).toBeDisabled();
   expect(getWorkspaceLaunchUrl).not.toHaveBeenCalled();
 });
 
@@ -18,7 +18,9 @@ it("requests a separate owner-authorized Connect route for this exact generation
   vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
   vi.mocked(getWorkspaceLaunchUrl).mockResolvedValue({ url: "https://connect.example/launch", expiresAt: "2099-01-01T00:00:00Z" });
   render(<WorkspaceT3Connect {...props} ready />);
-  fireEvent.click(screen.getByRole("button", { name: "Manage T3 Connect" }));
+  fireEvent.click(screen.getByRole("button", { name: "Connect T3 account" }));
+  expect(window.open).toHaveBeenCalledExactlyOnceWith("about:blank", "_blank");
+  expect(getWorkspaceLaunchUrl).toHaveBeenCalledExactlyOnceWith("workspace", "primary", "org", 3, "connect");
   await waitFor(() => expect(popup.location.replace).toHaveBeenCalledWith("https://connect.example/launch"));
   expect(getWorkspaceLaunchUrl).toHaveBeenCalledWith("workspace", "primary", "org", 3, "connect");
   expect(popup.opener).toBeNull();
@@ -29,7 +31,7 @@ it("does not navigate on unauthorized or unavailable management", async () => {
   vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
   vi.mocked(getWorkspaceLaunchUrl).mockRejectedValue(new Error("not authorized"));
   render(<WorkspaceT3Connect {...props} ready />);
-  fireEvent.click(screen.getByRole("button", { name: "Manage T3 Connect" }));
+  fireEvent.click(screen.getByRole("button", { name: "Connect T3 account" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("owner access");
   expect(popup.close).toHaveBeenCalled();
   expect(popup.location.replace).not.toHaveBeenCalled();
@@ -44,7 +46,7 @@ it.each([
   let resolve!: (result: { url: string; expiresAt: string }) => void;
   vi.mocked(getWorkspaceLaunchUrl).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
   const view = render(<WorkspaceT3Connect {...props} ready revision={1} />);
-  fireEvent.click(screen.getByRole("button", { name: "Manage T3 Connect" }));
+  fireEvent.click(screen.getByRole("button", { name: "Connect T3 account" }));
   view.rerender(<WorkspaceT3Connect {...props} ready revision={1} {...change} />);
   await act(async () => resolve({ url: "https://connect.example/launch", expiresAt: "2099-01-01T00:00:00Z" }));
   expect(popup.close).toHaveBeenCalled();
@@ -61,8 +63,16 @@ it.each([
   vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
   vi.mocked(getWorkspaceLaunchUrl).mockResolvedValue(result);
   render(<WorkspaceT3Connect {...props} ready />);
-  fireEvent.click(screen.getByRole("button", { name: "Manage T3 Connect" }));
+  fireEvent.click(screen.getByRole("button", { name: "Connect T3 account" }));
   await screen.findByRole("alert");
   expect(popup.close).toHaveBeenCalled();
   expect(popup.location.replace).not.toHaveBeenCalled();
+});
+
+it("reports popup blocking without requesting a management launch", () => {
+  vi.spyOn(window, "open").mockReturnValue(null);
+  render(<WorkspaceT3Connect {...props} ready />);
+  fireEvent.click(screen.getByRole("button", { name: "Connect T3 account" }));
+  expect(screen.getByRole("alert")).toHaveTextContent("Allow a new window");
+  expect(getWorkspaceLaunchUrl).not.toHaveBeenCalled();
 });

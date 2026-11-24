@@ -29,44 +29,21 @@ function stoppedWorkspace(overrides: Partial<DevelopmentWorkspace> = {}) {
   return workspace({ vms: [vm("primary", { kind: "primary", ...stopped }), vm("sibling-one", stopped)], ...overrides });
 }
 const refresh = vi.fn<() => Promise<void>>();
-function tab(item = workspace(), { canManageRole = true, canManageConnect = true } = {}) {
+function tab(item = workspace(), { canManageRole = true } = {}) {
   const deletion = permanentDeletion(item);
   return <WorkspaceSettingsTab item={item} organizationId="org-a" refresh={refresh} refreshAfterMutation={refresh}
-    canManage={canManageRole && !deletion} canManageRole={canManageRole} canManageConnect={canManageConnect} deletion={deletion} actorId="creator" />;
+    canManage={canManageRole && !deletion} canManageRole={canManageRole} deletion={deletion} />;
 }
 const deleteSection = () => screen.getByRole("region", { name: "Delete workspace" });
 
 beforeEach(() => { refresh.mockResolvedValue(undefined); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.resetAllMocks(); });
 
-it("keeps idle timeout alongside primary-VM T3 account linking with its independent-access disclosure", async () => {
-  const popup = { opener: {}, location: { replace: vi.fn() }, close: vi.fn() };
-  vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
-  vi.mocked(getWorkspaceLaunchUrl).mockResolvedValue({ url: "https://connect.example/launch", expiresAt: "2099-01-01T00:00:00Z" });
+it("keeps idle timeout in Settings but has no T3 account-linking entry", () => {
   render(tab());
   expect(screen.getByText("Idle timeout")).toBeInTheDocument();
-  const connect = screen.getByRole("region", { name: "T3 Connect account linking" });
-  expect(connect).toHaveTextContent(/outside Municode's session controls/);
-  expect(connect).toHaveTextContent(/interrupts running turns and terminals/);
-  expect(getWorkspaceLaunchUrl).not.toHaveBeenCalled();
-  fireEvent.click(within(connect).getByRole("button", { name: "Manage T3 Connect" }));
-  await waitFor(() => expect(getWorkspaceLaunchUrl).toHaveBeenCalledExactlyOnceWith("workspace", "primary", "org-a", 3, "connect"));
-});
-
-it("gates T3 account linking like the primary VM card: management, ownership, startup and a running primary", () => {
-  const view = render(tab(workspace(), { canManageConnect: false }));
   expect(screen.queryByRole("region", { name: "T3 Connect account linking" })).not.toBeInTheDocument();
-  view.rerender(tab(workspace(), { canManageRole: false }));
-  expect(screen.queryByRole("region", { name: "T3 Connect account linking" })).not.toBeInTheDocument();
-  view.rerender(tab(workspace({ vms: [vm("primary", { kind: "primary", phase: "provisioning" })] })));
-  expect(screen.queryByRole("region", { name: "T3 Connect account linking" })).not.toBeInTheDocument();
-  view.rerender(tab(workspace({ vms: [vm("primary", { kind: "primary", phase: "failed" })] })));
-  expect(screen.queryByRole("region", { name: "T3 Connect account linking" })).not.toBeInTheDocument();
-  view.rerender(tab(workspace({ primaryVmId: null, vms: [vm("sibling-one")] })));
-  expect(screen.queryByRole("region", { name: "T3 Connect account linking" })).not.toBeInTheDocument();
-  view.rerender(tab(stoppedWorkspace()));
-  expect(within(screen.getByRole("region", { name: "T3 Connect account linking" }))
-    .getByRole("button", { name: "Manage T3 Connect" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: /T3/ })).not.toBeInTheDocument();
   expect(getWorkspaceLaunchUrl).not.toHaveBeenCalled();
 });
 
