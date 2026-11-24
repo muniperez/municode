@@ -70,6 +70,54 @@ repository-scoped token. An operator can also select a short-lived exact
 OpenBao credential reference under that organization's
 `integrations/workspace-repository-*/credentials/` path.
 
+## Budget price catalog
+
+Budgets estimate spend from `DevelopmentWorkspaces:PriceCatalog`, a map of
+operator-maintained list prices keyed by a stable entry ID. Workspaces never
+fetches prices from provider APIs, and the catalog is never read when creating,
+starting, stopping or resizing workspaces. Copy prices from the provider's
+published price list, then record where they came from and when they take
+effect. Each entry has:
+
+| Field | Meaning |
+| --- | --- |
+| `Provider` | `hetzner`, `digital-ocean` or `vultr`. |
+| `ProviderAccountId` | Optional. An entry for a specific provider account wins over a provider-wide entry. |
+| `Resource` | `compute` (default, priced per VM) or `storage` (priced per GB of workspace volume). |
+| `Region` | Optional. A region entry wins over an entry without a region. |
+| `Sku` | Provider size, required for `compute`. |
+| `BillingModel` | `hourly` (default: every started hour at `HourlyRate`), `hourly_monthly_cap` (every started hour at `HourlyRate`, capped at `MonthlyRate` per month), `per_second` (`HourlyRate` prorated per second) or `monthly` (`MonthlyRate` per month, prorated by hour). |
+| `HourlyRate`, `MonthlyRate` | Positive price per VM or per GB, as the billing model requires. |
+| `MinimumCharge`, `MinimumBillableSeconds` | Optional minimum charge and minimum billed duration per resource for each month in which it is billed. |
+| `Currency` | Three-letter ISO 4217 code in upper case. |
+| `Source` | Where the price came from, for example a dated price page. |
+| `EffectiveFrom` | When the price takes effect. Future entries are ignored until then, so you can stage a price change. |
+
+```json
+"PriceCatalog": {
+  "synthetic-cx-nbg1": {
+    "Provider": "hetzner", "Resource": "compute", "Region": "synthetic-region", "Sku": "synthetic-sku",
+    "BillingModel": "hourly_monthly_cap", "HourlyRate": 0.01, "MonthlyRate": 5.99,
+    "Currency": "EUR", "Source": "Provider price list, retrieved 2026-11-01", "EffectiveFrom": "2026-11-01T00:00:00Z"
+  },
+  "synthetic-volumes": {
+    "Provider": "hetzner", "Resource": "storage", "BillingModel": "monthly", "MonthlyRate": 0.044,
+    "Currency": "EUR", "Source": "Provider price list, retrieved 2026-11-01", "EffectiveFrom": "2026-11-01T00:00:00Z"
+  }
+}
+```
+
+When several entries match, the most specific one in effect is used: account,
+then region, then the latest `EffectiveFrom`. A resource without a matching
+entry falls back to the rate recorded when its VM was selected (the profile's
+`ComputeHourlyRate`) or when its workspace was created (`VolumeMonthlyRatePerGb`),
+and the budget states that a fallback rate was used. A resource with neither is
+reported as a missing price and is not counted, never treated as zero. Entries
+older than `PriceCatalogMaxAgeDays` (default 90) are flagged as stale. Invalid
+entries are ignored and listed as a budget warning. Amounts in different
+currencies are never converted or summed, so price each provider in the
+currency your budgets use.
+
 ## Integration contracts
 
 Workspace client routes remain under `/api/development-workspaces`. Browser

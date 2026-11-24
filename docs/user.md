@@ -72,11 +72,16 @@ creating or starting a workspace and never stops resources.
 
 The estimate is not an invoice and does not include provider-reported charges.
 It assumes every VM that currently reserves compute runs for a full 720-hour
-month at its recorded hourly rate. It adds each retained volume's recorded
-monthly storage rate and groups the total by provider account. Workspaces priced
-in another currency are excluded and listed separately. Missing pricing marks
-the estimate incomplete, and pricing older than the operator's limit is marked
-stale. Viewing budgets never records anything.
+month and every retained volume is kept all month. Prices come from the
+operator's price catalog for each provider, region and size, including hourly
+billing, monthly caps, per-second billing and minimum charges. Without a
+catalog entry, the rate recorded when the VM was selected or the workspace was
+created is used, and the provider's assumptions say a fallback rate was used.
+The total is grouped by provider account, and each provider lists the prices
+and billing rules it assumed. Workspaces priced in another currency are
+excluded and listed separately, never converted or summed. A missing price
+marks the estimate incomplete and is not counted as zero. Prices older than the
+operator's limit are marked stale. Viewing budgets never records anything.
 
 The worker checks budgets in the background (every five minutes by default) and
 notifies once per threshold per calendar month (UTC). If several thresholds are

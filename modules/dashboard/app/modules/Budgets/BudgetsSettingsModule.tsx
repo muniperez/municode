@@ -10,7 +10,7 @@ import { Disclosure } from "@/core/components/Disclosure";
 import { EmptyState } from "@/core/components/EmptyState";
 import { PageScaffold } from "@/core/components/PageScaffold";
 import { useAuth } from "@/core/auth/AuthProvider";
-import { createBudget, deleteBudget, listBudgets, updateBudget, type Budget, type BudgetNotificationInput } from "@/api/budgetsApi";
+import { createBudget, deleteBudget, listBudgets, updateBudget, type Budget, type BudgetContributor, type BudgetNotificationInput } from "@/api/budgetsApi";
 import { listProviders, type ProviderAccount } from "@/api/providersApi";
 import { formatPrice } from "@/modules/Workspaces/WorkspaceCostEstimate";
 
@@ -19,6 +19,11 @@ export function budgetStatus(budget: Budget) {
   if (projection.overBudget) return { label: "Over budget", variant: "destructive" as const };
   if (projection.crossedThreshold !== null) return { label: `Crossed ${projection.crossedThreshold}%`, variant: "secondary" as const };
   return { label: "Within budget", variant: "outline" as const };
+}
+
+export function pricingLabel(item: BudgetContributor) {
+  const status = item.pricingStatus === "current" ? "Current" : item.pricingStatus === "stale" ? "Stale" : "Missing price";
+  return item.lines.some(line => line.source === "fallback" && line.status !== "missing") ? `${status} · fallback rate` : status;
 }
 
 export function BudgetsSettingsModule() {
@@ -57,7 +62,7 @@ export function BudgetsSettingsModule() {
     actions={canManage && editing === null ? <Button onClick={() => setEditing("new")}>Create budget</Button> : null}>
     <p className="text-sm text-muted-foreground">
       Budgets only inform. Crossing a threshold never blocks creating or starting workspaces and never stops resources.
-      All amounts are estimates from recorded rates, not provider invoices.
+      All amounts are estimates from the operator's price catalog or recorded rates, not provider invoices.
     </p>
     {!canManage && <p className="text-sm text-muted-foreground">You can view budgets. Owners and admins can change them.</p>}
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
@@ -136,11 +141,19 @@ function BudgetCard({ budget, canManage, providers, onEdit, onDeleted, onError }
         <TableHeader><TableRow><TableHead>Provider account</TableHead><TableHead>Compute / month</TableHead>
           <TableHead>Storage / month</TableHead><TableHead>Estimated / month</TableHead></TableRow></TableHeader>
         <TableBody>{projection.providers.map(provider => <TableRow key={provider.providerAccountId}>
-          <TableCell>{provider.providerName} <span className="text-muted-foreground">({provider.providerType})</span></TableCell>
+          <TableCell>{provider.providerName} <span className="text-muted-foreground">({provider.providerType})</span>
+            {!provider.complete && <Badge variant="outline" className="ml-2">Missing prices</Badge>}</TableCell>
           <TableCell>{money(provider.computeMonthly)}</TableCell><TableCell>{money(provider.storageMonthly)}</TableCell>
           <TableCell>{money(provider.projectedMonthly)}</TableCell>
         </TableRow>)}</TableBody>
       </Table>}
+      {projection.providers.some(provider => provider.assumptions.length > 0) && <Disclosure label="Pricing assumptions by provider">
+        <div className="space-y-2">{projection.providers.filter(provider => provider.assumptions.length > 0).map(provider =>
+          <section key={provider.providerAccountId} aria-label={`${provider.providerName} pricing assumptions`}>
+            <p className="font-medium">{provider.providerName} <span className="text-muted-foreground">({provider.providerType})</span></p>
+            <ul className="list-disc space-y-1 pl-5 text-muted-foreground">{provider.assumptions.map(item => <li key={item}>{item}</li>)}</ul>
+          </section>)}</div>
+      </Disclosure>}
       {projection.contributors.length > 0 && <Disclosure label={`Contributing workspaces (${projection.contributors.length})`}>
         <Table aria-label={`${budget.name} contributing workspaces`}>
           <TableHeader><TableRow><TableHead>Workspace</TableHead><TableHead>Region / SKU</TableHead>
@@ -150,7 +163,7 @@ function BudgetCard({ budget, canManage, providers, onEdit, onDeleted, onError }
             <TableCell>{item.region}{item.skus.length ? ` · ${item.skus.join(", ")}` : ""}</TableCell>
             <TableCell>{item.reservedVmCount}</TableCell>
             <TableCell>{money(item.projectedMonthly)}</TableCell>
-            <TableCell>{item.pricingStatus === "current" ? "Current" : item.pricingStatus === "stale" ? "Stale" : "Unknown"}</TableCell>
+            <TableCell>{pricingLabel(item)}</TableCell>
           </TableRow>)}</TableBody>
         </Table>
       </Disclosure>}
