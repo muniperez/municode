@@ -681,6 +681,11 @@ FS_OUTPUT_LIMIT = 320 * 1024
 FS_DELETE_ROOTS = ("repos", "home", "artifacts")
 # Storage tiers (#202): caches, temporary files and build outputs live on the VM's local disk.
 SCRATCH_ROOT = "/var/lib/workspaces-scratch"
+# Storage layout 2: checkouts live on the VM disk and are bind-mounted at /workspace/repos.
+LOCAL_ROOT = "/var/lib/workspaces-local"
+LOCAL_FILESYSTEMS = ("ext4", "xfs", "btrfs")
+LAYOUT_MARKER = ".workspaces-layout.json"
+CHECKPOINT_STORE = ".workspaces-checkpoints"
 SCRATCH_ENV = "/opt/workspaces-workspace/scratch.env"
 
 
@@ -917,6 +922,102 @@ class Linux:
         require(source is not None, "Retained volume is not mounted")
         require(source == str(self.volume_device(claim).resolve(strict=True)), "Unexpected mount device")
         self.verify_owner(claim)
+        if self.local_layout():
+            self.verify_repos_mount()
+
+    def local_layout(self):
+        return self.config.get("storageLayout") == 2
+
+    def repos_binding(self):
+        claim = self.config["volume"]
+        return dict(workspaceId=claim["owner"]["workspaceId"], providerVolumeId=claim["providerVolumeId"],
+                    filesystemUuid=claim["filesystemUuid"], vmId=self.config["vmId"],
+                    generation=self.config["generation"], writerGeneration=self.config["generation"])
+
+    def verify_repos_mount(self):
+        mountpoint = self.workspace / "repos"
+        require(os.path.ismount(mountpoint), "Checkout mount is missing")
+        live = os.stat(mountpoint, follow_symlinks=False)
+        local = os.stat(Path(LOCAL_ROOT) / "repos", follow_symlinks=False)
+        require((live.st_dev, live.st_ino) == (local.st_dev, local.st_ino) and
+                live.st_dev != os.stat(self.workspace).st_dev, "Checkout mount is not the VM-disk checkout tree")
+        options = run(["findmnt", "-rn", "-M", str(mountpoint), "-o", "OPTIONS"], timeout=5).split(",")
+        require("rw" in options and "nodev" in options and "nosuid" in options,
+                "Checkout mount options are unsafe")
+
+    def local_root(self):
+        """The VM-disk directory holding the live checkout tree and its lineage; root-only."""
+        root = Path(LOCAL_ROOT)
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        info = os.lstat(root)
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid(), "Unsafe local checkout directory")
+        os.chmod(root, 0o700)
+        require(info.st_dev != os.stat(self.workspace).st_dev, "Local checkouts must not use the retained volume")
+        require(run(["findmnt", "-rn", "-T", str(root), "-o", "FSTYPE"], timeout=5) in LOCAL_FILESYSTEMS,
+                "Unsupported local checkout filesystem")
+        return root
+
+    def layout_marker(self, create=False):
+        """Binds the volume to layout 2 so an older image or layout never writes checkouts into it."""
+        path = self.workspace / LAYOUT_MARKER
+        claim = self.config["volume"]
+        expected = dict(schemaVersion=1, storageLayout=2, workspaceId=claim["owner"]["workspaceId"],
+                        providerVolumeId=claim["providerVolumeId"], filesystemUuid=claim["filesystemUuid"])
+        if os.path.lexists(path):
+            info = path.lstat()
+            require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and not info.st_mode & 0o077,
+                    "Unsafe storage layout marker")
+            try:
+                value = json.loads(path.read_text())
+            except ValueError as error:
+                raise Blocked("Storage layout marker is corrupt") from error
+            require(isinstance(value, dict) and set(value) == set(expected) | {"initialCheckpoint"} and
+                    all(value[key] == expected[key] for key in expected),
+                    "Storage layout marker belongs to another volume or layout")
+            return value
+        require(create, "Checkout storage requires bootstrap")
+        value = dict(expected, initialCheckpoint=None)
+        atomic_json(path, value)
+        return value
+
+    def attach_repos(self, restore=True):
+        """Restore or keep the VM-disk checkout tree, then mount it at /workspace/repos.
+
+        Runs before T3 or any job can write. restore=False (boot-time service recovery) only
+        reattaches an existing tree whose lineage matches the current checkpoint."""
+        mountpoint = self.workspace / "repos"
+        if os.path.ismount(mountpoint):
+            self.verify_repos_mount()
+            return dict(action="attached")
+        import repo_checkpoint as checkpoints
+        root = self.local_root()
+        store = self.workspace / CHECKPOINT_STORE
+        if os.path.lexists(self.workspace / LAYOUT_MARKER):
+            marker = self.layout_marker()
+        else:
+            require(restore, "Checkout storage requires bootstrap")
+            require(not os.path.lexists(store) or (store.is_dir() and not store.is_symlink() and
+                                                   not any(store.iterdir())),
+                    "Checkpoint store exists without a storage layout marker")
+            require(not any(mountpoint.iterdir()), "Existing repository data requires migration")
+            marker = self.layout_marker(create=True)
+        try:
+            result = checkpoints.prepare_tree(
+                str(store), str(root), "repos", self.repos_binding(), str(root / "repos.lineage.json"),
+                allow_empty=restore and marker["initialCheckpoint"] is None, restore_missing=restore,
+                uid=self.config["uid"], gid=self.config["gid"])
+        except (checkpoints.Failed, checkpoints.Deferred) as error:
+            raise Blocked("Checkout storage unavailable: " + error.reason) from error
+        if marker["initialCheckpoint"] is None:
+            atomic_json(self.workspace / LAYOUT_MARKER, dict(marker, initialCheckpoint=result["checkpointId"]))
+        run(["mount", "--bind", str(root / "repos"), str(mountpoint)])
+        try:
+            run(["mount", "-o", "remount,bind,nodev,nosuid", str(mountpoint)])
+            self.verify_repos_mount()
+        except (Blocked, OSError):
+            run(["umount", str(mountpoint)], timeout=30)
+            raise
+        return result
 
     def mount(self, claim):
         device = self.probe_volume(claim)
@@ -972,13 +1073,27 @@ class Linux:
 
     def layout(self):
         require(self.workspace.is_dir() and not self.workspace.is_symlink(), "Workspace layout symlink")
+        local = self.local_layout()
+        require(local or not os.path.lexists(self.workspace / LAYOUT_MARKER),
+                "Workspace volume keeps checkouts on the VM disk; this runtime cannot mount them")
         self.workspace.chmod(0o755)
         for relative in ("repos", "t3", "transcripts", "artifacts", "config", "home", "home/.codex"):
             directory = self.workspace / relative
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             require(not directory.is_symlink(), "Workspace layout symlink")
+            if local and relative == "repos":
+                self.repos_mountpoint(directory)
+                continue
             os.chown(directory, self.config["uid"], self.config["gid"])
         # Dedicated subdirectories retain ignored/untracked files. Root home is disposable.
+
+    def repos_mountpoint(self, directory):
+        if os.path.ismount(directory):
+            return  # Already attached; attach_repos verifies it.
+        require(not any(directory.iterdir()), "Existing repository data requires migration")
+        # Root-owned and read-only: if the checkout mount is ever missing, nothing can clone underneath.
+        os.chown(directory, 0, 0)
+        directory.chmod(0o555)
 
     def restore_ownership(self):
         for path in self.workspace.rglob("*"):
@@ -1004,7 +1119,8 @@ class Linux:
 
     def filesystem_launch(self, unit, payload, output):
         preparation = None
-        if payload["mode"] == "delete" and payload["path"][0] == "repos":
+        require(payload.get("localRepos", False) == self.local_layout(), "Stale folder job storage layout")
+        if payload["mode"] == "delete" and payload["path"][0] == "repos" and not self.local_layout():
             require(payload.get("vmId") == self.config["vmId"] and
                     payload.get("generation") == self.config["generation"] and
                     payload["workspace"] == str(self.workspace), "Stale folder job identity")
@@ -1348,6 +1464,8 @@ class Linux:
 
     def unmount(self):
         self.scratch_helper("unmount-all")
+        if self.local_layout() and os.path.ismount(self.workspace / "repos"):
+            run(["umount", str(self.workspace / "repos")])
         run(["umount", str(self.workspace)])
         result = subprocess.run(["findmnt", "-rn", "-M", str(self.workspace)],
                                 capture_output=True, timeout=30)
@@ -1374,12 +1492,16 @@ class Runtime:
         allowed = {"vmId", "generation", "kind", "uid", "gid", "workspace", "volume", "backup",
                    "restore", "requireFreshBackup", "ignoredDataAcknowledged", "repositories",
                    "infrastructureUnits", "stopUnits", "forbiddenPaths",
-                   "startServices", "observedTerminalInputs"}
+                   "startServices", "observedTerminalInputs", "storageLayout"}
         require(not set(config) - allowed, "Unknown runtime configuration field; reject implicit credentials")
         require(config["kind"] in ("primary", "ephemeral"), "Invalid VM kind")
         require(config["uid"] == 2000 and config["gid"] == 2000, "Coding UID/GID must be 2000")
         require(config["generation"] > 0 and config["vmId"], "Invalid VM identity")
         require(Path(config["workspace"]).is_absolute(), "Absolute workspace path required")
+        require(config.get("storageLayout", 1) in (1, 2) and type(config.get("storageLayout", 1)) is int,
+                "Unknown storage layout")
+        self.local = config.get("storageLayout") == 2
+        require(not self.local or config["kind"] == "primary", "Local checkouts require a primary workspace")
         if config["kind"] == "ephemeral":
             require(not any(config.get(key) for key in
                             ("volume", "backup", "restore")),
@@ -1409,6 +1531,8 @@ class Runtime:
         atomic_json(self.state_file, self.s)
 
     def scratch(self, step):
+        if self.local:
+            return None  # Layout 2 has no build-output relocation.
         method = getattr(self.adapter, "scratch_" + step, None)
         return method() if method else None
 
@@ -1503,7 +1627,7 @@ class Runtime:
             record = dict(jobId=job_id, mode=mode, path=path, expect=expect,
                           unit=self.filesystem_unit(job_id), startedAt=self.clock(),
                           vmId=self.c["vmId"], generation=self.c["generation"])
-            if mode == "delete" and path[0] == "repos" and \
+            if mode == "delete" and path[0] == "repos" and not self.local and \
                     callable(getattr(self.adapter, "filesystem_prepare", None)):
                 record["stage"] = "preparing"
             atomic_json(record_path, record)
@@ -1512,6 +1636,8 @@ class Runtime:
                 return self.filesystem_resume(record, output)
             payload = dict(mode=mode, workspace=self.c["workspace"], path=path, expect=expect,
                            jobId=job_id, vmId=self.c["vmId"], generation=self.c["generation"])
+            if self.local:
+                payload["localRepos"] = True
             try:
                 preparation = self.adapter.filesystem_launch(record["unit"], payload, output)
                 if preparation is not None:
@@ -1587,7 +1713,7 @@ class Runtime:
                         value.update(mode="delete", path=record["path"],
                                      outcome="cancelled" if code == "cancelled" else "failed",
                                      removedEntries=0, removedBytes=0, errors={code: 1})
-                if value.get("outcome") == "succeeded" and record["path"][0] == "repos":
+                if value.get("outcome") == "succeeded" and record["path"][0] == "repos" and not self.local:
                     # Launch can succeed before its acknowledgement/preparation is persisted.
                     finish = getattr(self.adapter, "filesystem_finish", None)
                     if finish is not None:
@@ -1683,6 +1809,9 @@ class Runtime:
             else:
                 self.adapter.ephemeral()
             self.adapter.layout()
+            if self.local:
+                # Restore or keep the checkout tree before Ready; a missing checkpoint blocks here.
+                self.adapter.attach_repos()
             if self.c["kind"] == "ephemeral":
                 self.git.prepare(self.c.get("repositories", []), self.c["workspace"])
             self.scratch("resume")  # Initial clones get their build-output mounts before T3 starts.
@@ -1776,6 +1905,8 @@ class Runtime:
                 require(action in ("git-save", "discard"), "Ephemeral requires Git save or explicit discard")
             else:
                 require(action == "quiesce", "Primary requires retained-volume quiescence")
+                require(not self.local, "Stopping a workspace with local checkouts requires a final checkpoint, "
+                        "which this image cannot take yet")
             if self.s.get("fenceOperation") not in (None, operation):
                 raise Blocked("Another operation owns the freeze; stale operation")
             # Folder size and deletion jobs must have exited before any freeze evidence is taken.
@@ -1909,6 +2040,7 @@ class Runtime:
         if action == "restore":
             require(self.c["kind"] == "primary" and self.s["phase"] == "New",
                     "Restore only into a new, separate primary target")
+            require(not self.local, "Off-host restore of local checkouts is not supported yet")
             return self.restore(request)
         raise Blocked("Unknown action")
 
@@ -2267,6 +2399,7 @@ def mount_for_services(config, state_dir):
         # control lock here: resume can be waiting on systemctl start.
         require(state()["phase"] in ("New", "Ready", "Fenced", "Resuming"),
                 "Cannot start services for a stopped workspace")
+        # Layout 2 also verifies the checkout mount: T3 never starts before bootstrap attaches it.
         adapter.verify_workspace_mount()
         return
 
@@ -2282,6 +2415,13 @@ def mount_for_services(config, state_dir):
         fcntl.flock(lock, fcntl.LOCK_EX)
         require_recovery_authority()
         adapter.mount(dict(claim, initializeOwner=False))
+        if config.get("storageLayout") == 2:
+            try:
+                # Same-VM reboot: reattach the kept tree. Restores only run in bootstrap.
+                adapter.attach_repos(restore=False)
+            except (Blocked, OSError, ValueError, subprocess.SubprocessError):
+                run(["umount", str(adapter.workspace)], timeout=30)
+                raise
 
 
 def serve(config, state_dir, socket_path):

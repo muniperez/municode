@@ -930,13 +930,13 @@ rejects unknown fields.
   outputs are rebuilt.
 * Limits: 512 mounts, depth 12 and 100,000 scanned directories per pass.
 
-### Repository checkpoints (engine only)
+### Repository checkpoints and local checkouts (inactive)
 
-`repo_checkpoint.py` is the first slice of #105, which moves live checkouts to the VM disk
-and checkpoints them to the retained volume. The image installs it under
-`/opt/workspaces-workspace/`, but nothing calls it yet. Boot restore, the stop-path
-checkpoint, periodic saves, status reporting, backup changes and migration are later PRs.
-Existing layouts and scratch behavior do not change.
+`repo_checkpoint.py` and storage layout 2 are the first slices of #105, which moves live
+checkouts to the VM disk and checkpoints them to the retained volume. The image installs
+both, but the worker never requests layout 2 yet, so existing workspaces, layouts and
+scratch behavior do not change. The stop-path checkpoint, periodic saves, status
+reporting, backup changes and migration are later PRs.
 
 The engine copies a source tree (by default `/workspace/repos`) to a root-owned store at
 `/workspace/.workspaces-checkpoints` (mode 0700):
@@ -976,10 +976,50 @@ partial staging directory is removed on retry. Restored entries belong to uid/gi
 setuid/setgid bits are dropped. `status` reports the store as `empty`, `ready` or `corrupt`.
 A missing pointer with retained manifests is corrupt, never empty.
 
+Every save, restore and `prepare-tree` takes a `--lineage` file kept next to the live tree on
+the same filesystem. It records the volume, the checkpoint the tree was restored from, a
+random tree token and the tree root's inode. A save is refused unless the lineage matches
+the current checkpoint and the tree root has not been replaced. A save with no lineage is
+only accepted into an empty store. So an empty tree on a replacement VM can never overwrite
+a checkpoint that still has to be restored.
+
+`prepare-tree` makes the live tree ready before anything writes to it:
+
+* **Kept:** an existing tree whose lineage matches the current checkpoint, such as after a
+  same-VM reboot. Edits newer than the checkpoint stay.
+* **Restored:** a missing tree is restored from the current checkpoint.
+* **Initialized:** with `--allow-empty` on an empty store, an empty tree is created and
+  published at once. A later empty store is then reported as missing, not new.
+
+Anything else fails: a missing checkpoint, a tree without matching lineage, or a store from
+another volume.
+
 Limitations: extended attributes, ACLs and hard links are not preserved. Writes through
 `mmap` that do not update ctime can be missed. A tree that changes continuously can keep
-deferring periodic saves. Callers must not save an empty replacement tree over a checkpoint
-they still need to restore. Gating saves on restore state is part of the wiring PRs.
+deferring periodic saves.
+
+#### Storage layout 2 (local checkouts)
+
+With `"storageLayout": 2` in the runtime configuration (primary only):
+
+* Live checkouts are in `/var/lib/workspaces-local/repos` on the VM disk. It is bind-mounted
+  `nodev,nosuid` at `/workspace/repos`, so T3 and linked worktrees keep the same absolute
+  paths. The rest of `/workspace`, including T3 state, stays on the retained volume. The
+  local directory must be on a separate ext4, xfs or btrfs filesystem.
+* The volume's own `repos` directory is only an empty root-owned 0555 mountpoint. If the
+  mount is ever missing, nothing can clone underneath it. Bootstrap refuses old-layout data
+  in it; migration is a later PR.
+* The root-only `/workspace/.workspaces-layout.json` binds the volume to layout 2. An older
+  layout refuses such a volume, and the scratch relocation units exit as disabled. A new
+  marker is created only when the volume has no checkouts and no checkpoint store. It
+  records the first checkpoint, so an empty store is never treated as a new workspace again.
+* Bootstrap runs `prepare-tree` and mounts the result before Ready, so T3 never sees an
+  unrestored tree. The boot-time mount service only reattaches a kept tree. A tree that needs
+  a restore waits for bootstrap, and T3 does not start.
+* Status, tasks and folder jobs verify the checkout mount as part of the retained mount.
+  Folder size and delete jobs work on the checkout filesystem directly, with no scratch
+  preparation. Every other mount below it is still refused.
+* Stop (`quiesce`) and off-host restore are refused until the stop-path checkpoint lands.
 
 Run the engine checks with:
 

@@ -29,6 +29,7 @@ WORKSPACE = "/workspace"
 SCRATCH = "/var/lib/workspaces-scratch"
 RUN_DIR = "/run/workspaces-scratch-mounts"
 TRASH = ".workspaces-scratch-trash"
+LAYOUT_MARKER = ".workspaces-layout.json"
 CODING_UID = CODING_GID = 2000
 ALLOWLIST = frozenset({
     "node_modules", "bin", "obj", "dist", "build", "out", "target", ".next", ".nuxt", ".svelte-kit",
@@ -2127,6 +2128,10 @@ def main(argv=None):
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
     os.umask(0o077)
+    if args.command in ("apply", "watch") and os.path.lexists(os.path.join(WORKSPACE, LAYOUT_MARKER)):
+        # Storage layout 2 keeps whole checkouts on the VM disk; nothing is relocated.
+        print(json.dumps(dict(ok=True, disabled="local-checkouts")))
+        return 0
     helper = Helper(stop=lambda: STOP, pressure=args.pressure_percent, quiet=args.quiet_seconds)
     if args.command in ("prepare-delete", "finish-delete"):
         request = json.loads(args.delete_request)

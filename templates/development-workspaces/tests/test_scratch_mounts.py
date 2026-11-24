@@ -4,6 +4,7 @@
 No root or real mounts: FakeSystem records mounts in a synthetic mountinfo, maps chown and the
 scratch device, and supplies /proc and statvfs views."""
 import errno
+import io
 import json
 import os
 from pathlib import Path
@@ -644,6 +645,16 @@ class ScratchMountTests(unittest.TestCase):
                 self.assertEqual(1, len(launches))
                 self.assertEqual("x", (other / "keep").read_text())
                 self.assertIn(str(other / "node_modules"), self.mounted())
+
+    def test_local_checkout_layout_disables_relocation_without_touching_checkouts(self):
+        (self.ws / sm.LAYOUT_MARKER).write_text("{}")
+        for command in ("apply", "watch"):
+            with self.subTest(command=command), patch.object(sm, "WORKSPACE", str(self.ws)), \
+                    patch.object(sm.os, "geteuid", return_value=0), patch.object(sm.signal, "signal"), \
+                    patch.object(sm, "Helper", side_effect=AssertionError("relocation ran")), \
+                    patch.object(sys, "stdout", io.StringIO()) as output:
+                self.assertEqual(0, sm.main([command]))
+                self.assertEqual(dict(ok=True, disabled="local-checkouts"), json.loads(output.getvalue()))
 
     def test_ignored_outputs_mount_from_scratch_and_other_dirs_stay_untouched(self):
         app = self.repo("my app", ["node_modules/", "bin/", "obj/", "dist", "build/", "logs/"],

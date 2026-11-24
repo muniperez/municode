@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
+import repo_checkpoint as rc
 import runtime as rt
 
 ARTIFACTS = HERE.parents[1] / ".local/artifacts/runtime"
@@ -125,6 +126,9 @@ class FakeLinux:
 
     def scratch_resume(self):
         self.events.append("scratch-resume")
+
+    def attach_repos(self, restore=True):
+        self.events.append("attach-repos")
 
 
 class ManagedT3StopTests(unittest.TestCase):
@@ -1258,6 +1262,139 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual("Failed", self.runtime.s["backupFreshness"])
         self.assertNotIn("lastBackup", self.runtime.s)
         self.assertNotIn("unmount", self.adapter.events)
+
+
+class LocalCheckoutTests(unittest.TestCase):
+    """Storage layout 2 with the real checkpoint engine; mounts are synthetic."""
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(prefix="local-repos-", dir=ARTIFACTS)
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.workspace = self.root / "workspace"
+        (self.workspace / "repos").mkdir(parents=True)
+        self.config = dict(vmId="vm-a", generation=3, kind="primary", uid=os.getuid(), gid=os.getgid(),
+                           workspace=str(self.workspace), storageLayout=2,
+                           volume=dict(providerVolumeId="vol-1", filesystemUuid="fs-1",
+                                       owner=dict(workspaceId="ws-1", providerVolumeId="vol-1")))
+        self.commands = []
+
+    def adapter(self, local, **changes):
+        local.mkdir(exist_ok=True)
+        adapter = rt.Linux(dict(self.config, **changes))
+        for name, value in (("local_root", lambda: local), ("verify_repos_mount", lambda: None)):
+            patcher = patch.object(adapter, name, side_effect=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        return adapter
+
+    def attach(self, adapter, restore=True):
+        with patch.object(rt, "run", side_effect=lambda argv, **kwargs: self.commands.append(argv)):
+            return adapter.attach_repos(restore=restore)
+
+    def marker(self):
+        return json.loads((self.workspace / rt.LAYOUT_MARKER).read_text())
+
+    def test_new_volume_starts_empty_and_same_vm_reboot_keeps_newer_edits(self):
+        local = self.root / "vm-a"
+        adapter = self.adapter(local)
+        genesis = self.attach(adapter)
+        self.assertEqual("initialized", genesis["action"])
+        self.assertEqual(genesis["checkpointId"], self.marker()["initialCheckpoint"])
+        self.assertEqual(dict(schemaVersion=1, storageLayout=2, workspaceId="ws-1", providerVolumeId="vol-1",
+                              filesystemUuid="fs-1"),
+                         {key: value for key, value in self.marker().items() if key != "initialCheckpoint"})
+        self.assertEqual([["mount", "--bind", str(local / "repos"), str(self.workspace / "repos")],
+                          ["mount", "-o", "remount,bind,nodev,nosuid", str(self.workspace / "repos")]],
+                         self.commands)
+        (local / "repos/project").mkdir()
+        (local / "repos/project/edit.txt").write_text("newer than any checkpoint")
+        # Boot-time service recovery reattaches the kept tree and never restores over it.
+        self.assertEqual("kept", self.attach(adapter, restore=False)["action"])
+        self.assertEqual("newer than any checkpoint", (local / "repos/project/edit.txt").read_text())
+
+    def test_replacement_vm_restores_and_never_publishes_an_empty_tree(self):
+        local = self.root / "vm-a"
+        adapter = self.adapter(local)
+        self.attach(adapter)
+        (local / "repos/project").mkdir()
+        (local / "repos/project/edit.txt").write_text("uncommitted")
+        binding = adapter.repos_binding()
+        saved = rc.save(str(local / "repos"), str(self.workspace / rt.CHECKPOINT_STORE), binding,
+                        str(local / "repos.lineage.json"), fenced=True)
+        replacement = self.root / "vm-b"
+        successor = self.adapter(replacement, vmId="vm-b", generation=4)
+        with self.assertRaisesRegex(rt.Blocked, "must be restored"):
+            self.attach(successor, restore=False)
+        (replacement / "repos").mkdir(parents=True)
+        with self.assertRaisesRegex(rt.Blocked, "not restored from the current checkpoint"):
+            self.attach(successor)
+        (replacement / "repos").rmdir()
+        restored = self.attach(successor)
+        self.assertEqual(("restored", saved["checkpointId"]), (restored["action"], restored["checkpointId"]))
+        self.assertEqual("uncommitted", (replacement / "repos/project/edit.txt").read_text())
+
+    def test_missing_checkpoint_and_unmarked_store_block_without_mounting(self):
+        local = self.root / "vm-a"
+        self.attach(self.adapter(local))
+        shutil.rmtree(self.workspace / rt.CHECKPOINT_STORE)
+        self.commands.clear()
+        replacement = self.adapter(self.root / "vm-b", vmId="vm-b", generation=4)
+        with self.assertRaisesRegex(rt.Blocked, "Checkpoint is missing"):
+            self.attach(replacement)
+        (self.workspace / rt.LAYOUT_MARKER).unlink()
+        (self.workspace / rt.CHECKPOINT_STORE).mkdir()
+        (self.workspace / rt.CHECKPOINT_STORE / "objects").mkdir()
+        with self.assertRaisesRegex(rt.Blocked, "without a storage layout marker"):
+            self.attach(replacement)
+        self.assertEqual([], self.commands)
+        self.assertFalse((self.root / "vm-b/repos").exists())
+
+    def test_layout_keeps_the_mountpoint_root_owned_and_refuses_old_layout_data(self):
+        adapter = rt.Linux(self.config)
+        with patch.object(rt.os, "chown") as chown:
+            adapter.layout()
+        repos = self.workspace / "repos"
+        chown.assert_any_call(repos, 0, 0)
+        self.assertNotIn(repos, [call.args[0] for call in chown.call_args_list if call.args[1:] != (0, 0)])
+        self.assertEqual(0o555, repos.stat().st_mode & 0o777)
+        repos.chmod(0o755)
+        (repos / "old-clone").mkdir()
+        with patch.object(rt.os, "chown"), self.assertRaisesRegex(rt.Blocked, "requires migration"):
+            adapter.layout()
+        (repos / "old-clone").rmdir()
+        (self.workspace / rt.LAYOUT_MARKER).write_text("{}")
+        old = rt.Linux(dict(self.config, storageLayout=1))
+        with patch.object(rt.os, "chown") as chown, self.assertRaisesRegex(rt.Blocked, "VM disk"):
+            old.layout()
+        chown.assert_not_called()
+
+    def test_local_root_must_not_share_the_retained_volume(self):
+        adapter = rt.Linux(self.config)
+        with patch.object(rt, "LOCAL_ROOT", str(self.workspace / "local")), \
+                patch.object(rt, "run", return_value="ext4"), \
+                self.assertRaisesRegex(rt.Blocked, "must not use the retained volume"):
+            adapter.local_root()
+
+    def test_runtime_bootstrap_attaches_before_ready_and_stop_is_blocked_before_any_fence(self):
+        fake = FakeLinux()
+        config = dict(self.config, uid=2000, gid=2000,
+                      volume=dict(device="/dev/disk/by-id/fake", providerDeviceId="fake",
+                                  providerVolumeId="vol-1", filesystemUuid="fixture-fs",
+                                  owner={"workspaceId": "workspace"}))
+        runtime = rt.Runtime(config, self.root / "state", fake, git=object(), clock=lambda: 1000)
+        request = dict(vmId="vm-a", generation=3, gatewayAdmissionsFenced=True, unobservableToolsAbsent=True,
+                       t3SnapshotSequence=0)
+        runtime.handle(dict(request, operationId="boot", action="bootstrap"))
+        self.assertEqual(["mount", "layout", "attach-repos"], fake.events)
+        with self.assertRaisesRegex(rt.Blocked, "final checkpoint"):
+            runtime.handle(dict(request, operationId="stop", action="quiesce"))
+        self.assertEqual(["mount", "layout", "attach-repos"], fake.events)
+        self.assertEqual("Ready", runtime.s["phase"])
+        self.assertNotIn("fenceOperation", runtime.s)
+        for change in (dict(kind="ephemeral", volume=None, ignoredDataAcknowledged=True),
+                       dict(storageLayout=3), dict(storageLayout=True)):
+            with self.subTest(change=change), self.assertRaises(rt.Blocked):
+                rt.Runtime(dict(config, **change), self.root / "invalid", fake, git=object())
 
 
 class LinuxAdapterTests(unittest.TestCase):

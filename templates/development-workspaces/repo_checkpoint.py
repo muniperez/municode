@@ -19,8 +19,13 @@ whose ctime might not have advanced. A periodic save that sees a change is defer
 under a writer fence fails. Paths in the tree are opened component by component relative to
 verified directory descriptors with O_NOFOLLOW. Standard library only.
 
-Commands: save, verify, restore, status. Each prints one JSON object. Exit status 0 means
-success, 75 means deferred, and 1 means failed.
+Every live tree has a lineage file outside the tree. It records the tree's root inode and the
+checkpoint it was restored from. A save is published only for the first tree of an empty store
+or for a tree whose lineage matches the current checkpoint. An empty tree on a replacement VM
+therefore can never overwrite the checkpoint it still has to restore.
+
+Commands: save, verify, restore, prepare-tree, status. Each prints one JSON object. Exit status
+0 means success, 75 means deferred, and 1 means failed.
 """
 import argparse
 import ctypes
@@ -67,6 +72,7 @@ IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 OPERATION = re.compile(r"[A-Za-z0-9_-]{1,128}")
 CHECKPOINT_ID = re.compile(r"c-[0-9]{20}-[0-9a-f]{16}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
+TOKEN = re.compile(r"[0-9a-f]{32}")
 STORE_DIRS = ("objects", "tmp", "staging", "manifests")
 EX_DEFERRED = 75
 
@@ -144,6 +150,61 @@ def syncfs(fd):
     except (OSError, AttributeError):
         pass
     os.sync()
+
+
+def read_lineage(path):
+    """The lineage of a live tree, with the device holding the lineage file, or None if absent."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise Failed("Checkout tree lineage is unreadable") from error
+    try:
+        info = os.fstat(fd)
+        owner = 0 if os.geteuid() == 0 else os.geteuid()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != owner or stat.S_IMODE(info.st_mode) & 0o077:
+            raise Failed("Unsafe checkout tree lineage")
+        data = os.read(fd, 65536)
+    finally:
+        os.close(fd)
+    try:
+        value = json.loads(data)
+    except ValueError as error:
+        raise Failed("Checkout tree lineage is corrupt") from error
+    if not isinstance(value, dict) or value.get("schemaVersion") != SCHEMA_VERSION or \
+            not all(isinstance(value.get(key), str) and IDENTIFIER.fullmatch(value[key]) for key in VOLUME_FIELDS) or \
+            not isinstance(value.get("treeToken"), str) or not TOKEN.fullmatch(value["treeToken"]) or \
+            not (value.get("checkpointId") is None or CHECKPOINT_ID.fullmatch(str(value["checkpointId"]))) or \
+            type(value.get("rootIno")) is not int:
+        raise Failed("Checkout tree lineage is corrupt")
+    return dict(value, device=info.st_dev)
+
+
+def write_lineage(path, binding, root, checkpoint_id):
+    """Record which checkpoint a live tree came from. The tree must stay on the lineage filesystem."""
+    value = dict(schemaVersion=SCHEMA_VERSION, treeToken=secrets.token_hex(16), checkpointId=checkpoint_id,
+                 rootIno=root.st_ino, **{key: binding[key] for key in VOLUME_FIELDS})
+    write_durable(path, canonical(value))
+    return dict(value, device=os.lstat(path).st_dev)
+
+
+def check_lineage(lineage, root, binding, current, empty):
+    """Refuse to publish a tree that is not the restored (or first) tree of this volume.
+
+    A replacement VM starts with an empty tree. Without this check, saving that tree would
+    overwrite the checkpoint it still needs to restore."""
+    if not same_volume(lineage, binding):
+        raise Failed("Checkout tree belongs to another workspace volume")
+    if (lineage["device"], lineage["rootIno"]) != (root.st_dev, root.st_ino):
+        raise Failed("Checkout tree was replaced after it was restored")
+    if current is None:
+        if not empty:
+            raise Failed("Checkpoint pointer is missing")
+        if lineage["checkpointId"] is not None:
+            raise Failed("Checkpoint this tree was restored from is missing")
+    elif current.get("treeToken") != lineage["treeToken"] and current["checkpointId"] != lineage["checkpointId"]:
+        raise Failed("Checkout tree was not restored from the current checkpoint")
 
 
 def boot_id():
@@ -657,6 +718,10 @@ class Store:
                 return self.manifest(item["checkpointId"], item["manifestSha256"]), item["manifestSha256"]
         raise Failed("Expected checkpoint is not retained")
 
+    def empty(self):
+        """True when nothing was ever published: no pointer and no manifest."""
+        return self.current() is None and not os.listdir(os.path.join(self.path, "manifests"))
+
     def check_objects(self, manifest, deep):
         for path, entry in manifest["entries"].items():
             if entry.get("type") != "file":
@@ -699,7 +764,7 @@ class Store:
             [item for item in (previous or {}).get("history", []) if item["checkpointId"] != checkpoint_id]
         pointer = dict(schemaVersion=SCHEMA_VERSION, checkpointId=checkpoint_id, manifestSha256=manifest_sha,
                        binding=manifest["binding"], completedAt=manifest["completedAt"],
-                       history=history[:KEEP])
+                       treeToken=manifest["treeToken"], history=history[:KEEP])
         write_durable(os.path.join(self.path, "current.json"), canonical(pointer))
         return manifest_sha, pointer
 
@@ -767,9 +832,12 @@ def previous_entries(store, current):
             if entry.get("type") == "file" and entry.get("ctimeNs", 0) + RACY_NS <= started}
 
 
-def save(source, store_path, binding, fenced=False, operation_id=None, logical_root=LOGICAL_ROOT,
+def save(source, store_path, binding, lineage, fenced=False, operation_id=None, logical_root=LOGICAL_ROOT,
          git=None, clock=time.time_ns):
-    """Copy the tree into the store and publish it. Returns the published summary."""
+    """Copy the tree into the store and publish it. Returns the published summary.
+
+    lineage names the file recording which checkpoint the tree was restored from. The first save
+    of a volume creates it; every other save requires it to match the current checkpoint."""
     binding = validate_binding(binding)
     if operation_id is not None and not OPERATION.fullmatch(operation_id):
         raise Failed("Invalid operation ID")
@@ -783,10 +851,7 @@ def save(source, store_path, binding, fenced=False, operation_id=None, logical_r
         store.clear("tmp")
         store.clear("staging")
         store.free_before = store.measure()
-        try:
-            current = store.current()
-        except Failed:
-            current = None
+        current = store.current()
         if current is not None and not same_volume(current["binding"], binding):
             raise Failed("Checkpoint store belongs to another workspace volume")
         try:
@@ -794,6 +859,13 @@ def save(source, store_path, binding, fenced=False, operation_id=None, logical_r
         except OSError as error:
             raise Failed("Checkpoint source is unavailable") from error
         try:
+            empty = store.empty()
+            tree = read_lineage(lineage)
+            if tree is None:
+                if not empty:
+                    raise Failed("Checkout tree was not restored from the current checkpoint")
+                tree = write_lineage(lineage, binding, os.fstat(root_fd), None)
+            check_lineage(tree, os.fstat(root_fd), binding, current, empty)
             snapshot = Snapshot(root_fd, store, logical_root, git or Git(), previous_entries(store, current), clock)
             try:
                 try:
@@ -814,6 +886,7 @@ def save(source, store_path, binding, fenced=False, operation_id=None, logical_r
         manifest = dict(
             schemaVersion=SCHEMA_VERSION, type="RepositoryCheckpoint", checkpointId=checkpoint_id,
             binding=binding, mode=mode, operationId=operation_id, logicalRoot=logical_root,
+            treeToken=tree["treeToken"],
             startedAtNs=snapshot.started_ns, completedAt=clock(),
             source=dict(bootId=boot_id(), device=root.st_dev),
             root=dict(mode=stat.S_IMODE(root.st_mode), mtimeNs=root.st_mtime_ns),
@@ -880,9 +953,11 @@ def verify(store_path, binding=None, checkpoint_id=None, operation_id=None, deep
         store.unlock()
 
 
-def restore(store_path, target_parent, name, binding, checkpoint_id=None, uid=CODING_UID, gid=CODING_GID):
+def restore(store_path, target_parent, name, binding, lineage, checkpoint_id=None, uid=CODING_UID,
+            gid=CODING_GID):
     """Restore a checkpoint as target_parent/name through a staging directory. A retry after an
-    interruption discards the unfinished staging copy. An existing target is never replaced."""
+    interruption discards the unfinished staging copy. An existing target is never replaced.
+    The lineage is written before the rename, so a restored tree always has one."""
     binding = validate_binding(binding)
     if not name or "/" in name or name in (".", "..") or name.startswith(".restore"):
         raise Failed("Invalid restore target")
@@ -919,6 +994,7 @@ def restore(store_path, target_parent, name, binding, checkpoint_id=None, uid=CO
                 written = restore_entries(store, manifest, root_fd, uid, gid, chown)
                 finish_dir(root_fd, manifest["root"], uid, gid, chown)
                 syncfs(root_fd)
+                write_lineage(lineage, binding, os.fstat(root_fd), manifest["checkpointId"])
             finally:
                 os.close(root_fd)
             try:
@@ -939,6 +1015,58 @@ def restore(store_path, target_parent, name, binding, checkpoint_id=None, uid=CO
         raise Failed(reason) from error
     finally:
         store.unlock()
+
+
+def prepare_tree(store_path, target_parent, name, binding, lineage, allow_empty=False, restore_missing=True,
+                 logical_root=LOGICAL_ROOT, uid=CODING_UID, gid=CODING_GID, git=None):
+    """Make target_parent/name the live tree of this volume before anything can write to it.
+
+    An existing tree is kept when its lineage matches the current checkpoint, so a reboot of the
+    same VM keeps edits newer than the checkpoint. A missing tree is restored. Only a brand-new
+    volume (allow_empty) may start with an empty tree, which is published at once so that a
+    later empty store is recognized as missing rather than new. restore_missing=False only keeps
+    an existing tree, for callers that cannot wait for a restore."""
+    binding = validate_binding(binding)
+    store = Store(store_path)
+    present = store.prepare(create=False)
+    target = os.path.join(target_parent, name)
+    if present:
+        store.lock(LOCK_SECONDS)
+    try:
+        current = store.current() if present else None
+        empty = not present or store.empty()
+        if current is not None and not same_volume(current["binding"], binding):
+            raise Failed("Checkpoint store belongs to another workspace volume")
+        if empty and not allow_empty:
+            raise Failed("Checkpoint is missing")
+        try:
+            root = os.lstat(target)
+        except FileNotFoundError:
+            root = None
+        if root is not None:
+            if not stat.S_ISDIR(root.st_mode):
+                raise Failed("Invalid checkout tree")
+            tree = read_lineage(lineage)
+            if tree is not None:
+                check_lineage(tree, root, binding, current, empty)
+            elif not empty:
+                raise Failed("Checkout tree was not restored from the current checkpoint")
+            if not empty:
+                return dict(action="kept", checkpointId=current["checkpointId"])
+    finally:
+        store.unlock()
+    if root is None and not restore_missing:
+        raise Failed("Checkout tree must be restored")
+    if root is None and not empty:
+        result = restore(store_path, target_parent, name, binding, lineage, uid=uid, gid=gid)
+        return dict(action="restored", checkpointId=result["checkpointId"], files=result["files"],
+                    bytes=result["bytes"], durationMs=result["durationMs"])
+    if root is None:
+        os.mkdir(target, 0o700)
+        if os.geteuid() == 0:
+            os.chown(target, uid, gid)
+    result = save(target, store_path, binding, lineage, fenced=True, logical_root=logical_root, git=git)
+    return dict(action="initialized", checkpointId=result["checkpointId"])
 
 
 def safe_mode(mode):
@@ -1060,14 +1188,17 @@ def load_binding(path):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("save", "verify", "restore", "status"):
+    for name in ("save", "verify", "restore", "prepare-tree", "status"):
         command = commands.add_parser(name)
         command.add_argument("--store", default=STORE)
         if name != "status":
             command.add_argument("--binding", required=True, help="JSON file with the checkpoint binding")
+        if name in ("save", "restore", "prepare-tree"):
+            command.add_argument("--lineage", required=True, help="file recording the tree's checkpoint")
+        if name in ("save", "prepare-tree"):
+            command.add_argument("--logical-root", default=LOGICAL_ROOT)
         if name == "save":
             command.add_argument("--source", default=SOURCE)
-            command.add_argument("--logical-root", default=LOGICAL_ROOT)
             command.add_argument("--fenced", action="store_true",
                                  help="writers are fenced; a change fails instead of deferring")
             command.add_argument("--operation-id")
@@ -1078,6 +1209,10 @@ def main(argv=None):
             command.add_argument("--deep", action="store_true")
         if name == "restore":
             command.add_argument("--target", required=True, help="absent directory to create")
+        if name == "prepare-tree":
+            command.add_argument("--target", required=True, help="live tree to keep, restore or create")
+            command.add_argument("--allow-empty", action="store_true",
+                                 help="the volume is brand new; an empty store starts an empty tree")
     arguments = parser.parse_args(argv)
     try:
         if arguments.command == "status":
@@ -1085,15 +1220,20 @@ def main(argv=None):
         else:
             binding = load_binding(arguments.binding)
             if arguments.command == "save":
-                result = save(arguments.source, arguments.store, binding, arguments.fenced,
+                result = save(arguments.source, arguments.store, binding, arguments.lineage, arguments.fenced,
                               arguments.operation_id, arguments.logical_root)
             elif arguments.command == "verify":
                 result = verify(arguments.store, binding, arguments.checkpoint_id, arguments.operation_id,
                                 arguments.deep)
             else:
                 target = os.path.normpath(os.path.abspath(arguments.target))
-                result = restore(arguments.store, os.path.dirname(target), os.path.basename(target),
-                                 binding, arguments.checkpoint_id)
+                parent, name = os.path.dirname(target), os.path.basename(target)
+                if arguments.command == "restore":
+                    result = restore(arguments.store, parent, name, binding, arguments.lineage,
+                                     arguments.checkpoint_id)
+                else:
+                    result = prepare_tree(arguments.store, parent, name, binding, arguments.lineage,
+                                          arguments.allow_empty, arguments.logical_root)
         print(json.dumps(dict(ok=True, result=result), sort_keys=True))
         return 0
     except Deferred as error:
