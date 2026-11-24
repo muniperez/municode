@@ -3,6 +3,7 @@
 import argparse
 import datetime as dt
 import hashlib
+from html.parser import HTMLParser
 import http.client
 import http.server
 import importlib.util
@@ -26,6 +27,7 @@ import threading
 import time
 import traceback
 import uuid
+from urllib.parse import urljoin
 
 HERE = Path(__file__).resolve().parent
 RUNTIME = Path("/opt/workspaces-workspace/runtime.py")
@@ -84,6 +86,63 @@ class ProbeError(Exception):
 def check(condition, code):
     if not condition:
         raise ProbeError(code)
+
+
+class T3RendererDocument(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.assets = []
+
+    def handle_starttag(self, tag, attributes):
+        attrs = dict(attributes)
+        if tag == "script" and attrs.get("type") == "module" and attrs.get("src"):
+            self.assets.append(("moduleScripts", attrs["src"], {"text/javascript", "application/javascript"}))
+        elif tag == "link" and attrs.get("href"):
+            relations = (attrs.get("rel") or "").split()
+            if "stylesheet" in relations:
+                self.assets.append(("stylesheets", attrs["href"], {"text/css"}))
+            elif "modulepreload" in relations:
+                self.assets.append(("modulePreloads", attrs["href"], {"text/javascript", "application/javascript"}))
+        elif tag == "img" and attrs.get("id") == "boot-shell-logo":
+            self.assets.append(("splashLogos", attrs.get("src"), {"image/png"}))
+
+
+def t3_renderer_evidence():
+    def request(path, kind, mime_types, limit):
+        client = http.client.HTTPConnection("127.0.0.1", 3773, timeout=10)
+        try:
+            client.request("GET", path)
+            response = client.getresponse()
+            check(response.status == 200, "T3_RENDERER_" + kind + "_STATUS")
+            mime = (response.getheader("Content-Type") or "").split(";", 1)[0].strip().lower()
+            check(mime in mime_types, "T3_RENDERER_" + kind + "_MIME")
+            return response.read(limit)
+        except (OSError, http.client.HTTPException):
+            raise ProbeError("T3_RENDERER_REQUEST_FAILED") from None
+        finally:
+            client.close()
+
+    body = request("/", "DOCUMENT", {"text/html"}, 1024 * 1024 + 1)
+    check(0 < len(body) <= 1024 * 1024, "T3_RENDERER_DOCUMENT_SIZE")
+    document = T3RendererDocument()
+    try:
+        document.feed(body.decode("utf-8"))
+    except UnicodeError:
+        raise ProbeError("T3_RENDERER_DOCUMENT_ENCODING") from None
+    counts = dict(moduleScripts=0, stylesheets=0, modulePreloads=0, splashLogos=0)
+    for kind, reference, _ in document.assets:
+        # Never follow external URLs or query-bearing references from the served document.
+        check(isinstance(reference, str) and bool(reference) and
+              not any(character in reference for character in ("\\", ":", "?", "#")) and
+              not reference.startswith("//"),
+              "T3_RENDERER_REFERENCE")
+        counts[kind] += 1
+    check(counts["moduleScripts"] > 0 and counts["splashLogos"] == 1 and
+          len(document.assets) <= 128, "T3_RENDERER_ENTRYPOINTS")
+    for _, reference, mime_types in document.assets:
+        check(bool(request(urljoin("/", reference), "ASSET", mime_types, 1)),
+              "T3_RENDERER_ASSET_EMPTY")
+    return {**counts, "browserUiVerified": False}
 
 
 def work_inventory_evidence(status):
@@ -1065,6 +1124,7 @@ class Native:
         for prop, expected in (("KillMode", "process"), ("SendSIGKILL", "no")):
             check(command(["systemctl", "show", "workspaces-t3.service", "-p", prop, "--value"]) == expected,
                   "UNSAFE_T3_STOP_POLICY")
+        renderer = t3_renderer_evidence()
         tokens = {}
         help_text = command(["t3", "auth", "session", "issue", "--help"])
         check(all(flag in help_text for flag in ("--scope", "--ttl", "--token-only", "--base-dir")),
@@ -1087,7 +1147,8 @@ class Native:
         result = self.client.call("init", tokenFiles=tokens, createProject=True, projectId=self.t3_project_id)
         self.environment_id = result.pop("environmentId")
         self.snapshot = result["snapshotSequence"]
-        return {**result, "tokenFilesRootOnly": True, "freshBootstrapStartedT3WithoutManualStart": True}
+        return {**result, "tokenFilesRootOnly": True, "freshBootstrapStartedT3WithoutManualStart": True,
+                "renderer": renderer}
 
     def connect_management(self):
         check(command(["systemctl", "is-active", "workspaces-t3-connect.service"]) == "active",

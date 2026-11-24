@@ -1,4 +1,5 @@
 import hashlib
+import http.server
 import importlib.util
 import io
 import json
@@ -9,6 +10,7 @@ import stat
 import subprocess
 import tarfile
 import tempfile
+import threading
 import sys
 import unittest
 import zipfile
@@ -29,6 +31,103 @@ def load(name, filename):
 
 builder = load("generic_image_builder", "build.py")
 native = load("generic_native_qualification", "native.py")
+
+
+class NativeRendererTests(unittest.TestCase):
+    @contextmanager
+    def renderer(self, script_status=200, script_type="text/javascript", script_body=b"export {};",
+                 script_url="/assets/main.js"):
+        requests = []
+        html = ('<img id="boot-shell-logo" src="/apple-touch-icon.png">'
+                f'<script type="module" src="{script_url}"></script>'
+                '<link rel="stylesheet" href="/assets/main.css">').encode()
+        responses = {
+            "/": (200, "text/html; charset=utf-8", html),
+            "/assets/main.js": (script_status, script_type, script_body),
+            "/assets/main.css": (200, "text/css", b"body {}"),
+            "/apple-touch-icon.png": (200, "image/png", b"\x89PNG\r\n\x1a\n"),
+        }
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                requests.append((self.path, dict(self.headers)))
+                status, mime, body = responses.get(self.path, (404, "text/plain", b"missing"))
+                self.send_response(status)
+                self.send_header("Content-Type", mime)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        connection = native.http.client.HTTPConnection
+        try:
+            with patch.object(native.http.client, "HTTPConnection", side_effect=lambda host, port, timeout:
+                              connection("127.0.0.1", server.server_port, timeout=timeout)):
+                yield requests
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def qualify(self):
+        ARTIFACTS.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ARTIFACTS) as directory:
+            probe = native.Native.__new__(native.Native)
+            probe.directory = Path(directory)
+            probe.run_id = "synthetic-renderer"
+            probe.t3_project_id = "synthetic-project"
+            probe.wait = Mock()
+            client = Mock()
+            client.call.return_value = {
+                "environmentId": "synthetic-environment", "snapshotSequence": 1,
+                "realTicketWebSocketOpened": True,
+            }
+
+            def command(argv, **kwargs):
+                if "--operation-id" in argv:
+                    return "synthetic-token"
+                if argv[:4] == ["t3", "auth", "session", "issue"]:
+                    return "--scope --ttl --token-only --base-dir"
+                return {"MainPID": "123", "KillMode": "process", "SendSIGKILL": "no"}[argv[-2]]
+
+            with patch.object(native, "command", side_effect=command), \
+                    patch.object(native, "T3Client", return_value=client):
+                return probe.start_services()
+
+    def test_html_and_ticketed_websocket_success_do_not_qualify_missing_renderer(self):
+        for status, mime, body in ((200, "text/html", b"<html>sensitive-body</html>"),
+                                   (404, "text/javascript", b"missing"),
+                                   (200, "text/javascript", b"")):
+            with self.subTest(status=status, mime=mime), self.renderer(status, mime, body):
+                with self.assertRaisesRegex(native.ProbeError, "T3_RENDERER_ASSET") as caught:
+                    self.qualify()
+                self.assertNotIn("sensitive-body", str(caught.exception))
+                self.assertNotIn("/assets/main.js", str(caught.exception))
+
+    def test_qualification_checks_renderer_without_credentials_or_ui_claim(self):
+        with self.renderer() as requests:
+            result = self.qualify()
+        self.assertIn("renderer", result)
+        self.assertEqual(result["renderer"], {
+            "moduleScripts": 1, "stylesheets": 1, "modulePreloads": 0, "splashLogos": 1,
+            "browserUiVerified": False,
+        })
+        self.assertEqual({path for path, _ in requests},
+                         {"/", "/assets/main.js", "/assets/main.css", "/apple-touch-icon.png"})
+        for _, headers in requests:
+            self.assertNotIn("Authorization", headers)
+            self.assertNotIn("Cookie", headers)
+
+    def test_external_renderer_reference_is_rejected_without_requesting_it(self):
+        with self.renderer(script_url="https://external.example/private.js") as requests, \
+                self.assertRaisesRegex(native.ProbeError, "T3_RENDERER_REFERENCE"):
+            self.qualify()
+        self.assertEqual([path for path, _ in requests], ["/"])
 
 
 class NativeScratchFixtureTests(unittest.TestCase):
@@ -150,7 +249,8 @@ class ImageTests(unittest.TestCase):
             client = Mock()
             client.call.return_value = {"environmentId": "fixture-env", "snapshotSequence": 1}
             with patch.object(native, "command", side_effect=command), \
-                    patch.object(native, "T3Client", return_value=client):
+                    patch.object(native, "T3Client", return_value=client), \
+                    patch.object(native, "t3_renderer_evidence", return_value={"browserUiVerified": False}):
                 probe.start_services()
         self.assertEqual(expected, set(issued["native-token-operate"]))
         self.assertEqual(len(expected), len(issued["native-token-operate"]))
