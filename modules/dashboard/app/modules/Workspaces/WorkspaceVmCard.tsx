@@ -67,7 +67,7 @@ function VmGenerationCard({ workspaceId, organizationId, vm, currency, refresh, 
   const inFlight = useRef(false);
   const request = useRef(0);
   const launchPopup = useRef<{ popup: Window; context: string } | null>(null);
-  const { ready, starting, failed } = vmStartup(vm);
+  const { ready, starting, reconciling, failed } = vmStartup(vm);
   const context = JSON.stringify([vm.revision, vm.generation, ready, canManage, service, previewSlug]);
   const currentContext = useRef(context);
   currentContext.current = context;
@@ -285,7 +285,7 @@ function VmGenerationCard({ workspaceId, organizationId, vm, currency, refresh, 
     {vm.startAfterStop && <p role="status" className="px-5 py-2 text-sm">This VM will start again after it finishes stopping. Select Stop VM to cancel.</p>}
     {pending && !startingRequest && <p role="status" className="px-5 py-2 text-sm">{pending}</p>}
     {!canManage && <p className="px-5 py-2 text-xs text-muted-foreground">You can view this VM but can't start, stop or open it.</p>}
-    {vm.errorCode && !awaitingGit && <p role="alert" className="break-words px-5 py-2 text-sm text-destructive">{vm.errorCode}: {vm.errorMessage ?? "No additional details reported."}</p>}
+    {vm.errorCode && !awaitingGit && !reconciling && <p role="alert" className="break-words px-5 py-2 text-sm text-destructive">{vm.errorCode}: {vm.errorMessage ?? "No additional details reported."}</p>}
     {error && <p role="alert" className="break-words px-5 py-2 text-sm text-destructive">{error}</p>}
     {ready && previewOpen && <form aria-label={`Open preview for VM ${vm.id}`} className="flex flex-wrap items-end gap-2 border-t px-5 py-3" onSubmit={event => { event.preventDefault(); authorize(previewSlug.trim()); }}>
       <label className="min-w-0 space-y-1 text-sm">Preview name<Input className="w-full sm:w-48" value={previewSlug} disabled={blocked} placeholder="my-preview" required onChange={event => { ++request.current; setLaunch(null); setPreviewSlug(event.target.value); }} /></label>

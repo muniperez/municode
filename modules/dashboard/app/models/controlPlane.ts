@@ -171,4 +171,6 @@ export type DevelopmentWorkspaceVm = {
   startAfterStop?: boolean;
   startupStage?: string | null;
   resources?: DevelopmentWorkspaceVmResources | null;
+  /** Status of the VM's current start operation; "pending"/"running" means it is still active or retrying. */
+  startupOperationStatus?: "pending" | "running" | "failed" | null;
 };

@@ -334,6 +334,19 @@ it("uses observed identity, phases and activity with defined ephemeral precedenc
   expect(lastActivity(workspace({ lastActivityAt: "invalid" }))).toBeNull();
 });
 
+it("shows a blocked VM whose original start is still being retried as starting, and a failed start as needing attention", () => {
+  const blocked = { phase: "blocked", desiredState: "running", errorCode: "workspace_reconciliation_required" } as const;
+  const retrying = workspace({ vms: [vm("primary", { ...blocked, startupOperationStatus: "pending" })] });
+  expect(primaryState(retrying)).toEqual({ value: "starting", label: "Starting" });
+  expect(primaryState(workspace({ vms: [vm("primary", { ...blocked, startupOperationStatus: "running" })] })).value).toBe("starting");
+  expect(primaryState(workspace({ vms: [vm("primary", { ...blocked, startupOperationStatus: "failed" })] })))
+    .toEqual({ value: "attention", label: "Needs attention" });
+  expect(primaryState(workspace({ vms: [vm("primary", blocked)] })).value).toBe("attention");
+  expect(ephemeralSummary(workspace({ vms: [vm("a", { ...blocked, startupOperationStatus: "pending" })] })))
+    .toEqual({ state: "transitioning", label: "1 starting or stopping" });
+  expect(ephemeralSummary(workspace({ vms: [vm("a", { ...blocked, startupOperationStatus: "failed" })] })).state).toBe("attention");
+});
+
 it("labels permanent deletion from volume status, not from ordinary compute deletion", () => {
   const computeDeletion = workspace({ phase: "deleting", vms: [vm("primary", { phase: "deleting" })] });
   expect(permanentDeletion(computeDeletion)).toBeNull();

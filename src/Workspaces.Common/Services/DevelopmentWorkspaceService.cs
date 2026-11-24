@@ -282,23 +282,32 @@ public sealed partial class DevelopmentWorkspaceService(
     public async Task<DevelopmentWorkspace?> GetAsync(string workspaceId, string organizationId, CancellationToken ct) =>
         await db.DevelopmentWorkspaces.AsNoTracking().Include(x => x.Vms).ThenInclude(x => x.TaskLeases).SingleOrDefaultAsync(x => x.Id == workspaceId && x.OrganizationId == organizationId, ct);
 
-    public async Task<DevelopmentWorkspaceResponse> ToDetailResponseAsync(DevelopmentWorkspace workspace, CancellationToken ct)
+    public async Task<DevelopmentWorkspaceResponse> ToDetailResponseAsync(DevelopmentWorkspace workspace, CancellationToken ct) =>
+        (await ToStartupResponsesAsync([workspace], ct))[0];
+
+    // Adds the allowlisted stage and status of each starting VM's current start operation without exposing operation identity.
+    public async Task<IReadOnlyList<DevelopmentWorkspaceResponse>> ToStartupResponsesAsync(
+        IReadOnlyList<DevelopmentWorkspace> items, CancellationToken ct)
     {
-        var response = ToResponse(workspace);
-        var starting = workspace.Vms.Where(vm => vm is { DesiredState: "running", Phase: not "ready", OperationId: not null })
+        var responses = items.Select(ToResponse).ToArray();
+        var starting = items.SelectMany(workspace => workspace.Vms)
+            .Where(vm => vm is { DesiredState: "running", Phase: not "ready", OperationId: not null })
             .ToDictionary(vm => vm.Id);
-        if (starting.Count == 0) return response;
+        if (starting.Count == 0) return responses;
+        var workspaceIds = items.Select(workspace => workspace.Id).ToArray();
         var operationIds = starting.Values.Select(vm => vm.OperationId!).ToArray();
         var operations = await db.DevelopmentWorkspaceOperations.AsNoTracking()
-            .Where(op => op.WorkspaceId == workspace.Id && op.Kind == "start" && operationIds.Contains(op.Id))
-            .Select(op => new { op.Id, op.VmId, op.Generation, op.Step }).ToDictionaryAsync(op => op.Id, ct);
+            .Where(op => workspaceIds.Contains(op.WorkspaceId) && op.Kind == "start" && operationIds.Contains(op.Id))
+            .Select(op => new { op.Id, op.WorkspaceId, op.VmId, op.Generation, op.Step, op.Status })
+            .ToDictionaryAsync(op => op.Id, ct);
+        if (operations.Count == 0) return responses;
 
-        return response with
+        return responses.Select(response => response with
         {
             Vms = response.Vms!.Select(vm =>
             {
                 if (!starting.TryGetValue(vm.Id, out var machine) ||
-                    !operations.TryGetValue(machine.OperationId!, out var op) ||
+                    !operations.TryGetValue(machine.OperationId!, out var op) || op.WorkspaceId != response.Id ||
                     op.VmId != vm.Id || op.Generation != vm.Generation) return vm;
                 return vm with
                 {
@@ -310,10 +319,12 @@ public sealed partial class DevelopmentWorkspaceService(
                         "bootstrap" => "setting_up",
                         "session" => "checking_readiness",
                         _ => null
-                    }
+                    },
+                    // pending/running after a blocked attempt means the worker is still retrying the same start.
+                    StartupOperationStatus = op.Status is "pending" or "running" or "failed" ? op.Status : null
                 };
             }).ToArray()
-        };
+        }).ToArray();
     }
 
     public const string RetainedStorageUnavailable = "workspace_storage_unavailable";
