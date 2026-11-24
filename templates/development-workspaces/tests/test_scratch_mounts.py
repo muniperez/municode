@@ -465,6 +465,59 @@ class ScratchMountTests(unittest.TestCase):
         self.assertTrue(prepared["ready"])
         self.assertEqual("x", (app / "keep").read_text())
 
+    def test_interrupted_legacy_marker_rewrite_after_detach_preserves_scratch_and_checkout(self):
+        for corruption in ('{"target":', '{}'):
+            with self.subTest(corruption=corruption):
+                app = self.repo("app-" + str(len(corruption)), ["node_modules/"],
+                                files=["package.json"], tracked=["keep"])
+                self.apply()
+                leaf = self.leaf(app / "node_modules")
+                (leaf / "cache.js").write_text("scratch output before interruption")
+                request = self.deletion_request(app)
+                prepared = self.helper.prepare_delete(request)
+                self.assertTrue(prepared["ready"], prepared)
+                self.assertEqual(1, prepared["unmountedMounts"])
+                self.assertNotIn(str(app / "node_modules"), self.mounted())
+                scratch_before = self.tree(leaf.parent)
+                checkout_before = self.tree(app)
+                marker = Path(self.helper.delete_marker(request))
+                with self.assertRaises(KeyboardInterrupt):
+                    with marker.open("w") as stream:
+                        stream.write(corruption)
+                        stream.flush()
+                        raise KeyboardInterrupt("interrupted historical in-place marker rewrite")
+                other = self.repo("other-" + str(len(corruption)), ["node_modules/"],
+                                  files=["package.json"], tracked=["keep"])
+                self.sys.ws_percent = lambda: 95
+                status = self.apply(self.make_helper())
+                self.assertEqual(scratch_before, self.tree(leaf.parent))
+                self.assertEqual(checkout_before, self.tree(app))
+                self.assertEqual("scratch output before interruption", (leaf / "cache.js").read_text())
+                self.assertNotIn(str(app / "node_modules"), self.mounted())
+                self.assertIn(str(other / "node_modules"), self.mounted())
+                self.assertEqual(0, status["pressure"]["evicted"])
+                self.assertTrue(all(not lazy for _, lazy in self.sys.umounts))
+                self.assertEqual("scratch_delete_unsupported",
+                                 self.helper.prepare_delete(request)["refused"])
+                self.assertFalse(self.helper.finish_delete(request)["released"])
+                self.assertEqual(corruption, marker.read_text())
+
+    def test_partial_marker_prevents_pressure_eviction_only_below_its_exact_target(self):
+        app = self.repo("app", ["dist/", "coverage/"], tracked=["keep"])
+        for name, stamp in (("dist", 1000), ("coverage", 2000)):
+            (app / name).mkdir()
+            (app / name / "cache").write_text("keep until safe to evict")
+            os.utime(app / name / "cache", (stamp, stamp))
+        marker = Path(self.helper.delete_marker(self.deletion_request(app / "dist")))
+        marker.write_text('{"target":')
+        marker.chmod(0o600)
+        self.sys.ws_percent = lambda: 95 if (app / "coverage").exists() else 79
+        status = self.apply(self.make_helper(quiet=10 ** 9))
+        self.assertEqual("keep until safe to evict", (app / "dist/cache").read_text())
+        self.assertEqual("x", (app / "keep").read_text())
+        self.assertFalse((app / "coverage").exists())
+        self.assertEqual([{"path": "app/coverage"}], status["evicted"])
+
     def test_interrupted_first_marker_write_never_detaches_and_legacy_markers_replay(self):
         app = self.repo("app", ["node_modules/"], files=["package.json"], tracked=["keep"])
         self.apply()
@@ -506,8 +559,10 @@ class ScratchMountTests(unittest.TestCase):
                 request = self.deletion_request(app)
                 request["jobId"] += "-" + interruption
                 launches = []
+                preparation_calls = []
 
                 def prepare(payload):
+                    preparation_calls.append(payload)
                     try:
                         return self.make_helper(stop=lambda: payload.get("cancelled", False)).prepare_delete(payload)
                     except subprocess.TimeoutExpired as error:
@@ -540,6 +595,8 @@ class ScratchMountTests(unittest.TestCase):
                 original = self.sys.umount
 
                 def die_after_detach(*args, **kwargs):
+                    record_path = state / "fsjobs" / (request["jobId"] + ".json")
+                    self.assertEqual("preparing", json.loads(record_path.read_text())["stage"])
                     original(*args, **kwargs)
                     if interruption == "timeout":
                         raise subprocess.TimeoutExpired("scratch helper", 30)
@@ -551,6 +608,8 @@ class ScratchMountTests(unittest.TestCase):
                 record = json.loads((state / "fsjobs" / (request["jobId"] + ".json")).read_text())
                 self.assertEqual("preparing", record["stage"])
                 self.assertNotIn("preparation", record)
+                self.assertEqual(1, len(preparation_calls))
+                self.assertEqual(request["jobId"], preparation_calls[0]["jobId"])
                 self.assertEqual([], launches)
                 self.assertEqual("x", (app / "keep").read_text())
                 self.apply(self.make_helper())
