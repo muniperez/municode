@@ -908,6 +908,17 @@ reported partial, with another checkout's tracked files unchanged. Synthetic tes
 qualify a hosted image; repeat these checks on the exact newly built image before claiming
 hosted acceptance or rollout. No hosted/provider changes are part of #42.
 
+### Stop held in Draining
+
+While a stop is `Draining`, the workspace and CLI report whether unresolved control-plane
+tasks, guest work inventory, or the T3 orchestration snapshot is holding the stop. These
+holds retry automatically. Stop detached work cleanly and resolve T3 runs or pending requests
+through T3; a provider process exiting does not by itself prove orchestration is idle. A T3
+hold names its category (active or queued run, pending request, or pending background work)
+without thread or task identifiers. Cancel stale queued runs normally; if a completed thread
+still lists background work that is no longer running, use T3 **Force Stop** on that thread.
+Stop must finish before permanent workspace deletion is allowed.
+
 ### JSON control protocol
 
 Run `python3 -B /opt/workspaces-workspace/runtime.py call`, sending one newline-terminated
@@ -1049,6 +1060,35 @@ contents are persisted or logged. Older runtimes still yield known reason codes;
 the updated runtime additionally identifies the failing freeze stage and adapter
 failure category. Missing diagnostics never authorize deletion or bypass SSH,
 generation, task, filesystem, Git-save or provider-ownership checks.
+
+#### T3 shell is idle but committed state blocks stop
+
+`workspace_drain_t3_committed_state` means the guest found nonterminal or
+unrecognized committed T3 state independently of the shell. The message retains
+the first rejecting table (for example `t3_work_not_idle_nodes` or
+`t3_work_not_idle_turn_items`) while the worker retries. Terminal runs, attempts
+and provider turns are not proof that their nodes or turn items are idle.
+
+1. For a shell that is still busy, cancel queued work in T3 and use **Force Stop**
+   on the affected thread for background work you intend to stop. Pinned T3
+   [Force Stop targets the active or latest started run](https://github.com/pingdotgg/t3code/blob/24e77473ecf41bc1f7142529c7911c1c1aae1d76/apps/server/src/orchestration-v2/ThreadManagementService.ts#L1200-L1273);
+   it is not a historical projection repair.
+2. If the shell is idle but the guest still reports this hold, the supported
+   recovery to try on this pin is a graceful restart of the **guest T3 service**,
+   not a VM deletion. Coordinate operator maintenance and confirm that the guest
+   has reopened after the failed freeze and that restarting won't interrupt
+   genuine work. Restart `workspaces-t3.service` through its existing systemd
+   supervisor, then let the normal stop retry verify both gates. T3 0.1.9
+   [reconciles at shutdown and startup](https://github.com/pingdotgg/t3code/blob/24e77473ecf41bc1f7142529c7911c1c1aae1d76/apps/server/src/serverRuntimeStartup.ts#L475-L545)
+   and [settles certain stale background items and linked nodes](https://github.com/pingdotgg/t3code/blob/24e77473ecf41bc1f7142529c7911c1c1aae1d76/apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.ts#L661-L716).
+3. If the rejection persists, keep compute and the retained data intact and
+   escalate to T3 support with the pin, sanitized reason/stage and counts by
+   entity type/status. The pinned recovery scan
+   [selects specific candidates](https://github.com/pingdotgg/t3code/blob/24e77473ecf41bc1f7142529c7911c1c1aae1d76/apps/server/src/orchestration-v2/ProjectionStore.ts#L4322-L4402);
+   it does not sweep every historical orphan node or turn item. No supported
+   repair for arbitrary residual rows was found in 0.1.9. `t3 doctor` compacts
+   storage; it is not a lifecycle-state repair. Do not edit SQLite, invoke
+   private settlement commands, or bypass the guest check.
 
 T3 is the known infrastructure main process, **not a quiescence API**. By default child
 terminals, providers/builds and every other coding process block unless finished. Parent must fence

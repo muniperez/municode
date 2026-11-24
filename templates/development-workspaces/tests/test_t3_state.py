@@ -144,6 +144,48 @@ class T3StateTests(unittest.TestCase):
         with self.assertRaisesRegex(rt.Blocked, "active/pending"):
             rt.t3_idle_database(self.db, 0)
 
+    def test_stopped_provider_session_does_not_clear_stale_run_or_pending_request(self):
+        self.writer.executescript("""
+            UPDATE orchestration_v2_projection_runs SET status='running';
+            UPDATE orchestration_v2_projection_runtime_requests SET status='pending';
+        """)
+        with self.assertRaisesRegex(rt.Blocked, "projection_runs"):
+            rt.t3_idle_database(self.db, 0)
+        self.writer.execute("UPDATE orchestration_v2_projection_runs SET status='interrupted'")
+        self.writer.commit()
+        with self.assertRaisesRegex(rt.Blocked, "projection_runtime_requests"):
+            rt.t3_idle_database(self.db, 0)
+        self.writer.execute("UPDATE orchestration_v2_projection_runtime_requests SET status='resolved'")
+        self.writer.commit()
+        rt.t3_idle_database(self.db, 0)
+
+    def test_idle_cursor_with_terminal_turns_still_rejects_orphaned_nodes_and_items(self):
+        self.writer.executescript("""
+            INSERT INTO orchestration_events VALUES (42,2,'thread');
+            UPDATE orchestration_v2_projection_metadata SET last_sequence=42;
+        """)
+        for table, count, status in (
+                ("runs", 5, "completed"), ("run_attempts", 5, "completed"),
+                ("provider_turns", 5, "completed"), ("nodes", 15, "running"),
+                ("turn_items", 10, "running")):
+            name = "orchestration_v2_projection_" + table
+            self.writer.execute("DELETE FROM " + name)
+            self.writer.executemany("INSERT INTO " + name + " VALUES (?,?)",
+                                    [("thread-fixture", status)] * count)
+        self.writer.commit()
+        before = self.db.read_bytes()
+        with self.assertRaisesRegex(rt.Blocked, "projection_nodes$"):
+            rt.t3_idle_database(self.db, 42)
+        self.assertEqual(before, self.db.read_bytes())
+
+        self.writer.execute("UPDATE orchestration_v2_projection_nodes SET status='completed'")
+        self.writer.commit()
+        with self.assertRaisesRegex(rt.Blocked, "projection_turn_items$"):
+            rt.t3_idle_database(self.db, 42)
+        self.writer.execute("UPDATE orchestration_v2_projection_turn_items SET status='completed'")
+        self.writer.commit()
+        rt.t3_idle_database(self.db, 42)
+
     def test_unknown_schema_version_missing_table_and_invalid_cursor_fail_closed(self):
         for sequence in (-1, True, "0"):
             with self.subTest(sequence=sequence), self.assertRaises(rt.Blocked):

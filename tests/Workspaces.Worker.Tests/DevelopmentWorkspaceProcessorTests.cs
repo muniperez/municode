@@ -43,6 +43,7 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
     private readonly DiagnosticLogger diagnostics = new();
     private readonly List<string> shellAuthorizations = [];
     private long t3SnapshotSequence = 7;
+    private object[] t3Threads = [];
     private readonly DevelopmentWorkspaceWorkerOptions workerOptions = new()
     {
         ApiBaseUrl = "https://control.example.test", ManagementAddresses = ["198.51.100.1/32"],
@@ -112,7 +113,7 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         {
             shellAuthorizations.Add(context.Request.Headers.Authorization.ToString());
             return Results.Json(new { schemaVersion = 1, snapshotSequence = t3SnapshotSequence,
-                threads = Array.Empty<object>(), archivedThreads = Array.Empty<object>() });
+                threads = t3Threads, archivedThreads = Array.Empty<object>() });
         });
         t3.MapGet("/", () => Results.Ok());
         t3.Map("/ws", async context =>
@@ -664,6 +665,144 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task StopReportsSuccessiveDrainBlockersAndRetriesWhenTheyClear()
+    {
+        var (workspace, vm, operation) = await SeedStop("pending");
+        Assert.False(await lifecycle.HasUnresolvedTasksAsync(vm, default));
+        runtime.Inventory = "BusyOrUnknown";
+        runtime.InventoryReason = "Unregistered live coding process; terminal input observation is not qualified";
+
+        async Task AssertHold(string code, string message)
+        {
+            await Hop("wait-for-tasks");
+            var current = await CurrentVm(vm.Id);
+            Assert.Equal("draining", current.Phase);
+            Assert.Equal(code, current.ErrorCode);
+            Assert.Contains(message, current.ErrorMessage);
+            var stop = await CurrentOperation(operation.Id);
+            Assert.Equal(("pending", code, current.ErrorMessage), (stop.Status, stop.ErrorCode, stop.ErrorMessage));
+            Assert.True(current.GatewayReady);
+            Assert.Null(current.QuiescenceReceipt);
+            Assert.Equal(0, cloud.Detaches);
+            Assert.Equal(0, cloud.Deletes);
+        }
+
+        await AssertHold("workspace_drain_unregistered_process", "unregistered coding process");
+        var denied = await Assert.ThrowsAsync<DevelopmentWorkspaceException>(() =>
+            lifecycle.DeleteAsync(workspace.Id, "org", true, "actor", default));
+        Assert.Equal("workspace_delete_requires_stop", denied.Code);
+        Assert.Empty(shellAuthorizations);
+
+        runtime.InventoryReason = "/private/guest-detail";
+        await AssertHold("workspace_drain_guest_inventory", "could not confirm");
+        Assert.DoesNotContain("/private/guest-detail", (await CurrentVm(vm.Id)).ErrorMessage);
+
+        runtime.Inventory = "IdleCandidate";
+        t3Threads = [new { status = "running", activeRunId = "fixture-run", pendingRuntimeRequest = (object?)null }];
+        await AssertHold("workspace_drain_t3_activity", "active or queued run");
+        t3Threads = [new { status = "idle", activeRunId = (string?)null, pendingRuntimeRequest = new { id = "fixture-request" } }];
+        await AssertHold("workspace_drain_t3_activity", "pending request");
+
+        t3Threads = Enumerable.Range(1, 2).Select(i => (object)new
+            { status = "queued", latestRunId = $"queued-{i}", activeRunId = (string?)null, pendingRuntimeRequest = (object?)null }).ToArray();
+        await AssertHold("workspace_drain_t3_activity", "active or queued run");
+        t3Threads = [new
+        {
+            status = "completed", activeRunId = (string?)null, pendingRuntimeRequest = (object?)null,
+            pendingBackgroundTasks = Enumerable.Range(1, 6).Select(i => new { taskId = $"background-{i}" })
+        }];
+        await AssertHold("workspace_drain_t3_activity", "pending background work");
+        Assert.DoesNotContain("background-1", (await CurrentVm(vm.Id)).ErrorMessage);
+        Assert.DoesNotContain("quiesce", runtime.Actions);
+
+        t3Threads = [];
+        await Hop("gateway-drain");
+        Assert.Null((await CurrentVm(vm.Id)).ErrorCode);
+        Assert.Null((await CurrentOperation(operation.Id)).ErrorMessage);
+
+        // A request can also arrive before the final idle check after gateway fencing.
+        t3Threads = [new { status = "idle", activeRunId = (string?)null, pendingRuntimeRequest = new { id = "late-request" } }];
+        clock.Advance(TimeSpan.FromSeconds(76));
+        await Hop("quiesce");
+        await AssertHold("workspace_drain_t3_activity", "pending request");
+        Assert.DoesNotContain("quiesce", runtime.Actions);
+        t3Threads = [];
+        await Hop("gateway-drain");
+        clock.Advance(TimeSpan.FromSeconds(76));
+        foreach (var step in new[] { "quiesce", "detach", "detached", "delete-intent", "commit-delete",
+                     "delete", "delete-confirm", "delete", "cleanup", "stopped" })
+            await Hop(step);
+        Assert.Equal("stopped", (await CurrentVm(vm.Id)).Phase);
+        Assert.Empty(cloud.Servers);
+        Assert.Equal("ip-owned", Assert.Single(cloud.DeletedIps));
+        Assert.Equal("firewall-owned", Assert.Single(cloud.DeletedFirewalls));
+        Assert.Equal("volume-retained", cloud.Volume?.Id);
+
+        await lifecycle.DeleteAsync(workspace.Id, "org", true, "actor", default);
+        var deletionId = (await CurrentVm(vm.Id)).OperationId!;
+        await Hop();
+        Assert.Equal("delete-verified-volume", (await CurrentOperation(deletionId)).Step);
+        await Hop();
+        Assert.Equal("deleted", (await CurrentVm(vm.Id)).Phase);
+        Assert.Equal("deleted", (await CurrentWorkspace(workspace.Id)).VolumeStatus);
+        Assert.Equal("provider-absence-confirmed", (await CurrentOperation(deletionId)).Step);
+        Assert.Equal("volume-retained", Assert.Single(cloud.DeletedVolumes));
+        Assert.Null(cloud.Volume);
+    }
+
+    [Fact]
+    public async Task StopReportsCommittedT3RejectionEvenWhileRetryingAnIdleShell()
+    {
+        var (_, vm, operation) = await SeedStop("pending");
+        runtime.Rejections["quiesce"] = JsonSerializer.SerializeToElement(new
+        {
+            ok = false, state = "Blocked",
+            reason = "T3 has active/pending work or an unknown status in orchestration_v2_projection_nodes",
+            diagnostic = new { stage = "t3-snapshot", failureType = "blocked" }
+        }, Json);
+        runtime.BeforeAction = action =>
+        {
+            if (action == "quiesce" && runtime.Rejections.ContainsKey(action))
+                runtime.Phase = "Frozen";
+        };
+
+        await Hop("gateway-drain");
+        clock.Advance(TimeSpan.FromSeconds(76));
+        await Hop("quiesce");
+        await Hop("wait-for-tasks");
+        Assert.Contains("resume", runtime.Actions);
+        Assert.True((await CurrentVm(vm.Id)).GatewayReady);
+        Assert.True(shellAuthorizations.Count > 1);
+
+        async Task AssertCommittedHold()
+        {
+            var current = await CurrentVm(vm.Id);
+            var stop = await CurrentOperation(operation.Id);
+            Assert.Equal("draining", current.Phase);
+            Assert.Equal("workspace_drain_t3_committed_state", current.ErrorCode);
+            Assert.Contains("t3_work_not_idle_nodes", current.ErrorMessage);
+            Assert.Contains("t3-snapshot", current.ErrorMessage);
+            Assert.Equal((current.ErrorCode, current.ErrorMessage), (stop.ErrorCode, stop.ErrorMessage));
+            Assert.Null(current.QuiescenceReceipt);
+            Assert.Equal(0, cloud.Detaches);
+            Assert.Equal(0, cloud.Deletes);
+        }
+
+        await AssertCommittedHold();
+        await Hop("gateway-drain");
+        await AssertCommittedHold();
+        await Hop("gateway-drain");
+        await AssertCommittedHold();
+        clock.Advance(TimeSpan.FromSeconds(76));
+        await Hop("quiesce");
+        await AssertCommittedHold();
+        runtime.Rejections.Remove("quiesce");
+        await Hop("detach");
+        Assert.Null((await CurrentVm(vm.Id)).ErrorCode);
+        Assert.Null((await CurrentOperation(operation.Id)).ErrorCode);
+    }
+
+    [Fact]
     public async Task PublishingRefreshCannotRepublishRevokedGatewayRouteWithoutExplicitRevival()
     {
         var (workspace, vm, operation) = await SeedStop("wait-for-tasks");
@@ -731,6 +870,12 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         if (recoveryFails)
         {
             Assert.Equal(failureAction, proof.RootElement.GetProperty("lastRuntimeRecoveryRejection").GetProperty("action").GetString());
+            Assert.Contains("t3_snapshot_changed", saved.ErrorMessage);
+            Assert.DoesNotContain("private", saved.ErrorMessage);
+        }
+        else
+        {
+            Assert.Equal("workspace_drain_quiescence_refused", saved.ErrorCode);
             Assert.Contains("t3_snapshot_changed", saved.ErrorMessage);
             Assert.DoesNotContain("private", saved.ErrorMessage);
         }
@@ -1621,6 +1766,7 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         public int ConnectCredentialReads { get; private set; }
         public bool TaskRunning { get; set; }
         public string? Inventory { get; set; } = "IdleCandidate";
+        public string? InventoryReason { get; set; }
         public bool GitClean { get; set; } = true;
         public string Phase { get; set; } = "Ready";
         public string ReceiptFilesystemUuid { get; set; } = "filesystem-retained";
@@ -1664,7 +1810,7 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
                     ["vmId"] = target.VmId, ["generation"] = target.Generation, ["kind"] = target.Kind, ["phase"] = Phase,
                     ["tasks"] = TaskRunning ? new Dictionary<string, object> { ["runtime-task"] = new { state = "Running" } } : new()
                 };
-                if (Inventory is not null) result["workInventory"] = new { state = Inventory };
+                if (Inventory is not null) result["workInventory"] = new { state = Inventory, reason = InventoryReason };
                 if (Resources is not null) result["resources"] = Resources;
                 if (Capabilities is not null) result["capabilities"] = Capabilities;
                 return Task.FromResult(JsonSerializer.SerializeToElement(new { ok = true, result }, Json));

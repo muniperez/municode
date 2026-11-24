@@ -98,6 +98,17 @@ class IdleTerminalTests(unittest.TestCase):
         self.write(110, argv=["/bin/sh", "-i"])
         self.inspect()
 
+    def test_detached_database_and_live_copilot_child_hold_idle_until_both_exit(self):
+        shutil.rmtree(self.root / "110")
+        self.config["observedTerminalInputs"] = False
+        self.write(120, ppid=1, tty=0, argv=["postgres"])
+        self.write(130, ppid=100, tty=0, argv=["copilot"], state="R")
+        for pid in (120, 130):
+            with self.assertRaisesRegex(rt.Blocked, "Unregistered live coding process"):
+                self.inspect()
+            shutil.rmtree(self.root / str(pid))
+        self.inspect()
+
     def pselect(self, mask=1, **overrides):
         (self.root / "110/mem").write_bytes(bytes(64) + mask.to_bytes(8, "little"))
         self.write(110, syscall="270 0x1 0x40 0x0 0x0 0x0 0x0 0x100 0x200",
