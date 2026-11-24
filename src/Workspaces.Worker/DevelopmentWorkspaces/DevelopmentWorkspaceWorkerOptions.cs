@@ -25,6 +25,9 @@ public sealed class DevelopmentWorkspaceWorkerOptions
     // New primary volumes use storage layout 2 (VM-disk checkouts checkpointed to the volume).
     // Requires an image whose runtime supports it; existing workspaces keep their layout.
     public bool LocalCheckouts { get; set; }
+    // Layout 2: how often a running primary checkpoints its checkouts to the retained volume.
+    public int CheckpointIntervalSeconds { get; set; } = DefaultCheckpointIntervalSeconds;
+    internal const int DefaultCheckpointIntervalSeconds = 300;
     public Dictionary<string, DevelopmentWorkspacePreviewService> PreviewServices { get; set; } = new()
     {
         ["connect"] = new() { Port = 774 }
@@ -44,6 +47,8 @@ public sealed class DevelopmentWorkspaceWorkerOptions
             RelayMinimumPort < Math.Max(1024, gateway.MinimumRelayPort) ||
             RelayMaximumPort > Math.Min(65535, gateway.MaximumRelayPort) || RelayMinimumPort > RelayMaximumPort)
             throw new InvalidOperationException("Workspace relays require an absolute lock path, private bind address and a port range within the gateway range.");
+        if (CheckpointIntervalSeconds is < 60 or > 3600)
+            throw new InvalidOperationException("Workspace checkpoint intervals must be between 60 and 3600 seconds.");
         foreach (var (service, preview) in PreviewServices)
         {
             if (!Regex.IsMatch(service, "^[a-z][a-z0-9-]{0,15}$") || service == "t3" ||

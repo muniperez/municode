@@ -183,6 +183,28 @@ class CheckpointTests(unittest.TestCase):
         finally:
             holder.unlock()
 
+    def test_admission_refused_under_the_lock_records_nothing_and_releases_the_lock(self):
+        (self.source / "file.txt").write_text("data\n")
+        first = self.save()
+        before = rc.status(self.store)
+        seen = []
+
+        def refuse():
+            # The check runs while this save holds the store lock.
+            other = rc.Store(self.store)
+            with self.assertRaisesRegex(rc.Deferred, "Another checkpoint"):
+                other.lock(0)
+            seen.append(True)
+            raise rc.Deferred("Workspace is not admitting periodic checkpoints")
+
+        (self.source / "file.txt").write_text("newer\n")
+        with self.assertRaisesRegex(rc.Deferred, "not admitting"):
+            self.save(admit=refuse)
+        self.assertEqual([True], seen)
+        self.assertEqual(before, rc.status(self.store))
+        self.assertEqual(first["checkpointId"], rc.status(self.store)["checkpointId"])
+        self.assertNotEqual(first["checkpointId"], self.save(admit=lambda: None)["checkpointId"])
+
     def test_binding_mismatch_is_refused(self):
         (self.source / "file.txt").write_text("data\n")
         self.save()

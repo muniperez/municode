@@ -21,6 +21,7 @@ export function WorkspaceStorageCostsTab({ item, organizationId, refresh, canMan
   const ordered = [...(primary ? [primary] : []), ...vms.filter(vm => vm.id !== primary?.id)];
   // Disk tools stay scoped to each VM's own disk and only appear where that VM reports supported resources.
   const diskVms = canManage ? ordered.filter(vm => vm.resources && vm.resources.state !== "unsupported") : [];
+  const localCheckouts = item.storageLayout === 2;
   return <>
     <Card>
       <CardHeader><CardTitle>Storage</CardTitle></CardHeader>
@@ -30,7 +31,12 @@ export function WorkspaceStorageCostsTab({ item, organizationId, refresh, canMan
           <Metric label="Status" value={item.volumeStatus ?? "Status unavailable"} />
           <Metric label="Estimated cost per month" value={`${item.estimatedMonthlyStorage.toFixed(2)} ${item.currency}`} />
           <Metric label="Prices last updated" value={item.pricingUpdatedAt ?? "Unavailable"} />
+          {localCheckouts && <Metric label="Checkouts last saved to storage"
+            value={`${item.lastCheckpointAt ?? "Never"} · ${item.checkpointStatus ?? "Status unavailable"}`} />}
+          <Metric label="Last verified off-host backup"
+            value={`${item.lastBackupAt ?? "None"} · ${item.backupStatus ?? "Status unavailable"}`} />
         </dl>
+        {localCheckouts && <p className="text-sm text-muted-foreground">Checkouts in /workspace/repos run on the primary VM's own disk and are saved to this storage every few minutes and when the VM stops. If the VM fails, edits since the last save can be lost.</p>}
         <p className="text-sm text-muted-foreground">Storage is charged even when all VMs are stopped. Only files on this storage are kept when the primary VM is replaced; other disks, including every temporary VM's disk, are deleted. Storage isn't a backup.</p>
       </CardContent>
     </Card>

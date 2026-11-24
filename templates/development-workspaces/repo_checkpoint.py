@@ -833,11 +833,13 @@ def previous_entries(store, current):
 
 
 def save(source, store_path, binding, lineage, fenced=False, operation_id=None, logical_root=LOGICAL_ROOT,
-         git=None, clock=time.time_ns):
+         git=None, clock=time.time_ns, admit=None):
     """Copy the tree into the store and publish it. Returns the published summary.
 
     lineage names the file recording which checkpoint the tree was restored from. The first save
-    of a volume creates it; every other save requires it to match the current checkpoint."""
+    of a volume creates it; every other save requires it to match the current checkpoint.
+    admit runs once the store lock is held and raises Deferred to refuse the save without
+    recording an attempt, so a caller can recheck state that another saver changes first."""
     binding = validate_binding(binding)
     if operation_id is not None and not OPERATION.fullmatch(operation_id):
         raise Failed("Invalid operation ID")
@@ -845,6 +847,12 @@ def save(source, store_path, binding, lineage, fenced=False, operation_id=None, 
     store = Store(store_path, clock)
     store.prepare(create=True)
     store.lock(LOCK_SECONDS if fenced else 0)
+    if admit is not None:
+        try:
+            admit()
+        except BaseException:
+            store.unlock()
+            raise
     started = time.monotonic()
     attempt = dict(at=clock(), mode=mode, operationId=operation_id)
     try:

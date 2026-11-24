@@ -686,6 +686,11 @@ LOCAL_ROOT = "/var/lib/workspaces-local"
 LOCAL_FILESYSTEMS = ("ext4", "xfs", "btrfs")
 LAYOUT_MARKER = ".workspaces-layout.json"
 CHECKPOINT_STORE = ".workspaces-checkpoints"
+# Periodic checkpoints: the timer fires every minute; a save starts once the interval passed
+# since the last attempt. Freshness turns Stale after CHECKPOINT_STALE_FACTOR intervals.
+CHECKPOINT_UNIT = "workspaces-repos-checkpoint.service"
+CHECKPOINT_INTERVAL_SECONDS = 300
+CHECKPOINT_STALE_FACTOR = 3
 SCRATCH_ENV = "/opt/workspaces-workspace/scratch.env"
 
 
@@ -1039,6 +1044,16 @@ class Linux:
                           bytes=result["bytes"], durationMs=result["durationMs"])
         self.verify_checkpoint(checkpoint, operation)
         return checkpoint
+
+    def checkpoint_status(self):
+        import repo_checkpoint as checkpoints
+        return checkpoints.status(str(self.workspace / CHECKPOINT_STORE))
+
+    def stop_periodic_checkpoints(self):
+        """Ends a running periodic save. Later timer runs see the fence and exit before Git runs."""
+        run(["systemctl", "stop", CHECKPOINT_UNIT], timeout=90)
+        require(run(["systemctl", "show", CHECKPOINT_UNIT, "-p", "ActiveState", "--value"])
+                in ("inactive", "failed"), "Periodic checkout checkpoint did not stop")
 
     def verify_checkpoint(self, checkpoint, operation):
         """The final checkpoint is complete, bound to this writer and still the current one."""
@@ -1537,7 +1552,7 @@ class Runtime:
         allowed = {"vmId", "generation", "kind", "uid", "gid", "workspace", "volume", "backup",
                    "restore", "requireFreshBackup", "ignoredDataAcknowledged", "repositories",
                    "infrastructureUnits", "stopUnits", "forbiddenPaths",
-                   "startServices", "observedTerminalInputs", "storageLayout"}
+                   "startServices", "observedTerminalInputs", "storageLayout", "checkpointIntervalSeconds"}
         require(not set(config) - allowed, "Unknown runtime configuration field; reject implicit credentials")
         require(config["kind"] in ("primary", "ephemeral"), "Invalid VM kind")
         require(config["uid"] == 2000 and config["gid"] == 2000, "Coding UID/GID must be 2000")
@@ -1547,6 +1562,8 @@ class Runtime:
                 "Unknown storage layout")
         self.local = config.get("storageLayout") == 2
         require(not self.local or config["kind"] == "primary", "Local checkouts require a primary workspace")
+        require(self.local or "checkpointIntervalSeconds" not in config, "Checkpoint interval requires local checkouts")
+        checkpoint_interval(config)
         if config["kind"] == "ephemeral":
             require(not any(config.get(key) for key in
                             ("volume", "backup", "restore")),
@@ -1811,6 +1828,8 @@ class Runtime:
                           activityAt=self.s["activityAt"], backup=self.backup_status(),
                           freezeCompleted=self.s.get("freezeCompleted", False),
                           filesystemReadOnly=self.s.get("filesystemReadOnly", False))
+            if self.local:
+                result["checkpoint"] = self.checkpoint_summary()
             if result["phase"] == "Ready":
                 try:
                     self.require_workspace()
@@ -1986,6 +2005,11 @@ class Runtime:
                 self.s["fenceOperation"] = operation
                 self.s["phase"] = "Fenced"
                 self.save()
+                if self.local:
+                    # Its Git children run as the coding user outside the work slice, and a save
+                    # published after this fence would supersede the final checkpoint.
+                    self.diagnostic_stage = "periodic-checkpoint-stop"
+                    self.adapter.stop_periodic_checkpoints()
                 # The helper acts as root over the checkout; it stops before any idle evidence.
                 self.diagnostic_stage = "scratch-suspend"
                 self.scratch("suspend")
@@ -2113,6 +2137,33 @@ class Runtime:
             require(not self.local, "Off-host restore of local checkouts is not supported yet")
             return self.restore(request)
         raise Blocked("Unknown action")
+
+    def checkpoint_summary(self):
+        """Freshness of the layout 2 checkout checkpoint; never fails status or the heartbeat."""
+        try:
+            value = self.adapter.checkpoint_status()
+        except Exception:
+            return dict(state="Unavailable")
+        interval = checkpoint_interval(self.c)
+        result = dict(state="Missing", intervalSeconds=interval)
+        if value.get("state") == "corrupt":
+            return dict(result, state="Failed", reason=str(value.get("reason") or "Checkpoint store is corrupt")[:200])
+        completed = value.get("completedAt") if value.get("state") == "ready" else None
+        if type(completed) is int:
+            completed_at = completed / 1e9
+            result.update(checkpointId=value.get("checkpointId"), completedAt=completed_at,
+                          state="Fresh" if self.clock() - completed_at <= CHECKPOINT_STALE_FACTOR * interval
+                          else "Stale")
+        attempt = value.get("lastAttempt")
+        if isinstance(attempt, dict) and type(attempt.get("at")) is int and \
+                attempt.get("outcome") in ("succeeded", "deferred", "failed"):
+            result["lastAttempt"] = dict(at=attempt["at"] / 1e9, outcome=attempt["outcome"])
+            if attempt.get("reason"):
+                result["lastAttempt"]["reason"] = str(attempt["reason"])[:200]
+            # A deferred save (the tree kept changing) only ages the checkpoint toward Stale.
+            if attempt["outcome"] == "failed" and (type(completed) is not int or attempt["at"] > completed):
+                result.update(state="Failed", reason=result["lastAttempt"].get("reason", "Checkpoint failed"))
+        return result
 
     def backup_status(self):
         if self.c["kind"] == "ephemeral":
@@ -2443,6 +2494,52 @@ def load_config(path):
 DEVICE_WAIT_SECONDS = 45
 
 
+def checkpoint_interval(config):
+    value = config.get("checkpointIntervalSeconds", CHECKPOINT_INTERVAL_SECONDS)
+    require(type(value) is int and 60 <= value <= 3600, "Checkpoint interval must be 60 to 3600 seconds")
+    return value
+
+
+def checkpoint_periodic(config, state_dir, adapter=None, clock=time.time_ns):
+    """Timer-driven checkpoint of the VM-disk checkout tree while the primary is Ready.
+
+    Never takes the control lock: a long control request must not delay checkpoints, and a stop
+    waits for the store lock while holding it. The engine rechecks admission under its store
+    lock, so no periodic save starts after a stop fenced writers."""
+    if config.get("kind") != "primary" or config.get("storageLayout") != 2:
+        return dict(action="disabled")
+    import repo_checkpoint as checkpoints
+    interval = checkpoint_interval(config)
+    adapter = adapter or Linux(config)
+    state_file = Path(state_dir) / "state.json"
+    identity = {key: config[key] for key in ("vmId", "generation", "kind")}
+
+    def admit():
+        try:
+            value = load_config(state_file)
+        except FileNotFoundError:
+            raise checkpoints.Deferred("Workspace is not bootstrapped") from None
+        if value.get("identity") != identity or value.get("configDigest") != digest(config) or \
+                value.get("phase") != "Ready" or \
+                any(value.get(key) for key in ("fenceOperation", "freezeCompleted", "filesystemReadOnly")):
+            raise checkpoints.Deferred("Workspace is not admitting periodic checkpoints")
+
+    try:
+        admit()
+    except checkpoints.Deferred as error:
+        return dict(action="skipped", reason=error.reason)
+    attempt = adapter.checkpoint_status().get("lastAttempt")
+    if isinstance(attempt, dict) and type(attempt.get("at")) is int and \
+            0 <= clock() - attempt["at"] < interval * 10**9:
+        return dict(action="skipped", reason="Checkpoint interval has not elapsed")
+    adapter.verify_workspace_mount()
+    root = adapter.local_root()
+    result = checkpoints.save(str(root / "repos"), str(adapter.workspace / CHECKPOINT_STORE),
+                              adapter.repos_binding(), str(root / "repos.lineage.json"), admit=admit)
+    return dict(action="saved", **{key: result[key] for key in
+                                    ("checkpointId", "durationMs", "files", "bytes", "bytesWritten")})
+
+
 def mount_for_services(config, state_dir):
     if config["kind"] == "ephemeral":
         return
@@ -2536,7 +2633,8 @@ def serve(config, state_dir, socket_path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("serve", "call", "export-backup", "restore-import", "mount-for-services"))
+    parser.add_argument("mode", choices=("serve", "call", "export-backup", "restore-import", "mount-for-services",
+                                         "checkpoint-periodic"))
     parser.add_argument("--config", default="/etc/workspaces-workspace/runtime.json")
     parser.add_argument("--state-dir", default="/var/lib/workspaces-workspace")
     parser.add_argument("--socket", default="/run/workspaces-workspace/control.sock")
@@ -2551,6 +2649,21 @@ def main():
         except (Blocked, OSError, ValueError, subprocess.SubprocessError) as error:
             print(failure_response(error)["reason"], file=sys.stderr)
             sys.exit(1)
+    elif args.mode == "checkpoint-periodic":
+        import repo_checkpoint as checkpoints
+        try:
+            require(os.geteuid() == 0, "Checkpoints require root")
+            result = checkpoint_periodic(load_config(args.config), args.state_dir)
+        except checkpoints.Deferred as error:
+            print(json.dumps(dict(ok=False, state="Deferred", reason=error.reason), sort_keys=True))
+            sys.exit(checkpoints.EX_DEFERRED)
+        except checkpoints.Failed as error:
+            print(json.dumps(dict(ok=False, state="Failed", reason=error.reason), sort_keys=True))
+            sys.exit(1)
+        except (Blocked, OSError, ValueError, subprocess.SubprocessError) as error:
+            print(failure_response(error)["reason"], file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(dict(ok=True, result=result), sort_keys=True))
     elif args.mode == "serve":
         Path(args.state_dir).mkdir(mode=0o700, parents=True, exist_ok=True)
         serve(load_config(args.config), args.state_dir, args.socket)

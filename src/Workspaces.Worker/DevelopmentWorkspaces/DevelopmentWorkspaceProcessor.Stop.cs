@@ -138,11 +138,16 @@ public sealed partial class DevelopmentWorkspaceProcessor
                 var receipt = Result(reply);
                 ValidateReceipt(receipt, vm, op, workspace, authorizedDiscard);
                 evidence.ReceiptId = receipt.GetProperty("receiptId").GetString();
-                await SaveAsync(op, evidence, vm.Kind == "primary" ? "detach" : "delete-intent", (_, fresh, _) =>
+                await SaveAsync(op, evidence, vm.Kind == "primary" ? "detach" : "delete-intent", (_, fresh, owner) =>
                 {
                     fresh.QuiescedAt = Now; fresh.QuiescedGeneration = fresh.Generation;
                     fresh.QuiescedOperationId = op.Id; fresh.QuiescenceReceipt = receipt.GetRawText();
                     fresh.LastHeartbeatAt = Now; fresh.GatewayReady = false;
+                    // ValidateReceipt proved this generation's final checkpoint holds the stopped tree.
+                    if (fresh.Kind == "primary" && owner.StorageLayout == 2)
+                    {
+                        owner.LastCheckpointAt = Now; owner.CheckpointStatus = "Fresh";
+                    }
                     if (fresh.Kind == "ephemeral" && receipt.GetProperty("type").GetString() == "GitSaved")
                     {
                         var repository = receipt.GetProperty("repositories").EnumerateArray().Single(x =>

@@ -22,6 +22,10 @@ public sealed class DevelopmentWorkspace
     public string? VolumeAttachedVmId { get; set; }
     public DateTimeOffset? LastBackupAt { get; set; }
     public string? BackupStatus { get; set; }
+    // Layout 2 only: when the VM-disk checkouts were last saved to the retained volume, and whether
+    // that copy is Fresh, Stale, Failed or Missing (null for layout 1 or before the first report).
+    public DateTimeOffset? LastCheckpointAt { get; set; }
+    public string? CheckpointStatus { get; set; }
     public decimal StorageMonthlyRate { get; set; }
     public string Currency { get; set; } = default!;
     public DateTimeOffset? PricingUpdatedAt { get; set; }

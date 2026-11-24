@@ -58,6 +58,19 @@ it("shows retained storage and per-VM rates, primary first and temporary VMs by 
   expect(screen.getByText(/not invoices or a billing guarantee/)).toBeInTheDocument();
 });
 
+it("shows when local checkouts were last saved to storage and the last verified off-host backup", () => {
+  const view = render(tab());
+  expect(screen.queryByText("Checkouts last saved to storage")).not.toBeInTheDocument();
+  expect(screen.getByText("None · Status unavailable")).toBeInTheDocument();
+  view.rerender(tab(workspace({ storageLayout: 2, lastCheckpointAt: "2026-11-21T20:05:00Z", checkpointStatus: "Stale",
+    lastBackupAt: "2026-11-20T03:00:00Z", backupStatus: "Fresh" })));
+  expect(screen.getByText("2026-11-21T20:05:00Z · Stale")).toBeInTheDocument();
+  expect(screen.getByText("2026-11-20T03:00:00Z · Fresh")).toBeInTheDocument();
+  expect(screen.getByText(/edits since the last save can be lost/)).toBeInTheDocument();
+  view.rerender(tab(workspace({ storageLayout: 2 })));
+  expect(screen.getByText("Never · Status unavailable")).toBeInTheDocument();
+});
+
 it("shows the primary VM's hourly rate, storage and projected monthly total with the 720-hour assumption", () => {
   const view = render(tab(workspace({ currency: "USD" })));
   const estimate = within(screen.getByRole("region", { name: "Projected cost" })).getByRole("group", { name: "Projected monthly cost" });

@@ -348,7 +348,8 @@ public sealed partial class DevelopmentWorkspaceService(
             workspace.Vms.OrderBy(x => x.CreatedAt).ThenBy(x => x.Id).Select(ToVmResponse).ToArray(), workspace.PrimaryVmId,
             IsRetainedStorageUnavailable(primary) ? "unavailable" : workspace.VolumeStatus,
             workspace.CreatedBy, workspace.IdleTimeoutMinutes, EffectiveIdleTimeout(workspace), workspace.KeepRunning,
-            ImageAgents(Policy.Images.GetValueOrDefault(primary.ImageId)));
+            ImageAgents(Policy.Images.GetValueOrDefault(primary.ImageId)), workspace.StorageLayout,
+            workspace.LastCheckpointAt, workspace.CheckpointStatus, workspace.LastBackupAt, workspace.BackupStatus);
     }
 
     public DevelopmentWorkspaceVmResponse ToVmResponse(DevelopmentWorkspaceVm vm) =>

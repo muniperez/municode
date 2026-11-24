@@ -61,6 +61,11 @@ internal sealed class RecordingHandler : HttpMessageHandler
     public string[] Organizations { get; set; } = ["org"];
     public string WorkspacePhase { get; set; } = "stopped";
     public string VolumeStatus { get; set; } = "retained";
+    public int StorageLayout { get; set; } = 1;
+    public string? LastCheckpointAt { get; set; }
+    public string? CheckpointStatus { get; set; }
+    public string? LastBackupAt { get; set; }
+    public string? BackupStatus { get; set; }
     public HttpStatusCode DeleteStatus { get; set; } = HttpStatusCode.Accepted;
     public bool UnsafeLaunch { get; set; }
     public bool CreateConflict { get; set; }
@@ -162,7 +167,9 @@ internal sealed class RecordingHandler : HttpMessageHandler
         estimatedMonthlyCompute = 0m, estimatedMonthlyStorage = 2.5m, currency = "EUR",
         pricingUpdatedAt = "2026-11-21T20:00:00Z", vms = Vms(), volumeStatus = VolumeStatus,
         idleTimeoutMinutes = 45, effectiveIdleTimeoutMinutes = 45, keepRunning = false,
-        agents = new[] { new { id = "claude", name = "Claude Code", version = "2.1" } }
+        agents = new[] { new { id = "claude", name = "Claude Code", version = "2.1" } },
+        storageLayout = StorageLayout, lastCheckpointAt = LastCheckpointAt, checkpointStatus = CheckpointStatus,
+        lastBackupAt = LastBackupAt, backupStatus = BackupStatus
     };
 
     private object[] Vms() =>

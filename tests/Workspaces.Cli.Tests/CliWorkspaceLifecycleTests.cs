@@ -44,6 +44,26 @@ public sealed class CliWorkspaceLifecycleTests
         Assert.DoesNotContain("synthetic-token", context.Console.Output);
     }
 
+    [Fact]
+    public async Task StatusShowsCheckoutCheckpointAndOffHostBackupFreshness()
+    {
+        using var context = new CliTestContext();
+        Assert.Equal(CliExitCodes.Success, await context.Run("status", "workspace", "--organization", "org"));
+        Assert.DoesNotContain("Checkouts:", context.Console.Output);
+        Assert.Contains("Off-host backup: none verified (status unavailable).", context.Console.Output);
+
+        using var local = new CliTestContext();
+        local.Handler.StorageLayout = 2;
+        local.Handler.LastCheckpointAt = "2026-11-21T20:05:00+00:00";
+        local.Handler.CheckpointStatus = "Stale";
+        local.Handler.LastBackupAt = "2026-11-20T03:00:00+00:00";
+        local.Handler.BackupStatus = "Fresh";
+        Assert.Equal(CliExitCodes.Success, await local.Run("status", "workspace", "--organization", "org"));
+        Assert.Contains("Checkouts: on the VM disk; last saved to retained storage 2026-11-21T20:05:00.0000000+00:00 (Stale).",
+            local.Console.Output);
+        Assert.Contains("Off-host backup: last verified 2026-11-20T03:00:00.0000000+00:00 (Fresh).", local.Console.Output);
+    }
+
     [Theory]
     [InlineData("start")]
     [InlineData("stop")]

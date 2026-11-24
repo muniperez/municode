@@ -15,6 +15,29 @@ public sealed partial class DevelopmentWorkspaceProcessor
         status.TryGetProperty("activityAt", out var useful) && useful.ValueKind != JsonValueKind.Null &&
         useful.TryGetDouble(out var seconds) ? seconds : null;
 
+    // Records the guest's layout 2 checkpoint freshness; "Unavailable" or an unknown state keeps the
+    // last known value. Returns whether anything changed.
+    private bool ApplyCheckpointStatus(DevelopmentWorkspace owner, JsonElement checkpoint)
+    {
+        var state = checkpoint.TryGetProperty("state", out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() : null;
+        if (state is not ("Fresh" or "Stale" or "Failed" or "Missing")) return false;
+        var previous = (owner.LastCheckpointAt, owner.CheckpointStatus);
+        if (checkpoint.TryGetProperty("completedAt", out var completed) && completed.ValueKind == JsonValueKind.Number &&
+            completed.TryGetDouble(out var seconds) && seconds > 0 && seconds < 253402300799)
+        {
+            var at = DateTimeOffset.FromUnixTimeMilliseconds((long)(seconds * 1000));
+            // Tolerate small guest clock skew; never record a time in the future.
+            if (at <= Now.AddMinutes(5))
+            {
+                if (at > Now) at = Now;
+                if (owner.LastCheckpointAt is null || at >= owner.LastCheckpointAt) owner.LastCheckpointAt = at;
+            }
+        }
+        owner.CheckpointStatus = state;
+        return previous != (owner.LastCheckpointAt, owner.CheckpointStatus);
+    }
+
     private async Task RefreshRuntimeAsync(DevelopmentWorkspace workspace, DevelopmentWorkspaceVm vm, string operationId, CancellationToken ct, bool allowRevive = false, bool publishRoute = true)
     {
         if (!policy.Value.Images.TryGetValue(vm.ImageId, out var image) || !image.RuntimeQualified ||
@@ -101,6 +124,12 @@ public sealed partial class DevelopmentWorkspaceProcessor
         fresh.RuntimeCapabilities = DevelopmentWorkspaceService.NormalizeCapabilities(status);
         fresh.ResourceSampleJson = DevelopmentWorkspaceService.NormalizeResourceSample(status, fresh.Id, fresh.Generation, Now);
         fresh.ResourceSampleGeneration = fresh.Generation; fresh.ResourceSampleReceivedAt = Now;
+        if (fresh.Kind == "primary" && status.TryGetProperty("checkpoint", out var checkpoint) &&
+            checkpoint.ValueKind == JsonValueKind.Object)
+        {
+            var owner = await db.DevelopmentWorkspaces.SingleAsync(x => x.Id == fresh.WorkspaceId, ct);
+            if (owner.StorageLayout == 2 && ApplyCheckpointStatus(owner, checkpoint)) { owner.Revision++; owner.UpdatedAt = Now; }
+        }
         if (fresh.Kind == "primary" && status.TryGetProperty("backup", out var backup))
         {
             var owner = await db.DevelopmentWorkspaces.SingleAsync(x => x.Id == fresh.WorkspaceId, ct);

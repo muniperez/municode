@@ -1,0 +1,21 @@
+[Unit]
+Description=Checkpoint the VM-disk checkout tree to the retained volume (storage layout 2)
+After=workspaces-workspace.service workspaces-workspace-mount.service
+PartOf=workspaces-t3.service
+ConditionPathExists=/workspace/.workspaces-layout.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -B /opt/workspaces-workspace/runtime.py checkpoint-periodic
+User=root
+UMask=0077
+# 75: deferred because the tree kept changing or another checkpoint held the store.
+SuccessExitStatus=75
+TimeoutStartSec=30min
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_SETUID CAP_SETGID
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal

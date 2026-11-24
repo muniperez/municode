@@ -122,6 +122,11 @@ export type DevelopmentWorkspace = {
   updatedAt: string;
   primaryVmId?: string | null;
   volumeStatus?: string | null;
+  storageLayout?: number;
+  lastCheckpointAt?: string | null;
+  checkpointStatus?: string | null;
+  lastBackupAt?: string | null;
+  backupStatus?: string | null;
   agents?: { id: string; name: string; version: string }[] | null;
   vms: DevelopmentWorkspaceVm[];
 };

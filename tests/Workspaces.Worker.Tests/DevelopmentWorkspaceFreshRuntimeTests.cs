@@ -74,6 +74,8 @@ public sealed partial class DevelopmentWorkspaceProcessorTests
         var expected = createdLocal ? 2 : 1;
         Assert.Equal(expected, (await CurrentWorkspace(workspace.Id)).StorageLayout);
         Assert.Equal(createdLocal, runtime.BootstrapConfiguration!.Value.TryGetProperty("storageLayout", out _));
+        // The default interval is never sent, so earlier layout 2 images accept the configuration.
+        Assert.False(runtime.BootstrapConfiguration!.Value.TryGetProperty("checkpointIntervalSeconds", out _));
         var retained = await CurrentWorkspace(workspace.Id);
         if (createdLocal)
             runtime.Checkpoint = (target, operationId) =>
@@ -82,14 +84,20 @@ public sealed partial class DevelopmentWorkspaceProcessorTests
         await lifecycle.StopVmAsync(workspace.Id, "org", vmId, first.Generation, default);
         var stopped = await ProcessUntilAsync(vmId, "stopped");
         Assert.Equal(createdLocal, stopped.QuiescenceReceipt!.Contains("\"checkpoint\""));
+        var afterStop = await CurrentWorkspace(workspace.Id);
+        Assert.Equal(createdLocal ? ("Fresh", stopped.QuiescedAt) : ((string?)null, (DateTimeOffset?)null),
+            (afterStop.CheckpointStatus, afterStop.LastCheckpointAt));
 
         // Flipping the option never converts a retained volume.
         workerOptions.LocalCheckouts = !createdLocal;
+        workerOptions.CheckpointIntervalSeconds = 120;
         await lifecycle.StartVmAsync(workspace.Id, "org", vmId, stopped.Generation, default);
         await ProcessUntilAsync(vmId, "ready");
         Assert.Equal(expected, (await CurrentWorkspace(workspace.Id)).StorageLayout);
         Assert.Equal(createdLocal, runtime.BootstrapConfiguration!.Value.TryGetProperty("storageLayout", out var layout) &&
             layout.GetInt32() == 2);
+        Assert.Equal(createdLocal, runtime.BootstrapConfiguration!.Value.TryGetProperty("checkpointIntervalSeconds", out var interval) &&
+            interval.GetInt32() == 120);
     }
 
     [Fact]
