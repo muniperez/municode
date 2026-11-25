@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { getWorkspaceSelections, type WorkspaceSelectionOption } from "@/api/workspacesApi";
@@ -65,7 +65,7 @@ export function WorkspaceSelectionFields({ organizationId, workspaceId, value, o
   useEffect(() => {
     callbacks.current.onReadyChange?.(ready);
   }, [ready]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!pending && !error && current && (
       normalized.imageId !== value.imageId || normalized.profile !== value.profile || normalized.planId !== value.planId
     )) callbacks.current.onChange(normalized);
