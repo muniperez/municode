@@ -253,7 +253,7 @@ public sealed partial class DevelopmentWorkspaceProcessor
     private async Task<DrainBlocker?> GetDrainBlockerAsync(DevelopmentWorkspaceVm vm, string operationId, CancellationToken ct) =>
         await lifecycle.HasUnresolvedTasksAsync(vm, ct)
             ? new("workspace_drain_task_leases", "The control plane still has unresolved workspace tasks. Wait for them to finish or stop them cleanly.")
-            : await GetRuntimeIdleBlockerAsync(vm, operationId, ct);
+            : await GetRuntimeIdleBlockerAsync(vm, operationId, ct, releaseIdleT3Terminals: true);
 
     private Task SaveDrainHoldAsync(DevelopmentWorkspaceOperation op, Evidence evidence, DrainBlocker? blocker,
         bool gatewayReady, CancellationToken ct) =>

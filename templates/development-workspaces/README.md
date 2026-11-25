@@ -1225,6 +1225,13 @@ without thread or task identifiers. Cancel stale queued runs normally; if a comp
 still lists background work that is no longer running, use T3 **Force Stop** on that thread.
 Stop must finish before permanent workspace deletion is allowed.
 
+`workspace_drain_t3_terminal` means Stop found a live interactive shell that T3 started, even
+if its tab is closed. Stop sends SIGHUP to the shell, but only when it is sitting at its
+prompt with no jobs, then checks again. It never escalates to SIGKILL. A shell that is running
+a command or has jobs, or that ignores SIGHUP, keeps blocking Stop; finish the jobs and run
+`exit` at the shell prompt. Read-only status and idle checks never signal the shell.
+Unrelated or unconfirmed processes still report the existing inventory holds.
+
 ### JSON control protocol
 
 Run `python3 -B /opt/workspaces-workspace/runtime.py call`, sending one newline-terminated
@@ -1270,6 +1277,10 @@ Inspect `ok`, not only SSH exit status. Never log enrollment or T3 secret output
   generation,operationId,revision,issuedAt,receiptId`; their SHA256 IDs detect stale/tampered
   metadata, **not a substitute for authenticated SSH/control-plane authorization**.
 * `cancel-drain`: same operation, only before actual freeze.
+* `release-t3-terminals`: Stop only, while Ready. Sends SIGHUP through a pidfd to direct
+  children of the T3 service that pass the full idle-shell kernel proof, then waits up to
+  5 seconds. Returns `released` and `remaining` counts. It never sends SIGKILL and never
+  signals a busy, ambiguous or non-T3 process.
 * `resume`: same operation plus `deletionNotCommitted:true`, only while Frozen (not unmounted).
   Parent must revoke/cancel deletion intent first. Receipts are durably invalidated **before**
   writes/services/admissions reopen. This lets users resolve Awaiting Git save; use a new

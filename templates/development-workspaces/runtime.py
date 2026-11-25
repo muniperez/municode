@@ -8,7 +8,9 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import shutil
+import signal
 import socket
 import sqlite3
 import stat
@@ -24,6 +26,9 @@ IMAGE_MANIFEST = Path("/opt/workspaces-workspace/image-manifest.json")
 T3_ROOT = Path("/opt/workspaces-t3")
 T3_RELAY_CLIENT = "/usr/local/bin/cloudflared"
 T3_ENVIRONMENT_PROTOCOL = 2
+T3_SERVICE_CGROUP = "0::/workspaceswork.slice/workspaces-t3.service"
+LIVE_T3_TERMINAL = "Live T3 terminal shell remains in the guest"
+T3_TERMINAL_HANGUP_SECONDS = 5
 
 
 class Blocked(Exception):
@@ -375,7 +380,7 @@ class Git:
 
 
 class Procfs:
-    """Read-only process evidence; unsupported kernels and incoherent reads fail closed."""
+    """Process evidence; unsupported kernels and incoherent reads fail closed. Only hang_up signals."""
     def __init__(self, root="/proc", machine=None):
         self.root = Path(root)
         self.machine = machine or os.uname().machine
@@ -433,6 +438,73 @@ class Procfs:
         require(result[0] == result[1], "Shell stdin/stderr PTY identity differs")
         return result[0]
 
+    def interactive_shell(self, pid):
+        executable = self.executable(pid)
+        aliases = {"/usr/bin/bash": {"bash", "sh"}, "/usr/bin/dash": {"dash", "sh"}}
+        require(executable["path"] in aliases and executable["uid"] == 0 and
+                stat.S_ISREG(executable["mode"]) and not executable["mode"] & 0o022,
+                "Shell executable is not an approved root-owned image binary")
+        argv = (self.root / str(pid) / "cmdline").read_bytes().split(b"\0")
+        require(argv[-1] == b"", "Incomplete shell command line")
+        argv = [arg.decode("utf-8", errors="strict") for arg in argv[:-1]]
+        options = {"-i", "-l", "-il", "-li", "--interactive", "--login",
+                   "--noprofile", "--norc", "--noediting", "--posix"}
+        require(argv and Path(argv[0]).name.removeprefix("-") in aliases[executable["path"]] and
+                all(arg in options for arg in argv[1:]),
+                "Shell scripts, -c commands and unknown invocation flags remain active work")
+        return executable
+
+    def controlling_pty(self, process):
+        tty = self.tty(process["pid"])
+        device = process["tty"] & 0xffffffff
+        require((os.major(tty[3]), os.minor(tty[3])) ==
+                ((device >> 8) & 0xfff, (device & 0xff) | ((device >> 12) & 0xfff00)),
+                "PTY device/session/foreground group changed")
+        return tty
+
+    def live_t3_terminal(self, process, t3_pids):
+        pid = process["pid"]
+        if not (process["ppid"] in t3_pids and process["uids"] == (2000,) * 4 and
+                process["cgroup"] == T3_SERVICE_CGROUP and process["tty"] != 0 and
+                pid == process["session"] == process["pgrp"]):
+            return False
+        try:
+            self.interactive_shell(pid)
+            self.controlling_pty(process)
+            return self.process(pid) == process
+        except (Blocked, OSError, ValueError):
+            return False  # Keep the original inventory refusal when attribution is uncertain.
+
+    def hang_up(self, process):
+        """Send SIGHUP through a pidfd, so a reused PID is never signalled. Returns the pidfd."""
+        try:
+            handle = os.pidfd_open(process["pid"])
+        except ProcessLookupError:
+            return None
+        try:
+            require(self.process(process["pid"]) == process, "Coding process inventory changed during inspection")
+            signal.pidfd_send_signal(handle, signal.SIGHUP)
+        except BaseException:
+            os.close(handle)
+            raise
+        return handle
+
+    def wait_exited(self, handles, seconds):
+        """Wait for pidfds to become readable (process exit); close them and return how many remain."""
+        poller, remaining = select.poll(), set(handles)
+        for handle in handles:
+            poller.register(handle, select.POLLIN)
+        deadline = time.monotonic() + seconds
+        try:
+            while remaining and (left := deadline - time.monotonic()) > 0:
+                for handle, _ in poller.poll(int(left * 1000) + 1):
+                    remaining.discard(handle)
+                    poller.unregister(handle)
+            return len(remaining)
+        finally:
+            for handle in handles:
+                os.close(handle)
+
     def idle_shell(self, process, inventory, t3_pids):
         pid = process["pid"]
         directory = self.root / str(pid)
@@ -452,19 +524,7 @@ class Procfs:
                     "Interactive shell has children or stopped/background jobs")
             require(not (directory / "task" / str(pid) / "children").read_text().strip(),
                     "Interactive shell has children or stopped/background jobs")
-            executable = self.executable(pid)
-            aliases = {"/usr/bin/bash": {"bash", "sh"}, "/usr/bin/dash": {"dash", "sh"}}
-            require(executable["path"] in aliases and executable["uid"] == 0 and
-                    stat.S_ISREG(executable["mode"]) and not executable["mode"] & 0o022,
-                    "Shell executable is not an approved root-owned image binary")
-            argv = (directory / "cmdline").read_bytes().split(b"\0")
-            require(argv[-1] == b"", "Incomplete shell command line")
-            argv = [arg.decode("utf-8", errors="strict") for arg in argv[:-1]]
-            options = {"-i", "-l", "-il", "-li", "--interactive", "--login",
-                       "--noprofile", "--norc", "--noediting", "--posix"}
-            require(argv and Path(argv[0]).name.removeprefix("-") in aliases[executable["path"]] and
-                    all(arg in options for arg in argv[1:]),
-                    "Shell scripts, -c commands and unknown invocation flags remain active work")
+            executable = self.interactive_shell(pid)
             syscall = (directory / "syscall").read_text().strip()
             parts = syscall.split()
             read_number = {"x86_64": 0, "aarch64": 63}.get(self.machine)
@@ -484,11 +544,7 @@ class Procfs:
                         "Native terminal adapter required: no proven blocking read(0) syscall")
                 require(channel in ("n_tty_read", "wait_woken"),
                         "Native terminal adapter required: no proven sleeping PTY read")
-            tty = self.tty(pid)
-            device = process["tty"] & 0xffffffff
-            require((os.major(tty[3]), os.minor(tty[3])) ==
-                    ((device >> 8) & 0xfff, (device & 0xff) | ((device >> 12) & 0xfff00)),
-                    "PTY device/session/foreground group changed")
+            tty = self.controlling_pty(process)
             require(self.process(pid) == process and self.executable(pid) == executable and
                     (directory / "syscall").read_text().strip() == syscall and self.tty(pid) == tty and
                     not (directory / "task" / str(pid) / "children").read_text().strip(),
@@ -1539,7 +1595,7 @@ class Linux:
             if self.local_layout():
                 self.verify_repos_mount(writable=False)
 
-    def idle(self, tasks):
+    def idle(self, tasks, *, report_terminal=False):
         for task in tasks.values():
             require(not self.task_running(task), "Registered task still running; lease expiry is not completion")
         allowed, t3_pids, preview_pids, preview_groups = {}, set(), set(), set()
@@ -1580,9 +1636,14 @@ class Linux:
             if process["pid"] not in allowed and self.processes.t3_relay_client(process, inventory, t3_pids):
                 allowed[process["pid"]] = "pinned-t3-relay-client"
             if process["pid"] not in allowed:
-                require(self.config.get("observedTerminalInputs") is True,
-                        "Unregistered live coding process; terminal input observation is not qualified")
-                self.processes.idle_shell(process, inventory, t3_pids)
+                try:
+                    require(self.config.get("observedTerminalInputs") is True,
+                            "Unregistered live coding process; terminal input observation is not qualified")
+                    self.processes.idle_shell(process, inventory, t3_pids)
+                except Blocked as error:
+                    if report_terminal and self.processes.live_t3_terminal(process, t3_pids):
+                        raise Blocked(LIVE_T3_TERMINAL) from error
+                    raise
         after = self.processes.inventory()
         verify_preview_children(after)
         identity = lambda values: {pid: (p["start"], p["ppid"], p["pgrp"], p["session"], p["uids"], p["cgroup"])
@@ -1592,6 +1653,39 @@ class Linux:
             if process["pid"] not in allowed and self.config["uid"] in process["uids"]:
                 require(not any(p["ppid"] == process["pid"] for p in after.values()),
                         "Shell acquired children during idle inspection")
+
+    def release_t3_terminals(self, tasks):
+        """Stop only: hang up idle T3 shells whose terminal was closed. Busy or unproven shells stay."""
+        for task in tasks.values():
+            require(not self.task_running(task), "Registered task still running; lease expiry is not completion")
+        pid = run(["systemctl", "show", "workspaces-t3.service", "-p", "MainPID", "--value"])
+        require(pid.isdecimal(), "Unreachable tool")
+        if pid == "0":
+            return dict(released=0, remaining=0)
+        inventory = self.processes.inventory()
+        t3 = inventory.get(int(pid))
+        require(t3 and t3["uids"] == (self.config["uid"],) * 4 and t3["cgroup"] == T3_SERVICE_CGROUP,
+                "T3 service identity is unknown or outside its owned cgroup")
+        handles = []
+        try:
+            for process in inventory.values():
+                if not self.processes.live_t3_terminal(process, {t3["pid"]}):
+                    continue
+                try:
+                    # Full kernel idle proof, even when terminal input observation is not qualified.
+                    self.processes.idle_shell(process, inventory, {t3["pid"]})
+                except Blocked:
+                    continue
+                handle = self.processes.hang_up(process)
+                if handle is not None:
+                    handles.append(handle)
+        except BaseException:
+            for handle in handles:
+                os.close(handle)
+            raise
+        # A shell that ignores SIGHUP is never escalated; the inventory check keeps blocking Stop.
+        remaining = self.processes.wait_exited(handles, T3_TERMINAL_HANGUP_SECONDS) if handles else 0
+        return dict(released=len(handles) - remaining, remaining=remaining)
 
     def verify_t3_snapshot(self, expected_sequence):
         path = self.workspace / "t3/userdata/statev2.sqlite"
@@ -2027,7 +2121,7 @@ class Runtime:
             if request.get("includeWorkInventory") is True:
                 try:
                     self.require_no_connect_operation()
-                    self.adapter.idle(self.s["tasks"])
+                    self.adapter.idle(self.s["tasks"], report_terminal=True)
                     result["workInventory"] = dict(state="IdleCandidate", authoritative=False)
                 except Blocked as error:
                     result["workInventory"] = dict(state="BusyOrUnknown", authoritative=False,
@@ -2120,6 +2214,11 @@ class Runtime:
             self.s["activityAt"] = self.clock()
             self.save()
             return dict(type="UsefulActivity", **self.identity())
+        if action == "release-t3-terminals":
+            require(self.s["phase"] == "Ready", "Admissions fenced")
+            self.require_no_connect_operation()
+            return dict(type="T3TerminalsReleased", **self.identity(), operationId=operation,
+                        **self.adapter.release_t3_terminals(self.s["tasks"]))
         if action == "cancel-drain":
             self.diagnostic_stage = "cancel-drain"
             require(self.s["phase"] == "Fenced" and self.s.get("fenceOperation") == operation,
