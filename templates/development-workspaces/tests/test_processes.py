@@ -4,7 +4,10 @@ import os
 from pathlib import Path
 import sys
 import shutil
+import signal
+import subprocess
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -25,6 +28,17 @@ class FixtureProcfs(rt.Procfs):
         self.on_tty = None
         self.frozen_state = False
         self.exe_by_pid = {}
+        self.hung_up = []
+        self.ignores_hangup = False
+
+    def hang_up(self, process):
+        self.hung_up.append(process["pid"])
+        if not self.ignores_hangup:
+            shutil.rmtree(self.root / str(process["pid"]))
+        return process["pid"]
+
+    def wait_exited(self, handles, seconds):
+        return sum((self.root / str(pid)).exists() for pid in handles)
 
     def executable(self, pid):
         return dict(self.exe_by_pid.get(pid, self.exe))
@@ -119,6 +133,42 @@ class IdleTerminalTests(unittest.TestCase):
                 self.write(110, **dict(original, **change))
                 with self.assertRaisesRegex(rt.Blocked, "Unregistered live coding process"):
                     self.inspect(report_terminal=True)
+
+    def release(self):
+        with patch.object(rt, "run", return_value="100"):
+            return self.adapter.release_t3_terminals({})
+
+    def test_stop_hangs_up_idle_t3_shell_without_terminal_input_observation(self):
+        self.config["observedTerminalInputs"] = False
+        self.assertEqual(dict(released=1, remaining=0), self.release())
+        self.assertEqual([110], self.reader.hung_up)
+        self.inspect(report_terminal=True)
+
+    def test_stop_never_hangs_up_busy_or_unattributed_shells(self):
+        original = dict(self.records[110])
+        for changes in ([dict(foreground=120)], [dict(state="R")], [dict(children="120")],
+                        [dict(cgroup="0::/workspaceswork.slice/other.service")], [dict(ppid=1)],
+                        [dict(argv=["/bin/bash", "-c", "read"])]):
+            with self.subTest(changes=changes):
+                for change in changes:
+                    self.write(110, **dict(original, **change))
+                self.assertEqual(dict(released=0, remaining=0), self.release())
+                self.assertEqual([], self.reader.hung_up)
+                self.assertIn(110, self.reader.inventory())
+
+    def test_shell_that_ignores_hangup_is_not_escalated_and_keeps_blocking(self):
+        self.config["observedTerminalInputs"] = False
+        self.reader.ignores_hangup = True
+        self.assertEqual(dict(released=0, remaining=1), self.release())
+        self.assertEqual([110], self.reader.hung_up)
+        with self.assertRaisesRegex(rt.Blocked, rt.LIVE_T3_TERMINAL):
+            self.inspect(report_terminal=True)
+
+    def test_release_requires_owned_t3_service(self):
+        self.write(100, cgroup="0::/workspaceswork.slice/other.service")
+        with self.assertRaisesRegex(rt.Blocked, "T3 service identity"):
+            self.release()
+        self.assertEqual([], self.reader.hung_up)
 
     def test_interactive_login_and_automatic_tty_shell_forms(self):
         for argv in (["-bash"], ["/bin/bash"], ["/bin/bash", "--noprofile", "--norc", "-i"],
@@ -568,3 +618,29 @@ class PreviewServiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HangUpTests(unittest.TestCase):
+    def test_pidfd_hangup_signals_only_the_inspected_process(self):
+        reader = rt.Procfs()
+        child = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (child.kill(), child.wait()))
+        process = reader.process(child.pid)
+        with self.assertRaisesRegex(rt.Blocked, "inventory changed"):
+            reader.hang_up(dict(process, start=process["start"] + 1))
+        self.assertIsNone(child.poll())
+        handle = reader.hang_up(process)
+        self.assertEqual(0, reader.wait_exited([handle], 5))
+        self.assertEqual(-signal.SIGHUP, child.wait(5))
+
+    def test_wait_reports_processes_that_survive_hangup(self):
+        reader = rt.Procfs()
+        child = subprocess.Popen(["sh", "-c", "trap '' HUP; exec sleep 60"])
+        self.addCleanup(lambda: (child.kill(), child.wait()))
+        for _ in range(100):
+            if reader.executable(child.pid)["path"].endswith("sleep"):
+                break
+            time.sleep(0.01)
+        handle = reader.hang_up(reader.process(child.pid))
+        self.assertEqual(1, reader.wait_exited([handle], 0.2))
+        self.assertIsNone(child.poll())

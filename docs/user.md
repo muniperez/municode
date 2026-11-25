@@ -57,10 +57,10 @@ stop retains the primary volume and releases compute. Resume restores a new
 generation of that volume. Deletion is a permanent, separately confirmed
 operation and follows the operator's retention policy.
 
-If stop reports a live T3 terminal shell, finish its jobs and run `exit` at the shell
-prompt. Closing the terminal UI or browser tab does not prove that the shell exited.
-If the shell is no longer visible in T3, contact your operator. Stop keeps waiting
-and retries automatically once the shell exits.
+If you close a T3 terminal while its shell is idle at the prompt, Stop ends that shell
+for you. If stop still reports a live T3 terminal shell, the shell is running a command or
+job, or Stop could not prove it idle: finish the job and run `exit` at the shell prompt.
+Stop keeps waiting and retries automatically once the shell exits.
 
 Ephemeral Git-backed workspaces are safe only for the selected repository,
 base ref and recovered commit. Ignored or local-only files must not be assumed

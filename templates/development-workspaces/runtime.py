@@ -8,7 +8,9 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import shutil
+import signal
 import socket
 import sqlite3
 import stat
@@ -26,6 +28,7 @@ T3_RELAY_CLIENT = "/usr/local/bin/cloudflared"
 T3_ENVIRONMENT_PROTOCOL = 2
 T3_SERVICE_CGROUP = "0::/workspaceswork.slice/workspaces-t3.service"
 LIVE_T3_TERMINAL = "Live T3 terminal shell remains in the guest"
+T3_TERMINAL_HANGUP_SECONDS = 5
 
 
 class Blocked(Exception):
@@ -377,7 +380,7 @@ class Git:
 
 
 class Procfs:
-    """Read-only process evidence; unsupported kernels and incoherent reads fail closed."""
+    """Process evidence; unsupported kernels and incoherent reads fail closed. Only hang_up signals."""
     def __init__(self, root="/proc", machine=None):
         self.root = Path(root)
         self.machine = machine or os.uname().machine
@@ -471,6 +474,36 @@ class Procfs:
             return self.process(pid) == process
         except (Blocked, OSError, ValueError):
             return False  # Keep the original inventory refusal when attribution is uncertain.
+
+    def hang_up(self, process):
+        """Send SIGHUP through a pidfd, so a reused PID is never signalled. Returns the pidfd."""
+        try:
+            handle = os.pidfd_open(process["pid"])
+        except ProcessLookupError:
+            return None
+        try:
+            require(self.process(process["pid"]) == process, "Coding process inventory changed during inspection")
+            signal.pidfd_send_signal(handle, signal.SIGHUP)
+        except BaseException:
+            os.close(handle)
+            raise
+        return handle
+
+    def wait_exited(self, handles, seconds):
+        """Wait for pidfds to become readable (process exit); close them and return how many remain."""
+        poller, remaining = select.poll(), set(handles)
+        for handle in handles:
+            poller.register(handle, select.POLLIN)
+        deadline = time.monotonic() + seconds
+        try:
+            while remaining and (left := deadline - time.monotonic()) > 0:
+                for handle, _ in poller.poll(int(left * 1000) + 1):
+                    remaining.discard(handle)
+                    poller.unregister(handle)
+            return len(remaining)
+        finally:
+            for handle in handles:
+                os.close(handle)
 
     def idle_shell(self, process, inventory, t3_pids):
         pid = process["pid"]
@@ -1621,6 +1654,39 @@ class Linux:
                 require(not any(p["ppid"] == process["pid"] for p in after.values()),
                         "Shell acquired children during idle inspection")
 
+    def release_t3_terminals(self, tasks):
+        """Stop only: hang up idle T3 shells whose terminal was closed. Busy or unproven shells stay."""
+        for task in tasks.values():
+            require(not self.task_running(task), "Registered task still running; lease expiry is not completion")
+        pid = run(["systemctl", "show", "workspaces-t3.service", "-p", "MainPID", "--value"])
+        require(pid.isdecimal(), "Unreachable tool")
+        if pid == "0":
+            return dict(released=0, remaining=0)
+        inventory = self.processes.inventory()
+        t3 = inventory.get(int(pid))
+        require(t3 and t3["uids"] == (self.config["uid"],) * 4 and t3["cgroup"] == T3_SERVICE_CGROUP,
+                "T3 service identity is unknown or outside its owned cgroup")
+        handles = []
+        try:
+            for process in inventory.values():
+                if not self.processes.live_t3_terminal(process, {t3["pid"]}):
+                    continue
+                try:
+                    # Full kernel idle proof, even when terminal input observation is not qualified.
+                    self.processes.idle_shell(process, inventory, {t3["pid"]})
+                except Blocked:
+                    continue
+                handle = self.processes.hang_up(process)
+                if handle is not None:
+                    handles.append(handle)
+        except BaseException:
+            for handle in handles:
+                os.close(handle)
+            raise
+        # A shell that ignores SIGHUP is never escalated; the inventory check keeps blocking Stop.
+        remaining = self.processes.wait_exited(handles, T3_TERMINAL_HANGUP_SECONDS) if handles else 0
+        return dict(released=len(handles) - remaining, remaining=remaining)
+
     def verify_t3_snapshot(self, expected_sequence):
         path = self.workspace / "t3/userdata/statev2.sqlite"
         if self.config.get("startServices") is False and not path.exists():
@@ -2148,6 +2214,11 @@ class Runtime:
             self.s["activityAt"] = self.clock()
             self.save()
             return dict(type="UsefulActivity", **self.identity())
+        if action == "release-t3-terminals":
+            require(self.s["phase"] == "Ready", "Admissions fenced")
+            self.require_no_connect_operation()
+            return dict(type="T3TerminalsReleased", **self.identity(), operationId=operation,
+                        **self.adapter.release_t3_terminals(self.s["tasks"]))
         if action == "cancel-drain":
             self.diagnostic_stage = "cancel-drain"
             require(self.s["phase"] == "Fenced" and self.s.get("fenceOperation") == operation,

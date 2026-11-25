@@ -87,6 +87,10 @@ class FakeLinux:
         for task in tasks.values():
             rt.require(not self.task_running(task), "Registered task still running")
 
+    def release_t3_terminals(self, tasks):
+        self.events.append("release-t3-terminals")
+        return dict(released=1, remaining=0)
+
     def verify_t3_snapshot(self, sequence):
         self.events.append("t3-proof")
         return dict(type="T3CommittedIdle", threadSequence=0, globalV2Sequence=0, applicationSequence=0)
@@ -562,6 +566,16 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual("BusyOrUnknown", result["workInventory"]["state"])
         self.assertEqual(before, self.runtime.s)
         self.assertFalse(self.adapter.frozen)
+
+    def test_release_t3_terminals_runs_only_while_ready(self):
+        result = self.request("release-t3-terminals")
+        self.assertEqual("T3TerminalsReleased", result["type"])
+        self.assertEqual((1, 0), (result["released"], result["remaining"]))
+        self.assertIn("release-t3-terminals", self.adapter.events)
+        self.runtime.s["phase"] = "Frozen"
+        self.adapter.events.clear()
+        self.assert_blocked("release-t3-terminals", "Admissions fenced")
+        self.assertNotIn("release-t3-terminals", self.adapter.events)
 
     def test_failed_postfreeze_t3_proof_can_resume_without_requiring_readonly_mount(self):
         with patch.object(self.adapter, "verify_t3_snapshot",

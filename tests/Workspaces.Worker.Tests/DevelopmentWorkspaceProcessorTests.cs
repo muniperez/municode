@@ -739,6 +739,39 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task StopHangsUpIdleClosedT3TerminalShellAndContinuesDraining()
+    {
+        var (_, vm, operation) = await SeedStop("pending");
+        runtime.Inventory = "BusyOrUnknown";
+        runtime.InventoryReason = "Live T3 terminal shell remains in the guest";
+        runtime.ReleaseClearsTerminal = true;
+
+        await Hop("gateway-drain");
+        Assert.Null((await CurrentVm(vm.Id)).ErrorCode);
+        Assert.Null((await CurrentOperation(operation.Id)).ErrorCode);
+        Assert.Contains("release-t3-terminals", runtime.Actions);
+        Assert.DoesNotContain("quiesce", runtime.Actions);
+    }
+
+    [Fact]
+    public async Task MonitorNeverHangsUpT3TerminalShells()
+    {
+        var (_, vm, start) = await Seed("ready", false);
+        vm.Phase = "ready"; vm.ProviderServerId = "server-owned"; vm.IpAddress = "198.51.100.10";
+        vm.LastActivityAt = clock.GetUtcNow().AddMinutes(-60);
+        start.Status = "completed";
+        await db.SaveChangesAsync();
+        runtime.Inventory = "BusyOrUnknown";
+        runtime.InventoryReason = "Live T3 terminal shell remains in the guest";
+        runtime.ReleaseClearsTerminal = true;
+
+        await Processor().MonitorVmAsync(await CurrentVm(vm.Id), default);
+        await Processor().MonitorVmAsync(await CurrentVm(vm.Id), default);
+        Assert.DoesNotContain("release-t3-terminals", runtime.Actions);
+        Assert.Equal("BusyOrUnknown", runtime.Inventory);
+    }
+
+    [Fact]
     public async Task StopReportsSuccessiveDrainBlockersAndRetriesWhenTheyClear()
     {
         var (workspace, vm, operation) = await SeedStop("pending");
@@ -769,6 +802,8 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
 
         runtime.InventoryReason = "Live T3 terminal shell remains in the guest";
         await AssertHold("workspace_drain_t3_terminal", "run exit at the shell prompt");
+        Assert.DoesNotContain("contact your operator", (await CurrentVm(vm.Id)).ErrorMessage);
+        Assert.Contains("release-t3-terminals", runtime.Actions);
         Assert.Empty(shellAuthorizations);
 
         runtime.InventoryReason = "/private/guest-detail";
@@ -1891,6 +1926,7 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         public bool TaskRunning { get; set; }
         public string? Inventory { get; set; } = "IdleCandidate";
         public string? InventoryReason { get; set; }
+        public bool ReleaseClearsTerminal { get; set; }
         public bool GitClean { get; set; } = true;
         public string Phase { get; set; } = "Ready";
         public string ReceiptFilesystemUuid { get; set; } = "filesystem-retained";
@@ -1929,6 +1965,7 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
                 LastStopArguments = JsonSerializer.SerializeToElement(arguments, Json);
             if (Rejections.TryGetValue(action, out var rejection)) return Task.FromResult(rejection);
             if (action is "resume" or "cancel-drain") Phase = "Ready";
+            if (action == "release-t3-terminals" && ReleaseClearsTerminal) (Inventory, InventoryReason) = ("IdleCandidate", null);
             if (action == "receipt-validate" && FailReceipt) throw new InvalidOperationException("Receipt was not confirmed.");
             if (action == "status")
             {
