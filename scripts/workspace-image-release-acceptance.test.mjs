@@ -53,6 +53,9 @@ async function fixture(t, failure, timeouts = deadlines) {
   let terminalClosed = false;
   let transitions = [];
   let deletingVolume = false;
+  let launchFailed = false;
+  let cleanupGetFailed = false;
+  let terminalCloses = 0;
   const operations = [];
   function fault(name) {
     if (failure !== name || faultUsed) return false;
@@ -100,7 +103,10 @@ async function fixture(t, failure, timeouts = deadlines) {
         assert.deepEqual(JSON.parse(Buffer.concat(chunks)), { generation, service: "t3" });
         operations.push(`launch-${generation}`);
         terminalClosed = false;
-        if (fault("t3-write")) return answer({}, 503);
+        if (fault("t3-write") || ["cleanup-get", "identity"].includes(failure) && !launchFailed) {
+          launchFailed = true;
+          return answer({}, 503);
+        }
         return answer({ url: `${origin}/__workspaces/launch?code=${launchCode}` });
       }
       assert.equal(url.searchParams.get("organizationId"), "test-org");
@@ -117,16 +123,28 @@ async function fixture(t, failure, timeouts = deadlines) {
         transitions = ["deleting", "stopped"];
       } else if (req.method === "DELETE") {
         operations.push("delete");
+        if (phase === "deleting") return answer({}, 409);
         assert.equal(phase === "stopped" || phase === "deleted", true);
         assert.equal(url.searchParams.get("confirmPermanentDeletion"), "true");
         if (failure === "delete-not-found") return answer({}, 404);
         if (fault("delete")) return answer({}, 503);
+        if (failure === "delete-lost" && phase === "stopped") {
+          phase = "deleting";
+          deletingVolume = true;
+          transitions = ["deleted"];
+          return answer({}, 503);
+        }
         phase = "deleting";
         deletingVolume = true;
         transitions = ["deleted"];
         return answer(workspace(), 202);
       }
+      if (failure === "cleanup-get" && launchFailed && !cleanupGetFailed) {
+        cleanupGetFailed = true;
+        return answer({}, 503);
+      }
       const state = workspace();
+      if (failure === "identity" && launchFailed) state.name = "another-workspace";
       if (req.method === "GET" && transitions.length) phase = transitions.shift();
       return answer(state);
     }
@@ -170,7 +188,7 @@ async function fixture(t, failure, timeouts = deadlines) {
           break;
         case "terminal.observe":
           stream = request.id;
-          chunk({ type: "snapshot" });
+          if (failure !== "t3-hang") chunk({ type: "snapshot" });
           break;
         case "terminal.write": {
           const command = request.payload.data;
@@ -195,6 +213,7 @@ async function fixture(t, failure, timeouts = deadlines) {
         case "terminal.close":
           assert.equal(request.payload.deleteHistory, true);
           terminalClosed = true;
+          terminalCloses++;
           exit(null);
           break;
         default: assert.fail(`Unexpected synthetic RPC ${request.tag}`);
@@ -211,13 +230,13 @@ async function fixture(t, failure, timeouts = deadlines) {
   await runAcceptance({ apiOrigin: origin, organizationId: "test-org", gatewayDomain: "0.0.1",
     profile: "test-profile", planId: "test-plan", volumeSizeGb: 10 }, report,
   { key, interval: 5, timeouts });
-  assert.equal(phase, failure === "delete-not-found" ? "stopped" : "deleted");
+  assert.equal(phase, { "delete-not-found": "stopped", identity: "ready" }[failure] ?? "deleted");
   assert.equal(operations.filter(x => x === "create").length, 1);
   assert.equal(report.workspaceId, workspaceId);
   for (const secret of [key, receipt, launchCode, "ticket-1", origin]) {
     assert.ok(!JSON.stringify(report).includes(secret));
   }
-  return { report, operations };
+  return { report, operations, terminalCloses };
 }
 
 test("creates exact candidate, uses separate T3 generations, and confirms permanent deletion", async t => {
@@ -238,7 +257,6 @@ for (const [failure, step, code] of [
   ["t3-write", "t3-write", "HTTP_503"],
   ["stop", "stop", "HTTP_503"],
   ["start-t3-verify", "start-t3-verify", "T3_FILE_CONTENT_MISMATCH"],
-  ["delete", "delete", "HTTP_503"],
   ["create-timeout", "create-ready", "TIMEOUT"],
 ]) {
   test(`${failure} preserves the failed step and still deletes`, async t => {
@@ -250,6 +268,37 @@ for (const [failure, step, code] of [
     assert.equal(report.cleanup.status, "confirmed");
   });
 }
+
+test("transient delete errors are retried within the cleanup budget", async t => {
+  for (const failure of ["delete", "delete-lost"]) {
+    const { report, operations } = await fixture(t, failure);
+    assert.equal(report.status, "passed", failure);
+    assert.equal(report.cleanup.status, "confirmed", failure);
+    assert.equal(operations.filter(x => x === "delete").length, 2, failure);
+  }
+});
+
+test("a transient cleanup read still stops before deleting", async t => {
+  const { report, operations } = await fixture(t, "cleanup-get");
+  assert.equal(report.failedStep, "t3-write");
+  assert.equal(report.cleanup.status, "confirmed");
+  assert.deepEqual(operations.slice(-2), ["stop", "delete"]);
+});
+
+test("cleanup never stops or deletes a workspace whose identity does not match", async t => {
+  const { report, operations } = await fixture(t, "identity");
+  assert.equal(report.failedStep, "t3-write");
+  assert.deepEqual(report.cleanup, { status: "unconfirmed", code: "UNEXPECTED_WORKSPACE_IDENTITY" });
+  assert.deepEqual(operations, ["create", "launch-1"]);
+});
+
+test("a T3 step timeout still closes the opened terminal before Stop", async t => {
+  const { report, operations, terminalCloses } = await fixture(t, "t3-hang", { ...deadlines, "t3-write": 200 });
+  assert.deepEqual(report.steps["t3-write"], { status: "failed", code: "TIMEOUT" });
+  assert.equal(terminalCloses, 1);
+  assert.equal(report.cleanup.status, "confirmed");
+  assert.deepEqual(operations.slice(-2), ["stop", "delete"]);
+});
 
 test("a missing delete response does not prove provider removal", async t => {
   const { report, operations } = await fixture(t, "delete-not-found");

@@ -74,6 +74,11 @@ class NativeComponentTests(unittest.TestCase):
         self.assertFalse(report["nativeCandidatePassed"])
         self.assertFalse(report["runtimeQualifiedNative"])
 
+    def test_scratch_quiesces_after_bind_mounts(self):
+        _, visited, _ = self.run_component("scratch")
+        self.assertLess(visited.index("scratch-build-output-bind-mounts"), visited.index(native.QUIESCE_PROBE))
+        self.assertEqual(visited[-2:], [native.READBACK_PROBE, "cleanup"])
+
     def test_expired_authorization_skips_mutation_but_runs_owned_cleanup(self):
         report, visited, auth = self.run_component("t3-recovery", expires_at_probe=4)
         self.assertEqual(auth, [0, 1, 2, 3, 4])

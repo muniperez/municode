@@ -112,8 +112,9 @@ COMPONENT_PROBES = {
                             "frozen-real-pty-blocked-stdin-proof"},
     "retained-storage": STOP_FIXTURE | {"retained-volume-service-remount"},
     "backup-restore": STOP_FIXTURE | {"encrypted-user-file-restore"},
-    "scratch": T3_FIXTURE | {TERMINAL_PROBE, "scratch-tier-environment-and-cache-migration",
-                            "t3-terminal-scratch-environment", "scratch-build-output-bind-mounts"},
+    # Quiesce proves production Stop unmounts the bind mounts without lazy unmounts.
+    "scratch": STOP_FIXTURE | {"scratch-tier-environment-and-cache-migration",
+                               "t3-terminal-scratch-environment", "scratch-build-output-bind-mounts"},
     "coding-tools": T3_FIXTURE | {TERMINAL_PROBE, "codex-empty-git-probes-save-and-reject-data",
                                  "copilot-stdio-provider-setup", "source-control-cli-service-terminal-and-discovery"},
 }

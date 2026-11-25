@@ -12,6 +12,8 @@ const cookieName = "__Host-workspaces-workspace";
 const steps = ["create-ready", "t3-write", "stop", "start-t3-verify", "delete"];
 const defaults = { "create-ready": 600_000, "t3-write": 120_000, stop: 600_000,
   "start-t3-verify": 720_000, delete: 900_000, recover: 30_000 };
+const terminalCloseTimeout = 10_000;
+const identityFailures = new Set(["UNEXPECTED_WORKSPACE_IDENTITY", "UNEXPECTED_WORKSPACE_VMS"]);
 const id = value => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(value);
 
 class Failure extends Error {
@@ -47,6 +49,18 @@ async function poll(action, interval, signal) {
   }
 }
 
+// Cleanup retries server errors, throttling and lost connections until its own deadline.
+async function retrying(signal, action) {
+  try {
+    return await action();
+  } catch (error) {
+    const transient = error instanceof Failure ? error.status >= 500 || error.status === 429 :
+      error instanceof TypeError;
+    if (transient && !signal.aborted) return false;
+    throw error;
+  }
+}
+
 async function readKey(path) {
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
@@ -72,10 +86,8 @@ async function withSocket(url, cookie, signal, action) {
     for (const request of pending.values()) request.reject(error);
     pending.clear();
   };
-  const aborted = () => {
-    rejectAll(signal.reason);
-    socket.close();
-  };
+  // Keep the socket open after a deadline so the caller can still close its terminal.
+  const aborted = () => rejectAll(signal.reason);
   signal.addEventListener("abort", aborted, { once: true });
 
   function send(message) {
@@ -122,17 +134,25 @@ async function withSocket(url, cookie, signal, action) {
       socket.addEventListener("error", () => reject(new Failure("T3_SOCKET_FAILED")), { once: true });
     });
     await Promise.race([opened, deadline]);
-    await action((tag, payload, observe) => new Promise((resolve, reject) => {
-      signal.throwIfAborted();
+    await action((tag, payload, observe, requestSignal = signal) => new Promise((resolve, reject) => {
+      requestSignal.throwIfAborted();
       requireThat(socket.readyState === WebSocket.OPEN, "T3_SOCKET_CLOSED");
       const requestId = String(++nextId);
-      pending.set(requestId, { resolve, reject, observe });
+      const expire = () => {
+        if (pending.delete(requestId)) reject(requestSignal.reason);
+      };
+      requestSignal.addEventListener("abort", expire, { once: true });
+      const done = callback => value => {
+        requestSignal.removeEventListener("abort", expire);
+        callback(value);
+      };
+      pending.set(requestId, { resolve: done(resolve), reject: done(reject), observe });
       send({ _tag: "Request", id: requestId, tag, payload, headers: [] });
     }));
   } finally {
     signal.removeEventListener("abort", aborted);
     socket.close();
-    await Promise.race([closed, deadline]);
+    await Promise.race([closed, delay(5_000, undefined, { ref: false })]);
   }
 }
 
@@ -177,6 +197,7 @@ async function t3File(api, workspace, apiOrigin, gatewayDomain, contents, writin
     const snapshot = new Promise(done => { startWrite = done; });
     let output = "";
     let openedTerminal = false;
+    let failed = true;
     try {
       const opened = await rpc("terminal.open", { ...terminal, cwd: "/workspace", cols: 120, rows: 32 });
       openedTerminal = true;
@@ -195,8 +216,17 @@ async function t3File(api, workspace, apiOrigin, gatewayDomain, contents, writin
       const observedLine = resultLine.exec(output);
       requireThat(observedLine && !observedLine[1],
         writing ? "T3_FILE_WRITE_FAILED" : "T3_FILE_CONTENT_MISMATCH");
+      failed = false;
     } finally {
-      if (openedTerminal && !signal.aborted) await rpc("terminal.close", { ...terminal, deleteHistory: true });
+      if (openedTerminal) {
+        // A shell left open can block Stop, so close it even after the step deadline.
+        try {
+          await rpc("terminal.close", { ...terminal, deleteHistory: true }, undefined,
+            AbortSignal.timeout(terminalCloseTimeout));
+        } catch (error) {
+          if (!failed) throw error;
+        }
+      }
     }
   });
 }
@@ -275,34 +305,46 @@ export async function runAcceptance(config, report, { key, interrupt, timeouts =
   async function remove(signal, stopBudget) {
     const stopSignal = AbortSignal.any([signal, AbortSignal.timeout(stopBudget)]);
     let stopFailure;
+    let verified = false;
     try {
-      await poll(async () => {
+      await poll(() => retrying(stopSignal, async () => {
         const workspace = await get(stopSignal);
+        verified = true;
         if (workspace.phase === "stopped" || ["deleting", "deleted"].includes(workspace.volumeStatus)) return true;
         if (workspace.desiredState !== "stopped" || workspace.phase === "blocked") {
           try { await api("POST", path(`/stop${query}`), stopSignal); }
           catch (error) { if (error.status !== 409) throw error; }
         }
         return false;
-      }, interval, stopSignal);
+      }), interval, stopSignal);
     } catch (error) {
+      if (identityFailures.has(error?.message)) throw error;
       stopFailure = failureCode(error, stopSignal);
     }
+    // Never send a permanent Delete for a workspace whose identity this cleanup has not read back.
+    requireThat(verified, stopFailure ? `CLEANUP_STOP_${stopFailure}` : "CLEANUP_IDENTITY_UNVERIFIED");
     // The API refuses deletion unless all VMs have stopped and their tracked resources are gone.
     let deleted;
-    try { deleted = remember(await api("DELETE", path(`${query}&confirmPermanentDeletion=true`), signal)); }
-    catch (error) {
-      if (error.status === 409 && stopFailure) throw new Failure(`CLEANUP_STOP_${stopFailure}`);
-      throw error;
-    }
+    await poll(() => retrying(signal, async () => {
+      try {
+        deleted = remember(await api("DELETE", path(`${query}&confirmPermanentDeletion=true`), signal));
+        return true;
+      } catch (error) {
+        if (error.status !== 409) throw error;
+        // An earlier Delete whose response was lost may already have started deletion.
+        const workspace = await get(signal);
+        if (["deleting", "deleted"].includes(workspace.volumeStatus)) return deleted = workspace;
+        throw stopFailure ? new Failure(`CLEANUP_STOP_${stopFailure}`) : error;
+      }
+    }), interval, signal);
     if (deleted.phase === "delete_failed") throw new Failure("WORKSPACE_DELETION_FAILED");
-    await poll(async () => {
+    await poll(() => retrying(signal, async () => {
       const workspace = await get(signal);
       requireThat(workspace.phase !== "delete_failed", "WORKSPACE_DELETION_FAILED");
       return workspace.phase === "deleted" && workspace.volumeStatus === "deleted" &&
         workspace.providerVolumeId === null && workspace.providerServerId === null &&
         workspace.vms.every(vm => vm.phase === "deleted" && vm.providerServerId === null && vm.computeReserved === false);
-    }, interval, signal);
+    }), interval, signal);
     report.cleanup = { status: "confirmed", evidence: "control-plane-deletion-tombstone" };
   }
 

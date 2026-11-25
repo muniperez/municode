@@ -78,7 +78,9 @@ and permanently deletes the workspace. Its sanitized JSON report is in
 `.local/artifacts/workspace-image-release/`. The provider snapshot ID is operator-supplied;
 the API exposes the workspace's registered image key, not the underlying snapshot ID.
 The runner checks that key on both generations. On failure it records the failed step and
-tries normal Stop and Delete again without changing the failed result. If creation's response
+tries normal Stop and Delete again without changing the failed result. Cleanup closes any T3
+terminal it opened, retries server errors and lost connections until its deadline, and never
+sends Stop or Delete until it reads back the workspace's unique name. If creation's response
 is lost, it searches for its unique name instead of sending a second Create. If cleanup is
 unconfirmed (including after a force-kill), locate the workspace using the report ID or unique
 name in the test organization and reconcile through normal Stop and permanent Delete.
