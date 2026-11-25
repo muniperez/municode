@@ -47,8 +47,8 @@ If a disposable native qualification stops at `T3_RESTART_LEFT_UNKNOWN_WORK`, re
 the probe/source identity and the short allowlisted work-inventory reason code. Do not retain
 runtime logs, process arguments, executable or cgroup paths, SQL, usernames, or secrets.
 The native probe polls only this advisory signal for a bounded interval and rechecks VM,
-T3, retained-volume, and Ready identities on every observation. Repeat a clean native
-qualification before capturing an image.
+T3, retained-volume, and Ready identities on every observation. Resolve the failure
+and repeat the affected component check.
 
 Optional [T3 Connect enrollment](../../docs/setup/runtime.md#runtime-interfaces) uses the existing
 primary VM and managed T3 unit, a private memory-only approval page on loopback
@@ -120,8 +120,7 @@ never use HTTP for secrets, authenticated downloads or other build inputs.
 decompression, conversion, import, boot or disk write.** A checksum/size failure
 stops the example and removes the temporary download; never bypass it or adopt
 a digest from the HTTP response. The `.img` is already QCOW2, not a compressed
-archive. Retrieval alone does not qualify an image: re-run native image
-qualification on the disposable builder before resolving #16/#18 or capture.
+archive. Retrieval alone does not qualify an image.
 
 An operator must download and verify the specified base image, then boot it in a
 **disposable isolated builder VM without workspace volumes**. No build script allocates
@@ -137,7 +136,7 @@ python3 -B image/build.py install \
   --source-revision <exact-40-character-workspaces-commit> --builder-identity <operator-build-id>
 python3 -B image/build.py generalize \
   --acknowledgement DESTROY-DISPOSABLE-IMAGE-BUILDER
-# Power off via the builder's management console, then explicitly capture/register the image.
+# Power off via the builder's management console, then capture a private candidate.
 ```
 
 The destructive guard requires all of: exact acknowledgement, root-owned builder marker,
@@ -147,6 +146,12 @@ Generalization erases root/user homes, agent logins, build source, workspace and
 enrollment/runtime state, cloud-init seed/state/logs, machine IDs, SSH host keys and logs.
 First boot regenerates identity/host keys through systemd/cloud-init. Do not execute more
 interactive build commands after generalization. Capture only after power-off.
+Register the private candidate in isolation, then run the
+[operator lifecycle acceptance](../../docs/setup/runtime.md#release-a-workspace-image)
+on one disposable workspace from that exact snapshot. It must reach Ready, save a file through
+T3, stop, restart and read the same bytes, then delete with provider resources confirmed gone.
+Only then promote that snapshot; on failure or timeout keep it private and retain the prior
+approved image. If a component changed, run its specialized check before generalizing the builder.
 
 ### Provider images (Hetzner, DigitalOcean, Vultr)
 
@@ -268,7 +273,7 @@ The builder also writes `provenance.installedImmutableInputs.files`: canonical r
 installed paths and their actual SHA-256 hashes for the curated runtime files, storage
 inputs, systemd units, npm locks, pinned executable entry points and T3 telemetry helper.
 Source-managed copies must match the staged source bytes exactly before the manifest is
-written. This evidence is checked by native qualification, not a qualification pass.
+written. The native harness checks this evidence; it does not prove release acceptance.
 This is a reproducible **input/toolchain recipe**, not a claim of byte-identical cloud
 snapshot disks. Package auto-updates are masked: patch by building/registering a new pinned
 image, not by silently changing an existing image. Toolchain installation happens only
@@ -418,7 +423,7 @@ The T3 service explicitly uses `PATH=/usr/local/bin:/usr/bin:/bin` and
 No provider sign-in or Git credential setup runs during image build/bootstrap.
 No provider tokens, account configurations, device codes, or test-repository data
 belong in the image, manifest, native reports, CI output, or screenshots. Generalize
-after qualification and before capture; never capture a workspace after user login.
+before capture; never capture a workspace after user login.
 
 On a fresh workspace, open **T3 → Settings → Source control** and refresh discovery.
 Both providers should be available and signed out, not missing/unknown. From its terminal,
@@ -458,20 +463,20 @@ be stored in private files under `/workspace/home/.config/{gh,glab-cli}`. Treat 
 home/backup data as sensitive; do not copy it to another user/workspace or image.
 Ephemeral workspaces do not retain these sign-ins after deletion.
 
-The native qualification now requires missing-binary/version checks as coding UID 2000
+The `coding-tools` component check includes missing-binary/version checks as coding UID 2000
 using the actual running T3 service PATH, execution of both version commands through a
 real T3 terminal, and the authenticated `server.discoverSourceControl` RPC reporting both
 providers available and unauthenticated with matching versions. This is the RPC behind
 the pinned Settings page: upstream commit above, `packages/contracts/src/rpc.ts`,
 `packages/source-control-{github,gitlab}/src/server/*SourceControlProvider.ts`, and
 `apps/web/src/components/settings/SourceControlSettings.tsx`. It never performs sign-in,
-supplies provider credentials, or reports raw auth output. A missing provider blocks the
-native candidate. Source tests use synthetic archives/RPC fixtures, not a hosted login.
+supplies provider credentials, or reports raw auth output. A missing provider fails the
+component check. Source tests use synthetic archives/RPC fixtures, not a hosted login.
 **The updated image/native probes and browser/account/repository checks have not been
 run in a sanctioned hosted environment.** `sourceControlUserSignInQualified` remains
 false; source tests are not evidence of provider authentication or browser qualification.
 
-### Qualify the latest stable T3 release
+### Update the pinned T3 release
 
 The local candidate tool pins the upstream commit, verifies the Linux x64 archive
 against GitHub's published SHA-256, and pins the resource monitor from its archive
@@ -484,31 +489,43 @@ python3 -B templates/development-workspaces/image/t3-candidate.py \
 ```
 
 Review the release notes and use the candidate lockfile in the exact source tree
-for the [disposable builder](#prepared-image). On it, run `image/native.py plan`
-with the runtime SHA-256, then `image/native.py run` with the same digest and the
-root-owned short-lived authorization from the operator. Hosted operators can use
-their guarded builder qualification and preflight helpers with the exact source
-revision and runtime SHA-256. Retain the installed manifest and native report before generalizing the builder. Use the exact installed
-version and protocol in the qualified image registration's `T3Version` and
+for the [disposable builder](#prepared-image). Use the exact installed version
+and protocol in the candidate image registration's `T3Version` and
 `T3EnvironmentProtocol`. Protocol 2 is currently supported.
 
-Native qualification also loads the installed renderer from guest loopback: the
+### Specialized native component checks
+
+Run only checks affected by changes to the component or its dependencies. On the guarded
+disposable builder, before generalizing, use `image/native.py plan --component NAME
+--expected-runtime-sha256 DIGEST`, then `image/native.py run --component NAME
+--expected-runtime-sha256 DIGEST --authorization FILE` with the same installed runtime digest
+and the existing root-owned authorization. Each run keeps the machine, run and digest
+bindings, five-minute authorization and owned-fixture cleanup. Retain the sanitized component
+report and installed manifest before generalization. A component pass is not full native
+qualification or release approval. The legacy combined run is not part of the gate; do not
+renew its authorization to make it finish.
+
+| Change | Component check |
+| --- | --- |
+| T3 version, service restart or resource monitor | `t3-recovery` |
+| T3 session scopes, Connect management or activity hooks | `t3-session` |
+| T3 SQLite schema, idle detection or PTY/freezer behavior | `t3-idle` |
+| Retained mount, volume ownership or clean Stop | `retained-storage` |
+| Encrypted backup or separate-volume restore | `backup-restore` |
+| Scratch environment, migration or build-output mounts | `scratch` |
+| Coding agents or source-control tooling | `coding-tools` |
+
+T3 fixture setup also loads the installed renderer from guest loopback: the
 document, its module scripts, stylesheets and splash logo, and every chunk in the entry
 module's Vite preload list must return 200 with the expected MIME type and a nonempty
 body. A missing chunk served as the HTML fallback keeps the browser on the splash
-screen, so it blocks the candidate. This checks delivery only (`browserUiVerified: false`);
+screen, so it fails the component check. This checks delivery only (`browserUiVerified: false`);
 it is not a browser rendering pass.
-
-For hosted acceptance, start a disposable workspace on that exact registered
-image. Follow the [T3 Connect runtime contract](../../docs/setup/runtime.md#runtime-interfaces) to verify the
-authenticated gateway, WebSocket, owner enrollment, relay and desktop discovery.
-Use synthetic data and a verified backup to test clean stop, retained-volume
-reattachment and rollback before moving existing workspaces. Publish the
-qualified image as the default only after the native and hosted checks pass.
 
 ### Rolling out to existing workspaces
 
-Build, qualify, generalize, power off, capture/register a **new immutable image revision**;
+Build, generalize, power off, capture a **new immutable private image revision**, then
+pass the release lifecycle before promoting it;
 retain the previous image and its exact policy registration until all running
 generations that use it are stopped. Keep it available for rollback. Update the approved image selection for new
 workspaces. Changing a catalog/default image alone does not update an existing VM.
@@ -1575,5 +1592,5 @@ Upstream uses **singular repeatable `--scope`**, not `--scopes`; no DPoP binding
 Not executed here: paid image capture, real amd64 image boot, actual T3 headless issuance,
 real cgroup freeze/stop behavior, privileged ext4 mount/unmount, real age encryption and
 off-host durability, independent-key separate-volume restore, provider network isolation.
-The development host is ARM64; the hash-verified amd64 T3 binary cannot execute here.
-All these are explicit live qualification gates, not silently successful fake integrations.
+Synthetic results do not prove these live behaviors. Use the release lifecycle for
+promotion and the appropriate specialized checks for changed components.

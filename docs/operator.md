@@ -110,8 +110,9 @@ workspace exists.
 The protected one-time owner token is downloaded to
 `<config-home>/seed/<operation>/setup-token` with owner-only permissions and is
 never printed. Open `https://console.example.com/setup`, enter the token manually
-and complete first-owner sign-in. Then register the provider account explicitly,
-qualify a workspace image and admit a plan. The seed token remains on the
+and complete first-owner sign-in. Then register the provider account explicitly and use a
+test plan to run [image release acceptance](setup/runtime.md#release-a-workspace-image)
+before admitting the image for users. The seed token remains on the
 operator workstation and is not copied to OpenBao or the provider API store by
 seed. No coding VM is created by this flow.
 
@@ -248,8 +249,8 @@ printf '%s\n' '{"installationId":"replace-with-installation-id","operationId":"f
 ```
 
 Complete setup over the public API from the console origin. Remove setup input,
-output and the one-time token immediately after success. Then register a provider,
-qualified image and plan before enabling workspace admission. See
+output and the one-time token immediately after success. Test the private candidate with
+an isolated provider registration and plan before enabling user workspace admission. See
 [control-plane policy](setup/control-plane.md) and [runtime setup](setup/runtime.md).
 
 ## Operate and upgrade
