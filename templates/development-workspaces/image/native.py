@@ -64,24 +64,65 @@ UNIT_HASHES = {
     "workspaces-repos-checkpoint.service": "368003fd14e0e567c6fe93b0e73eb837fd06baabe0683769a01b2a038bd7d960",
     "workspaces-repos-checkpoint.timer": "72fc2dcc4513fc273d6b6fc4a3aa3406a6099ac18dd543a96ea3729ab4033801",
 }
-REQUIRED_PROBES = {
-    "target-and-toolchain-guard", "pristine-tools-only-no-default-apps", "loop-ext4-root-bootstrap",
-    "native-http-scopes-tickets-websocket", "authenticated-generation-task-and-activity-hooks",
-    "real-terminal-input-and-passive-root-hook", "actual-pinned-t3-sqlite-idle",
-    "actual-schema-copy-wal-and-fail-closed", "actual-kernel-frozen-readonly-t3-sqlite",
-    "real-active-foreground-and-unexpected-child", "unfrozen-real-pty-blocked-stdin-proof",
-    "frozen-real-pty-blocked-stdin-proof", "root-quiesce-controlled-thaw-stop-refreeze-unmount",
-    "loop-readback-user-files", "encrypted-user-file-restore",
-    "codex-empty-git-probes-save-and-reject-data",
-    "connect-management-rejects-routine-t3-token",
-    "t3-oom-crash-restart-stop-race-and-retry-budget",
-    "copilot-stdio-provider-setup",
-    "source-control-cli-service-terminal-and-discovery",
-    "scratch-tier-environment-and-cache-migration",
-    "t3-terminal-scratch-environment",
-    "scratch-build-output-bind-mounts",
-    "retained-volume-service-remount",
+GUARD_PROBE = "target-and-toolchain-guard"
+PRISTINE_PROBE = "pristine-tools-only-no-default-apps"
+BOOTSTRAP_PROBE = "loop-ext4-root-bootstrap"
+T3_PROBE = "native-http-scopes-tickets-websocket"
+TERMINAL_PROBE = "real-terminal-input-and-passive-root-hook"
+QUIESCE_PROBE = "root-quiesce-controlled-thaw-stop-refreeze-unmount"
+READBACK_PROBE = "loop-readback-user-files"
+
+# Ordered by fixture dependency. The boolean preserves the legacy full-run stop points.
+PROBE_SEQUENCE = (
+    (PRISTINE_PROBE, "pristine", True),
+    ("codex-empty-git-probes-save-and-reject-data", "codex_git", True),
+    (BOOTSTRAP_PROBE, "prepare", True),
+    (T3_PROBE, "start_services", True),
+    ("retained-volume-service-remount", "retained_volume_remount", True),
+    ("connect-management-rejects-routine-t3-token", "connect_management", False),
+    ("t3-oom-crash-restart-stop-race-and-retry-budget", "t3_recovery", True),
+    ("copilot-stdio-provider-setup", "copilot_provider", True),
+    # Restarts T3, so it runs before the probe terminal is opened.
+    ("scratch-tier-environment-and-cache-migration", "scratch_tier", False),
+    ("authenticated-generation-task-and-activity-hooks", "root_hooks", False),
+    (TERMINAL_PROBE, "terminals", True),
+    ("source-control-cli-service-terminal-and-discovery", "source_control", True),
+    ("t3-terminal-scratch-environment", "terminal_scratch", False),
+    ("scratch-build-output-bind-mounts", "scratch_mounts", False),
+    ("actual-pinned-t3-sqlite-idle", "sqlite", False),
+    ("actual-schema-copy-wal-and-fail-closed", "sqlite_negatives", False),
+    ("actual-kernel-frozen-readonly-t3-sqlite", "frozen_sqlite", False),
+    ("real-active-foreground-and-unexpected-child", "active_work", False),
+    ("unfrozen-real-pty-blocked-stdin-proof", "shell_proof", False),
+    ("frozen-real-pty-blocked-stdin-proof", "freeze_shell", False),
+    (QUIESCE_PROBE, "quiesce", True),
+    (READBACK_PROBE, "readback", False),
+    ("encrypted-user-file-restore", "encrypted_restore", False),
+)
+REQUIRED_PROBES = {GUARD_PROBE, *(name for name, _, _ in PROBE_SEQUENCE)}
+T3_FIXTURE = {BOOTSTRAP_PROBE, T3_PROBE}
+STOP_FIXTURE = T3_FIXTURE | {TERMINAL_PROBE, QUIESCE_PROBE, READBACK_PROBE}
+COMPONENT_PROBES = {
+    "t3-recovery": T3_FIXTURE | {"t3-oom-crash-restart-stop-race-and-retry-budget"},
+    "t3-session": T3_FIXTURE | {"connect-management-rejects-routine-t3-token",
+                               "authenticated-generation-task-and-activity-hooks", TERMINAL_PROBE},
+    "t3-idle": T3_FIXTURE | {TERMINAL_PROBE, "actual-pinned-t3-sqlite-idle",
+                            "actual-schema-copy-wal-and-fail-closed", "actual-kernel-frozen-readonly-t3-sqlite",
+                            "real-active-foreground-and-unexpected-child", "unfrozen-real-pty-blocked-stdin-proof",
+                            "frozen-real-pty-blocked-stdin-proof"},
+    "retained-storage": STOP_FIXTURE | {"retained-volume-service-remount"},
+    "backup-restore": STOP_FIXTURE | {"encrypted-user-file-restore"},
+    "scratch": T3_FIXTURE | {TERMINAL_PROBE, "scratch-tier-environment-and-cache-migration",
+                            "t3-terminal-scratch-environment", "scratch-build-output-bind-mounts"},
+    "coding-tools": T3_FIXTURE | {TERMINAL_PROBE, "codex-empty-git-probes-save-and-reject-data",
+                                 "copilot-stdio-provider-setup", "source-control-cli-service-terminal-and-discovery"},
 }
+
+
+def selected_probes(component):
+    if component is None:
+        return REQUIRED_PROBES
+    return {GUARD_PROBE, PRISTINE_PROBE} | COMPONENT_PROBES[component]
 
 
 class ProbeError(Exception):
@@ -482,11 +523,13 @@ def source_control_versions(path, lock):
 
 
 class Report:
-    def __init__(self, path, run_id, authorize=None):
+    def __init__(self, path, run_id, authorize=None, *, component=None):
         self.path = path
         self.authorize = authorize
+        self.component = component
         self.value = {
-            "schemaVersion": 1, "type": "NativeWorkspaceQualification", "runId": run_id,
+            "schemaVersion": 1, "type": ("NativeWorkspaceQualification" if component is None
+                                         else "NativeWorkspaceComponentCheck"), "runId": run_id,
             "runtimeSha256": EXPECTED_RUNTIME_SHA256, "startedAt": None,
             "clockSource": "pending-native-target-guard", "operatorWallClockTrusted": False,
             "storageMedium": "temporary-loop-backed-ext4-NOT-provider-persistence",
@@ -504,6 +547,9 @@ class Report:
                                  "PROVIDER_VOLUME_CYCLES_AND_ENCRYPTED_OFFHOST_RESTORE_SEPARATE_E2E",
                                  "LINKED_T3_CONNECT_RELAY_AND_GATEWAY_RECOVERY_AFTER_T3_RESTART_HOSTED_CHECK"],
         }
+        if component is not None:
+            self.value.update(component=component, selectedProbes=sorted(selected_probes(component)),
+                              componentCheckPassed=False)
 
     def save(self):
         staging = self.path.with_suffix(".pending")
@@ -540,14 +586,16 @@ class Report:
         self.value["probeCount"] = len(self.value["probes"])
         self.value["finishedAt"] = (dt.datetime.now(dt.timezone.utc).isoformat()
                                     if self.value["startedAt"] is not None else None)
-        self.value["nativeCandidatePassed"] = (
-            {item["name"] for item in self.value["probes"]} == REQUIRED_PROBES and
-            all(item["state"] == "passed" for item in self.value["probes"]
-                if item["requiredForNativeCandidate"]) and self.value["cleanup"] == "complete")
         passed = {item["name"] for item in self.value["probes"] if item["state"] == "passed"}
+        selected = selected_probes(self.component)
+        complete = (self.value["cleanup"] == "complete" and selected == passed and
+                    len(self.value["probes"]) == len(selected))
+        self.value["nativeCandidatePassed"] = self.component is None and complete
+        if self.component is not None:
+            self.value["componentCheckPassed"] = complete
         pty = {"unfrozen-real-pty-blocked-stdin-proof", "frozen-real-pty-blocked-stdin-proof"}
         self.value["runtimeQualifiedNative"] = (
-            REQUIRED_PROBES - pty <= passed and self.value["cleanup"] == "complete")
+            self.component is None and REQUIRED_PROBES - pty <= passed and self.value["cleanup"] == "complete")
         self.value["terminalInputObservedNative"] = "real-terminal-input-and-passive-root-hook" in passed
         self.value["terminalIdleKernelQualifiedNative"] = pty <= passed
         self.save()
@@ -583,12 +631,13 @@ class T3Client:
 
 
 class Native:
-    def __init__(self, authorization):
+    def __init__(self, authorization, *, component=None):
         self.authorization = authorization
         self.run_id = authorization["runId"]
         self.directory = HERE / "runs" / self.run_id
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=False)
-        self.report = Report(self.directory / "report.json", self.run_id, self.fresh_authorization)
+        self.report = Report(self.directory / "report.json", self.run_id, self.fresh_authorization,
+                             component=component)
         self.device = None
         self.alias = None
         self.client = None
@@ -2296,43 +2345,17 @@ class Native:
         self.report.value["cleanup"] = "complete"
 
     def run(self):
-        guarded = self.report.probe("target-and-toolchain-guard", self.guard)
+        component = self.report.component
+        required = component is None
+        guarded = self.report.probe(GUARD_PROBE, self.guard, required=required)
         try:
             if not guarded:
                 return
-            if not self.report.probe("pristine-tools-only-no-default-apps", self.pristine):
-                return
-            if not self.report.probe("codex-empty-git-probes-save-and-reject-data", self.codex_git):
-                return
-            if not self.report.probe("loop-ext4-root-bootstrap", self.prepare):
-                return
-            if not self.report.probe("native-http-scopes-tickets-websocket", self.start_services):
-                return
-            if not self.report.probe("retained-volume-service-remount", self.retained_volume_remount):
-                return
-            self.report.probe("connect-management-rejects-routine-t3-token", self.connect_management)
-            if not self.report.probe("t3-oom-crash-restart-stop-race-and-retry-budget", self.t3_recovery):
-                return
-            if not self.report.probe("copilot-stdio-provider-setup", self.copilot_provider):
-                return
-            # Restarts T3, so it runs before the probe terminal is opened.
-            self.report.probe("scratch-tier-environment-and-cache-migration", self.scratch_tier)
-            self.report.probe("authenticated-generation-task-and-activity-hooks", self.root_hooks)
-            if not self.report.probe("real-terminal-input-and-passive-root-hook", self.terminals):
-                return
-            if not self.report.probe("source-control-cli-service-terminal-and-discovery", self.source_control):
-                return
-            self.report.probe("t3-terminal-scratch-environment", self.terminal_scratch)
-            self.report.probe("scratch-build-output-bind-mounts", self.scratch_mounts)
-            self.report.probe("actual-pinned-t3-sqlite-idle", self.sqlite)
-            self.report.probe("actual-schema-copy-wal-and-fail-closed", self.sqlite_negatives)
-            self.report.probe("actual-kernel-frozen-readonly-t3-sqlite", self.frozen_sqlite)
-            self.report.probe("real-active-foreground-and-unexpected-child", self.active_work)
-            self.report.probe("unfrozen-real-pty-blocked-stdin-proof", self.shell_proof)
-            self.report.probe("frozen-real-pty-blocked-stdin-proof", self.freeze_shell)
-            if self.report.probe("root-quiesce-controlled-thaw-stop-refreeze-unmount", self.quiesce):
-                self.report.probe("loop-readback-user-files", self.readback)
-                self.report.probe("encrypted-user-file-restore", self.encrypted_restore)
+            selected = selected_probes(component)
+            for name, method, stop_on_failure in PROBE_SEQUENCE:
+                if name in selected and not self.report.probe(name, getattr(self, method), required=required):
+                    if component is not None or stop_on_failure:
+                        return
         finally:
             if guarded:
                 try:
@@ -2366,13 +2389,16 @@ def main():
     parser.add_argument("action", choices=("run", "plan"))
     parser.add_argument("--authorization", type=Path)
     parser.add_argument("--expected-runtime-sha256", required=True)
+    parser.add_argument("--component", choices=sorted(COMPONENT_PROBES),
+                        help="run only the named component and its fixture prerequisites")
     args = parser.parse_args()
     check(re.fullmatch(r"[a-f0-9]{64}", args.expected_runtime_sha256), "EXACT_RUNTIME_SHA256_REQUIRED")
     EXPECTED_RUNTIME_SHA256 = args.expected_runtime_sha256
     if args.action == "plan":
         print(json.dumps({"type": "NativeHarnessPlan", "nativeExecutionPerformed": False,
                           "expectedRuntimeSha256": EXPECTED_RUNTIME_SHA256,
-                          "requiredScopes": SCOPES, "requiredProbes": sorted(REQUIRED_PROBES),
+                          "component": args.component,
+                          "requiredScopes": SCOPES, "requiredProbes": sorted(selected_probes(args.component)),
                           "authorizationMaxTtlSeconds": 300,
                           "authorizationClockSources": ["native-vm-utc", "provider-https-date"],
                           "operatorWallClockTrusted": False,
@@ -2386,12 +2412,15 @@ def main():
     authorization = json.loads(args.authorization.read_text())
     validate_authorization(authorization, dt.datetime.now(dt.timezone.utc), sha("/etc/machine-id"))
     os.umask(0o077)
-    instance = Native(authorization)
+    instance = Native(authorization, component=args.component)
     instance.run()
-    print(json.dumps({"report": str(instance.report.path),
-                      "nativeCandidatePassed": instance.report.value["nativeCandidatePassed"],
-                      "runtimeQualified": False}))
-    raise SystemExit(0 if instance.report.value["nativeCandidatePassed"] else 1)
+    value = instance.report.value
+    result = {"report": str(instance.report.path), "nativeCandidatePassed": value["nativeCandidatePassed"],
+              "runtimeQualified": False}
+    if args.component is not None:
+        result.update(component=args.component, componentCheckPassed=value["componentCheckPassed"])
+    print(json.dumps(result))
+    raise SystemExit(0 if value.get("componentCheckPassed", value["nativeCandidatePassed"]) else 1)
 
 
 if __name__ == "__main__":
