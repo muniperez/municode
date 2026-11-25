@@ -1208,6 +1208,12 @@ without thread or task identifiers. Cancel stale queued runs normally; if a comp
 still lists background work that is no longer running, use T3 **Force Stop** on that thread.
 Stop must finish before permanent workspace deletion is allowed.
 
+`workspace_drain_t3_terminal` means stop preflight found a live interactive T3 shell, not
+necessarily a terminal tab that T3 still shows. The preflight does not signal the shell or
+its jobs and leaves the gateway available. Finish the jobs and run `exit` at the shell prompt;
+if the shell is no longer visible, contact the operator. Unrelated or unconfirmed processes
+still report the existing inventory holds.
+
 ### JSON control protocol
 
 Run `python3 -B /opt/workspaces-workspace/runtime.py call`, sending one newline-terminated

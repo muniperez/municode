@@ -24,6 +24,8 @@ IMAGE_MANIFEST = Path("/opt/workspaces-workspace/image-manifest.json")
 T3_ROOT = Path("/opt/workspaces-t3")
 T3_RELAY_CLIENT = "/usr/local/bin/cloudflared"
 T3_ENVIRONMENT_PROTOCOL = 2
+T3_SERVICE_CGROUP = "0::/workspaceswork.slice/workspaces-t3.service"
+LIVE_T3_TERMINAL = "Live T3 terminal shell remains in the guest"
 
 
 class Blocked(Exception):
@@ -433,6 +435,43 @@ class Procfs:
         require(result[0] == result[1], "Shell stdin/stderr PTY identity differs")
         return result[0]
 
+    def interactive_shell(self, pid):
+        executable = self.executable(pid)
+        aliases = {"/usr/bin/bash": {"bash", "sh"}, "/usr/bin/dash": {"dash", "sh"}}
+        require(executable["path"] in aliases and executable["uid"] == 0 and
+                stat.S_ISREG(executable["mode"]) and not executable["mode"] & 0o022,
+                "Shell executable is not an approved root-owned image binary")
+        argv = (self.root / str(pid) / "cmdline").read_bytes().split(b"\0")
+        require(argv[-1] == b"", "Incomplete shell command line")
+        argv = [arg.decode("utf-8", errors="strict") for arg in argv[:-1]]
+        options = {"-i", "-l", "-il", "-li", "--interactive", "--login",
+                   "--noprofile", "--norc", "--noediting", "--posix"}
+        require(argv and Path(argv[0]).name.removeprefix("-") in aliases[executable["path"]] and
+                all(arg in options for arg in argv[1:]),
+                "Shell scripts, -c commands and unknown invocation flags remain active work")
+        return executable
+
+    def controlling_pty(self, process):
+        tty = self.tty(process["pid"])
+        device = process["tty"] & 0xffffffff
+        require((os.major(tty[3]), os.minor(tty[3])) ==
+                ((device >> 8) & 0xfff, (device & 0xff) | ((device >> 12) & 0xfff00)),
+                "PTY device/session/foreground group changed")
+        return tty
+
+    def live_t3_terminal(self, process, t3_pids):
+        pid = process["pid"]
+        if not (process["ppid"] in t3_pids and process["uids"] == (2000,) * 4 and
+                process["cgroup"] == T3_SERVICE_CGROUP and process["tty"] != 0 and
+                pid == process["session"] == process["pgrp"]):
+            return False
+        try:
+            self.interactive_shell(pid)
+            self.controlling_pty(process)
+            return self.process(pid) == process
+        except (Blocked, OSError, ValueError):
+            return False  # Keep the original inventory refusal when attribution is uncertain.
+
     def idle_shell(self, process, inventory, t3_pids):
         pid = process["pid"]
         directory = self.root / str(pid)
@@ -452,19 +491,7 @@ class Procfs:
                     "Interactive shell has children or stopped/background jobs")
             require(not (directory / "task" / str(pid) / "children").read_text().strip(),
                     "Interactive shell has children or stopped/background jobs")
-            executable = self.executable(pid)
-            aliases = {"/usr/bin/bash": {"bash", "sh"}, "/usr/bin/dash": {"dash", "sh"}}
-            require(executable["path"] in aliases and executable["uid"] == 0 and
-                    stat.S_ISREG(executable["mode"]) and not executable["mode"] & 0o022,
-                    "Shell executable is not an approved root-owned image binary")
-            argv = (directory / "cmdline").read_bytes().split(b"\0")
-            require(argv[-1] == b"", "Incomplete shell command line")
-            argv = [arg.decode("utf-8", errors="strict") for arg in argv[:-1]]
-            options = {"-i", "-l", "-il", "-li", "--interactive", "--login",
-                       "--noprofile", "--norc", "--noediting", "--posix"}
-            require(argv and Path(argv[0]).name.removeprefix("-") in aliases[executable["path"]] and
-                    all(arg in options for arg in argv[1:]),
-                    "Shell scripts, -c commands and unknown invocation flags remain active work")
+            executable = self.interactive_shell(pid)
             syscall = (directory / "syscall").read_text().strip()
             parts = syscall.split()
             read_number = {"x86_64": 0, "aarch64": 63}.get(self.machine)
@@ -484,11 +511,7 @@ class Procfs:
                         "Native terminal adapter required: no proven blocking read(0) syscall")
                 require(channel in ("n_tty_read", "wait_woken"),
                         "Native terminal adapter required: no proven sleeping PTY read")
-            tty = self.tty(pid)
-            device = process["tty"] & 0xffffffff
-            require((os.major(tty[3]), os.minor(tty[3])) ==
-                    ((device >> 8) & 0xfff, (device & 0xff) | ((device >> 12) & 0xfff00)),
-                    "PTY device/session/foreground group changed")
+            tty = self.controlling_pty(process)
             require(self.process(pid) == process and self.executable(pid) == executable and
                     (directory / "syscall").read_text().strip() == syscall and self.tty(pid) == tty and
                     not (directory / "task" / str(pid) / "children").read_text().strip(),
@@ -1539,7 +1562,7 @@ class Linux:
             if self.local_layout():
                 self.verify_repos_mount(writable=False)
 
-    def idle(self, tasks):
+    def idle(self, tasks, *, report_terminal=False):
         for task in tasks.values():
             require(not self.task_running(task), "Registered task still running; lease expiry is not completion")
         allowed, t3_pids, preview_pids, preview_groups = {}, set(), set(), set()
@@ -1580,9 +1603,14 @@ class Linux:
             if process["pid"] not in allowed and self.processes.t3_relay_client(process, inventory, t3_pids):
                 allowed[process["pid"]] = "pinned-t3-relay-client"
             if process["pid"] not in allowed:
-                require(self.config.get("observedTerminalInputs") is True,
-                        "Unregistered live coding process; terminal input observation is not qualified")
-                self.processes.idle_shell(process, inventory, t3_pids)
+                try:
+                    require(self.config.get("observedTerminalInputs") is True,
+                            "Unregistered live coding process; terminal input observation is not qualified")
+                    self.processes.idle_shell(process, inventory, t3_pids)
+                except Blocked as error:
+                    if report_terminal and self.processes.live_t3_terminal(process, t3_pids):
+                        raise Blocked(LIVE_T3_TERMINAL) from error
+                    raise
         after = self.processes.inventory()
         verify_preview_children(after)
         identity = lambda values: {pid: (p["start"], p["ppid"], p["pgrp"], p["session"], p["uids"], p["cgroup"])
@@ -2027,7 +2055,7 @@ class Runtime:
             if request.get("includeWorkInventory") is True:
                 try:
                     self.require_no_connect_operation()
-                    self.adapter.idle(self.s["tasks"])
+                    self.adapter.idle(self.s["tasks"], report_terminal=True)
                     result["workInventory"] = dict(state="IdleCandidate", authoritative=False)
                 except Blocked as error:
                     result["workInventory"] = dict(state="BusyOrUnknown", authoritative=False,

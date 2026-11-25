@@ -92,6 +92,7 @@ internal sealed record WorkspaceRuntimeRejection(
         "Registered task still running; lease expiry is not completion" => "registered_task_running",
         "T3 account approval is pending" => "t3_account_approval_pending",
         "Coding process escaped supervised work slice" => "coding_process_outside_slice",
+        "Live T3 terminal shell remains in the guest" => "live_t3_terminal",
         "Unregistered live coding process; terminal input observation is not qualified" => "unregistered_coding_process",
         "Coding process inventory changed during inspection" => "process_inventory_changed",
         "Shell acquired children during idle inspection" => "shell_children_changed",

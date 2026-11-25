@@ -767,6 +767,10 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         Assert.Equal("workspace_delete_requires_stop", denied.Code);
         Assert.Empty(shellAuthorizations);
 
+        runtime.InventoryReason = "Live T3 terminal shell remains in the guest";
+        await AssertHold("workspace_drain_t3_terminal", "run exit at the shell prompt");
+        Assert.Empty(shellAuthorizations);
+
         runtime.InventoryReason = "/private/guest-detail";
         await AssertHold("workspace_drain_guest_inventory", "could not confirm");
         Assert.DoesNotContain("/private/guest-detail", (await CurrentVm(vm.Id)).ErrorMessage);

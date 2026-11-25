@@ -75,9 +75,9 @@ class IdleTerminalTests(unittest.TestCase):
         task.mkdir(parents=True, exist_ok=True)
         (task / "children").write_text(record["children"])
 
-    def inspect(self):
+    def inspect(self, *, report_terminal=False):
         with patch.object(rt, "run", return_value="100"):
-            self.adapter.idle({})
+            self.adapter.idle({}, report_terminal=report_terminal)
 
     def test_idle_t3_descendant_blocked_in_foreground_pty_read_is_recognized_only_with_opt_in(self):
         self.inspect()
@@ -87,6 +87,38 @@ class IdleTerminalTests(unittest.TestCase):
         self.config["observedTerminalInputs"] = False
         with self.assertRaises(rt.Blocked):
             self.inspect()
+
+    def test_stop_preflight_reports_surviving_prompt_until_shell_exits(self):
+        self.config["observedTerminalInputs"] = False
+        with self.assertRaisesRegex(rt.Blocked, rt.LIVE_T3_TERMINAL):
+            self.inspect(report_terminal=True)
+        self.assertIn(110, self.reader.inventory())
+
+        shutil.rmtree(self.root / "110")
+        self.inspect(report_terminal=True)
+
+    def test_stop_preflight_reports_shell_with_foreground_job_without_waiving_idle_proof(self):
+        self.write(110, foreground=120)
+        self.write(120, ppid=110, pgrp=120, session=110, argv=["sleep", "60"])
+        for qualified in (False, True):
+            with self.subTest(qualified=qualified):
+                self.config["observedTerminalInputs"] = qualified
+                with self.assertRaisesRegex(rt.Blocked, rt.LIVE_T3_TERMINAL):
+                    self.inspect(report_terminal=True)
+                with self.assertRaises(rt.Blocked):
+                    self.inspect()
+        self.assertEqual(self.reader.inventory()[120]["ppid"], 110)
+
+    def test_stop_preflight_does_not_attribute_ambiguous_work_to_t3_terminals(self):
+        self.config["observedTerminalInputs"] = False
+        original = dict(self.records[110])
+        for change in (dict(ppid=1), dict(tty=0), dict(foreground=0, session=100),
+                       dict(cgroup="0::/workspaceswork.slice/other.service"),
+                       dict(argv=["/bin/bash", "-c", "read"])):
+            with self.subTest(change=change):
+                self.write(110, **dict(original, **change))
+                with self.assertRaisesRegex(rt.Blocked, "Unregistered live coding process"):
+                    self.inspect(report_terminal=True)
 
     def test_interactive_login_and_automatic_tty_shell_forms(self):
         for argv in (["-bash"], ["/bin/bash"], ["/bin/bash", "--noprofile", "--norc", "-i"],

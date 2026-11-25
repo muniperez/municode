@@ -81,7 +81,7 @@ class FakeLinux:
         rt.require("unit" in task, "Ambiguous task launch requires reconciliation")
         return self.live
 
-    def idle(self, tasks):
+    def idle(self, tasks, *, report_terminal=False):
         self.events.append("idle")
         rt.require(not self.unknown, "Unregistered live process")
         for task in tasks.values():

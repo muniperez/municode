@@ -330,6 +330,8 @@ public sealed partial class DevelopmentWorkspaceProcessor
         {
             return WorkspaceRuntimeRejection.ReadReasonCode(inventory) switch
             {
+                "live_t3_terminal" => new("workspace_drain_t3_terminal",
+                    "A T3 terminal shell is still running, even if its tab was closed. Finish any terminal jobs and run exit at the shell prompt. If the shell is no longer visible in T3, contact your operator."),
                 "unregistered_coding_process" => new("workspace_drain_unregistered_process",
                     "The guest detected an unregistered coding process. Stop it cleanly in the workspace so draining can continue."),
                 "t3_account_approval_pending" => new("workspace_drain_t3_approval",
