@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <script>
+    try {
+      const s = localStorage.getItem("color-scheme");
+      if (s === "light" || s === "dark") {
+        document.querySelector('meta[name="color-scheme"]').content = s;
+      }
+    } catch {}
+  </script>
+  <meta name="description" content="Setup guide for Municode: deploy a self-hosted control plane with workspaces seed or Docker Compose, configure DNS, and register your VM images and plans.">
+  <title>Setup Guide | Municode Docs</title>
+  <link rel="stylesheet" href="../styles/site.css">
+  <script type="module" src="../scripts/site.js"></script>
+</head>
+<body>
+  <a href="#main-heading" class="skip-link visually-hidden">Skip to main content</a>
+  <div id="copy-status" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="site-brand" href="../index.html">
+        <span class="brand-mark" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <rect x="2" y="2.5" width="12" height="2.5" rx="1" fill="currentColor"/>
+            <rect x="2" y="6.75" width="12" height="2.5" rx="1" fill="currentColor" opacity="0.8"/>
+            <rect x="2" y="11" width="12" height="2.5" rx="1" fill="currentColor" opacity="0.55"/>
+          </svg>
+        </span>
+        <span>Municode</span>
+        <span class="brand-tag">Docs</span>
+      </a>
+
+      <div class="header-actions">
+        <nav class="site-nav" aria-label="Primary">
+          <button
+            class="menu-button"
+            type="button"
+            popovertarget="site-menu"
+            popovertargetaction="toggle"
+            aria-controls="site-menu"
+          >
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+            <span>Menu</span>
+          </button>
+
+          <ul id="site-menu" class="site-menu" popover="auto">
+            <li><a href="../index.html">Overview</a></li>
+            <li><a href="getting-started.html" aria-current="page">Setup</a></li>
+            <li><a href="architecture.html">Architecture</a></li>
+            <li><a href="cli-and-workflows.html">CLI &amp; Guides</a></li>
+            <li><a href="https://github.com/muniperez/municode">GitHub</a></li>
+          </ul>
+        </nav>
+
+        <button type="button" class="theme-toggle" aria-label="Switch color theme">
+          <span class="theme-option-dark" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+            </svg>
+          </span>
+          <span class="theme-option-light" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="4.5" stroke="currentColor" stroke-width="1.8"/>
+              <path d="M12 2v2.5M12 19.5V22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M2 12h2.5M19.5 12H22M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="container docs-shell">
+      <aside class="docs-sidebar">
+        <nav class="docs-nav" aria-label="Documentation">
+          <p class="docs-nav-heading">Documentation</p>
+          <ul class="docs-nav-list" role="list">
+            <li><a href="getting-started.html" aria-current="page">Setup Guide</a></li>
+            <li><a href="architecture.html">System Architecture</a></li>
+            <li><a href="cli-and-workflows.html">CLI &amp; Workflows</a></li>
+          </ul>
+          <p class="docs-nav-heading">On This Page</p>
+          <ul class="docs-nav-list" role="list">
+            <li><a href="#seed-workflow">1. Automated Seed Flow</a></li>
+            <li><a href="#seed-diagram">Seed Flow Diagram</a></li>
+            <li><a href="#dns-records">DNS Configuration</a></li>
+            <li><a href="#manual-host">2. Manual Host Install</a></li>
+            <li><a href="#admit-images">3. Register Images &amp; Plans</a></li>
+            <li><a href="#source-docs">Repository Guides</a></li>
+          </ul>
+        </nav>
+      </aside>
+
+      <article class="docs-content">
+        <header>
+          <span class="eyebrow">Setup Guide</span>
+          <h1 id="main-heading" tabindex="-1">Deploying a Municode Control Plane</h1>
+          <p class="hero-lead">
+            Municode deploys as a self-contained control plane. You can provision a fresh host automatically with <code>workspaces seed</code> or install the release bundle onto an existing server with Docker Compose.
+          </p>
+        </header>
+
+        <!-- SECTION 1: SEED WORKFLOW -->
+        <section id="seed-workflow">
+          <h2>1. Bootstrap a control plane with <code>workspaces seed</code></h2>
+          <p>
+            <code>workspaces seed</code> (or <code>municode seed</code>) provisions a single control-plane host from a signed release. It quotes recurring costs before creating any resources, records every step in a local journal so interrupted runs resume cleanly, and pauses for out-of-band SSH host verification and DNS setup.
+          </p>
+
+          <div class="callout callout-amber">
+            <p>
+              <strong>Safety guarantees:</strong> Seed creates no coding VMs, requires explicit cost-digest approval before provisioning, and reads your bootstrap cloud token only from a local file—never copying it onto the control-plane server.
+            </p>
+          </div>
+
+          <figure id="seed-diagram" class="diagram-figure">
+            <div class="diagram-header">
+              <span>SEED WORKFLOW</span>
+              <span>Plan &rarr; Provision &rarr; Verify Host Identity &rarr; Configure DNS &amp; Services &rarr; First-Owner Setup</span>
+            </div>
+            <div class="diagram-canvas">
+              <svg viewBox="0 0 920 510" role="img" aria-labelledby="diag-seed-title">
+                <title id="diag-seed-title">Five-step workflow for workspaces seed across Operator Workstation, Verification Gates, and Control-Plane Host: 1. Plan and cost quote, 2. Provision host with approval digest, 3. Verify console SSH fingerprint out of band, 4. Point DNS records and install stack over HTTPS, 5. Complete first-owner setup.</title>
+                <defs>
+                  <marker id="arr-s" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                    <path d="M1 1.5L8.5 5L1 8.5Z" class="svg-arrow"/>
+                  </marker>
+                  <marker id="arr-sa" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                    <path d="M1 1.5L8.5 5L1 8.5Z" class="svg-arrow-accent"/>
+                  </marker>
+                  <marker id="arr-se" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                    <path d="M1 1.5L8.5 5L1 8.5Z" class="svg-arrow-emerald"/>
+                  </marker>
+                </defs>
+
+                <!-- Column headers -->
+                <rect x="16" y="14" width="268" height="34" rx="6" class="svg-panel"/>
+                <text x="32" y="35" class="svg-group-label">WORKSTATION (CLI)</text>
+
+                <rect x="304" y="14" width="276" height="34" rx="6" class="svg-panel"/>
+                <text x="320" y="35" class="svg-group-label">VERIFICATION GATES</text>
+
+                <rect x="600" y="14" width="304" height="34" rx="6" class="svg-panel"/>
+                <text x="616" y="35" class="svg-group-label">CONTROL-PLANE HOST</text>
+
+                <!-- Phase 1 -->
+                <rect x="16" y="64" width="268" height="72" rx="7" class="svg-node"/>
+                <text x="30" y="86" class="svg-title">1. workspaces seed plan</text>
+                <text x="30" y="105" class="svg-subtitle">Verifies signed release &amp;</text>
+                <text x="30" y="122" class="svg-subtitle">writes local operation journal</text>
+
+                <line x1="284" y1="100" x2="302" y2="100" class="svg-edge-accent" marker-end="url(#arr-sa)"/>
+
+                <rect x="304" y="64" width="276" height="72" rx="7" class="svg-node-amber"/>
+                <text x="318" y="86" class="svg-title">Gate 1: Cost &amp; Release Check</text>
+                <text x="318" y="105" class="svg-subtitle">Quotes recurring host cost &amp;</text>
+                <text x="318" y="122" class="svg-subtitle">outputs plan approval digest</text>
+
+                <!-- Phase 2 -->
+                <line x1="150" y1="136" x2="150" y2="158" class="svg-edge" marker-end="url(#arr-s)"/>
+
+                <rect x="16" y="160" width="268" height="74" rx="7" class="svg-node"/>
+                <text x="30" y="182" class="svg-title">2. seed apply --approve</text>
+                <text x="30" y="201" class="svg-subtitle">Re-checks quote &amp; journals</text>
+                <text x="30" y="218" class="svg-subtitle">intent before provisioning</text>
+
+                <line x1="284" y1="197" x2="598" y2="197" class="svg-edge" marker-end="url(#arr-s)"/>
+                <text x="441" y="188" text-anchor="middle" class="svg-mono">Cloud Provider API</text>
+
+                <rect x="600" y="160" width="304" height="74" rx="7" class="svg-node"/>
+                <text x="614" y="182" class="svg-title">Control-Plane Host Created</text>
+                <text x="614" y="201" class="svg-subtitle">Public IP assigned; pauses</text>
+                <text x="614" y="218" class="svg-subtitle">before any SSH connection</text>
+
+                <!-- Phase 3 -->
+                <rect x="304" y="254" width="276" height="78" rx="7" class="svg-node-amber"/>
+                <text x="318" y="276" class="svg-title">Gate 2: Console Host Key Pin</text>
+                <text x="318" y="295" class="svg-subtitle">Read SSH fingerprint from</text>
+                <text x="318" y="313" class="svg-subtitle">provider console out of band</text>
+
+                <line x1="600" y1="220" x2="582" y2="272" class="svg-edge svg-edge-dashed" marker-end="url(#arr-s)"/>
+                <line x1="304" y1="293" x2="286" y2="293" class="svg-edge-accent" marker-end="url(#arr-sa)"/>
+
+                <rect x="16" y="254" width="268" height="78" rx="7" class="svg-node"/>
+                <text x="30" y="276" class="svg-title">3. seed resume (Pin Key)</text>
+                <text x="30" y="295" class="svg-subtitle">Pins verified SSH host key &amp;</text>
+                <text x="30" y="313" class="svg-subtitle">prints required DNS records</text>
+
+                <!-- Phase 4 -->
+                <line x1="150" y1="332" x2="150" y2="354" class="svg-edge" marker-end="url(#arr-s)"/>
+
+                <rect x="16" y="356" width="268" height="68" rx="7" class="svg-node"/>
+                <text x="30" y="378" class="svg-title">4. Stage &amp; Start Services</text>
+                <text x="30" y="397" class="svg-subtitle">Waits for DNS, uploads bundle</text>
+                <text x="30" y="413" class="svg-subtitle">&amp; verifies public HTTPS</text>
+
+                <rect x="304" y="356" width="276" height="68" rx="7" class="svg-node-amber"/>
+                <text x="318" y="378" class="svg-title">Gate 3: DNS Resolution</text>
+                <text x="318" y="397" class="svg-subtitle">Console, API &amp; wildcard domains</text>
+                <text x="318" y="413" class="svg-subtitle">resolve to control-plane IP</text>
+
+                <line x1="284" y1="390" x2="302" y2="390" class="svg-edge"/>
+                <line x1="580" y1="390" x2="598" y2="390" class="svg-edge-accent" marker-end="url(#arr-sa)"/>
+
+                <rect x="600" y="352" width="304" height="76" rx="7" class="svg-node-accent"/>
+                <text x="614" y="374" class="svg-title">Control Plane Running</text>
+                <text x="614" y="393" class="svg-subtitle">API, Worker, Gateway, Console,</text>
+                <text x="614" y="411" class="svg-subtitle">Database, Identity &amp; Secrets</text>
+
+                <!-- Phase 5 -->
+                <rect x="16" y="444" width="888" height="52" rx="7" class="svg-node-emerald"/>
+                <text x="32" y="467" class="svg-title">5. First-Owner Setup</text>
+                <text x="32" y="485" class="svg-subtitle">Use the downloaded one-time setup token at https://console.&lt;domain&gt;/setup to create your organization owner account</text>
+
+                <line x1="752" y1="428" x2="752" y2="444" class="svg-edge-emerald" marker-end="url(#arr-se)"/>
+              </svg>
+            </div>
+            <figcaption>
+              If a network interruption occurs mid-flight, re-running <code>workspaces seed resume &lt;operation&gt;</code> reconciles from the local journal rather than creating duplicate cloud resources.
+            </figcaption>
+          </figure>
+
+          <h3>Commands</h3>
+          <div class="code-frame">
+            <div class="code-topbar">
+              <span id="seed-full-cmds">shell</span>
+              <button type="button" class="copy-btn" aria-label="Copy seed commands"><span class="copy-btn-text">Copy</span></button>
+            </div>
+            <pre role="region" aria-labelledby="seed-full-cmds" tabindex="0"><code># 1. Store your cloud API token in a protected local file
+install -m 600 /dev/null /protected/provider.token
+
+# 2. Verify release signature &amp; quote recurring host cost
+workspaces seed plan \
+  --provider &lt;provider&gt; --region &lt;region&gt; --size &lt;size&gt; \
+  --dashboard-hostname console.example.com \
+  --api-hostname api.example.com \
+  --gateway-domain workspaces.example.com \
+  --release workspaces-vX.Y.Z \
+  --credential-file /protected/provider.token
+
+# 3. Provision the control-plane host with the approved plan digest
+workspaces seed apply &lt;operation&gt; \
+  --credential-file /protected/provider.token \
+  --approve &lt;approval-digest&gt;
+
+# 4. Read the host's ed25519 SSH fingerprint from your provider console,
+#    point the 3 DNS records below at the host IP, and resume:
+workspaces seed resume &lt;operation&gt; \
+  --credential-file /protected/provider.token \
+  --confirm-console-fingerprint SHA256:...</code></pre>
+          </div>
+
+          <h3 id="dns-records">Required DNS records</h3>
+          <div tabindex="0" role="region" aria-labelledby="dns-caption" class="table-wrapper">
+            <table class="data-table" style="--col-2: 'Type'; --col-3: 'Target'; --col-4: 'Purpose';">
+              <caption id="dns-caption">Public DNS records pointing to your control-plane host</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Record</th>
+                  <th scope="col">Type</th>
+                  <th scope="col">Target</th>
+                  <th scope="col">Purpose</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row"><code>console.example.com</code></th>
+                  <td><code>A</code></td>
+                  <td>Control-plane public IPv4</td>
+                  <td>Web console UI</td>
+                </tr>
+                <tr>
+                  <th scope="row"><code>api.example.com</code></th>
+                  <td><code>A</code></td>
+                  <td>Control-plane public IPv4</td>
+                  <td>Control-plane API &amp; CLI endpoint</td>
+                </tr>
+                <tr>
+                  <th scope="row"><code>*.workspaces.example.com</code></th>
+                  <td><code>A</code></td>
+                  <td>Control-plane public IPv4</td>
+                  <td>Isolated origins for workspace IDE &amp; preview sessions</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- SECTION 2: MANUAL HOST -->
+        <section id="manual-host">
+          <h2>2. Manual installation on an existing host</h2>
+          <p>
+            If you already run your own server with Docker Engine and Compose v2, extract a verified release archive and run the installer directly:
+          </p>
+
+          <div class="code-frame">
+            <div class="code-topbar">
+              <span id="manual-install-cmds">shell</span>
+              <button type="button" class="copy-btn" aria-label="Copy manual host installation commands"><span class="copy-btn-text">Copy</span></button>
+            </div>
+            <pre role="region" aria-labelledby="manual-install-cmds" tabindex="0"><code>sha256sum --check --strict checksums.txt
+tar -xzf municode-workspaces-X.Y.Z-linux-any.tar.gz
+cd municode-workspaces-X.Y.Z
+./install.sh --install-root /opt/municode/workspaces \
+  --secrets-dir /etc/municode/workspaces/secrets
+
+# Configure hostnames in /opt/municode/workspaces/.env, initialize secret storage,
+# run migrations, and bring up the stack:
+cd /opt/municode/workspaces
+docker compose up -d postgres openbao
+OPENBAO_ROOT_TOKEN_FILE=/protected/root-token \
+  docker compose --profile maintenance run --rm openbao-configure
+docker compose up database-initialize kratos-migrate api-migrate
+docker compose up -d</code></pre>
+          </div>
+          <p>
+            See the <a href="https://github.com/muniperez/municode/blob/main/docs/operator.md">Operator Guide</a> for full OpenBao initialization, offline recovery custody, first-owner bootstrap token generation, and upgrade steps.
+          </p>
+        </section>
+
+        <!-- SECTION 3: ADMIT IMAGES & PLANS -->
+        <section id="admit-images">
+          <h2>3. Register your cloud account, VM images &amp; plans</h2>
+          <p>
+            After signing in as the first organization owner, configure what developers can launch:
+          </p>
+          <ol>
+            <li><strong>Register a cloud provider account</strong> in the console or API—credentials are stored encrypted in the control plane's secret store.</li>
+            <li><strong>Register one or more VM images</strong> with the operating system, SDKs, and coding agents your team wants. You control the image contents and rollout lifecycle; the repository also includes a reference image template under <a href="https://github.com/muniperez/municode/tree/main/templates/development-workspaces"><code>templates/development-workspaces</code></a>.</li>
+            <li><strong>Admit compute plans</strong> (regions, VM sizes, and cost estimates) so engineers can select them from the web console or CLI.</li>
+          </ol>
+        </section>
+
+        <!-- CANONICAL SOURCE FILES -->
+        <section id="source-docs">
+          <h2>Detailed Repository References</h2>
+          <ul>
+            <li><a href="https://github.com/muniperez/municode/blob/main/docs/operator.md"><code>docs/operator.md</code></a> &mdash; Complete operator runbook, secret backup custody, and release upgrade workflow.</li>
+            <li><a href="https://github.com/muniperez/municode/blob/main/docs/setup/control-plane.md"><code>docs/setup/control-plane.md</code></a> &mdash; API configuration, session settings, provider/plan admission, and GitHub App integration.</li>
+            <li><a href="https://github.com/muniperez/municode/blob/main/docs/setup/runtime.md"><code>docs/setup/runtime.md</code></a> &mdash; Worker, gateway, TLS admission, and guest runtime contracts.</li>
+          </ul>
+          <p>
+            Next: <a href="architecture.html"><strong>Explore the System Architecture &amp; Diagrams &rarr;</strong></a>
+          </p>
+        </section>
+      </article>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div>
+        <strong>Municode</strong> &mdash; Self-hosted cloud coding workspaces.
+      </div>
+      <ul class="footer-links" role="list">
+        <li><a href="../index.html">Overview</a></li>
+        <li><a href="getting-started.html">Setup</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="cli-and-workflows.html">CLI &amp; Guides</a></li>
+        <li><a href="https://github.com/muniperez/municode">GitHub</a></li>
+      </ul>
+    </div>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <script>
+    try {
+      const s = localStorage.getItem("color-scheme");
+      if (s === "light" || s === "dark") {
+        document.querySelector('meta[name="color-scheme"]').content = s;
+      }
+    } catch {}
+  </script>
+  <meta name="description" content="How Municode works under the hood: control-plane components, private gateway and tunnel routing, VM enrollment sequence, and persistent vs. scratch storage.">
+  <title>System Architecture | Municode Docs</title>
+  <link rel="stylesheet" href="../styles/site.css">
+  <script type="module" src="../scripts/site.js"></script>
+</head>
+<body>
+  <a href="#main-heading" class="skip-link visually-hidden">Skip to main content</a>
+  <div id="copy-status" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="site-brand" href="../index.html">
+        <span class="brand-mark" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <rect x="2" y="2.5" width="12" height="2.5" rx="1" fill="currentColor"/>
+            <rect x="2" y="6.75" width="12" height="2.5" rx="1" fill="currentColor" opacity="0.8"/>
+            <rect x="2" y="11" width="12" height="2.5" rx="1" fill="currentColor" opacity="0.55"/>
+          </svg>
+        </span>
+        <span>Municode</span>
+        <span class="brand-tag">Docs</span>
+      </a>
+
+      <div class="header-actions">
+        <nav class="site-nav" aria-label="Primary">
+          <button
+            class="menu-button"
+            type="button"
+            popovertarget="site-menu"
+            popovertargetaction="toggle"
+            aria-controls="site-menu"
+          >
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+            <span>Menu</span>
+          </button>
+
+          <ul id="site-menu" class="site-menu" popover="auto">
+            <li><a href="../index.html">Overview</a></li>
+            <li><a href="getting-started.html">Setup</a></li>
+            <li><a href="architecture.html" aria-current="page">Architecture</a></li>
+            <li><a href="cli-and-workflows.html">CLI &amp; Guides</a></li>
+            <li><a href="https://github.com/muniperez/municode">GitHub</a></li>
+          </ul>
+        </nav>
+
+        <button type="button" class="theme-toggle" aria-label="Switch color theme">
+          <span class="theme-option-dark" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+            </svg>
+          </span>
+          <span class="theme-option-light" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="4.5" stroke="currentColor" stroke-width="1.8"/>
+              <path d="M12 2v2.5M12 19.5V22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M2 12h2.5M19.5 12H22M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="container docs-shell">
+      <aside class="docs-sidebar">
+        <nav class="docs-nav" aria-label="Documentation">
+          <p class="docs-nav-heading">Documentation</p>
+          <ul class="docs-nav-list" role="list">
+            <li><a href="getting-started.html">Setup Guide</a></li>
+            <li><a href="architecture.html" aria-current="page">System Architecture</a></li>
+            <li><a href="cli-and-workflows.html">CLI &amp; Workflows</a></li>
+          </ul>
+          <p class="docs-nav-heading">On This Page</p>
+          <ul class="docs-nav-list" role="list">
+            <li><a href="#control-plane">1. Control-Plane Topology</a></li>
+            <li><a href="#relay-sequence">2. Enrollment &amp; Launch Flow</a></li>
+            <li><a href="#storage-model">3. Storage &amp; Workspace Modes</a></li>
+            <li><a href="#source-map">4. Codebase Map</a></li>
+          </ul>
+        </nav>
+      </aside>
+
+      <article class="docs-content">
+        <header>
+          <span class="eyebrow">How It Works &mdash; Deep Dive</span>
+          <h1 id="main-heading" tabindex="-1">System Architecture</h1>
+          <p class="hero-lead">
+            Municode splits responsibility cleanly across an API, a background Worker, and an edge Gateway—isolating public browser traffic from cloud credentials, database state, and VM management tunnels.
+          </p>
+        </header>
+
+        <!-- SECTION 1: CONTROL-PLANE TOPOLOGY -->
+        <section id="control-plane">
+          <h2>1. Control-plane components &amp; network boundaries</h2>
+          <p>
+            Inside the control plane, services communicate across segmented private networks so the public-facing Gateway never holds database or cloud-provider secrets:
+          </p>
+          <ul>
+            <li><strong>Reverse Proxy &amp; Web Console:</strong> Terminates HTTPS for the console, API, and wildcard workspace origins, requesting on-demand certificates only for active, authorized workspace routes.</li>
+            <li><strong>Workspaces Gateway:</strong> Validates browser launch codes and session cookies, re-verifies active WebSocket streams, and forwards authorized traffic onto an internal relay network.</li>
+            <li><strong>Workspaces API:</strong> Owns organizations, user roles, admitted VM images and plans, workspace lifecycle state, and short-lived Git access tokens.</li>
+            <li><strong>Workspaces Worker:</strong> Reconciles cloud VMs and volumes via provider adapters, verifies per-generation VM host keys, and maintains the private SSH tunnels that feed the Gateway.</li>
+          </ul>
+
+          <figure class="diagram-figure">
+            <div class="diagram-header">
+              <span>COMPONENT &amp; NETWORK TOPOLOGY</span>
+              <span>How public ingress, internal control services, and cloud VMs connect</span>
+            </div>
+            <div class="diagram-canvas">
+              <svg viewBox="0 0 1040 545" role="img" aria-labelledby="diag-topo-title">
+                <title id="diag-topo-title">Control-plane architecture diagram showing HTTPS clients entering Reverse Proxy, connecting over a dedicated proxy network to Workspaces Gateway, which relays streams over an internal relay network to Workspaces Worker, alongside Workspaces API, Database, Identity, and Secret Store, with Worker managing Cloud VMs and Volumes.</title>
+                <defs>
+                  <marker id="arr-t" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                    <path d="M1 1.5L8.5 5L1 8.5Z" class="svg-arrow"/>
+                  </marker>
+                  <marker id="arr-ta" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                    <path d="M1 1.5L8.5 5L1 8.5Z" class="svg-arrow-accent"/>
+                  </marker>
+                  <marker id="arr-te" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                    <path d="M1 1.5L8.5 5L1 8.5Z" class="svg-arrow-emerald"/>
+                  </marker>
+                </defs>
+
+                <!-- Public Clients -->
+                <rect x="16" y="28" width="206" height="128" rx="8" class="svg-panel"/>
+                <text x="30" y="50" class="svg-group-label">CLIENTS (HTTPS)</text>
+                <rect x="30" y="62" width="178" height="80" rx="6" class="svg-node"/>
+                <text x="42" y="84" class="svg-title">Browser &amp; CLI</text>
+                <text x="42" y="103" class="svg-mono">console.&lt;domain&gt;</text>
+                <text x="42" y="119" class="svg-mono">api.&lt;domain&gt;</text>
+                <text x="42" y="135" class="svg-mono">*.workspaces.*</text>
+
+                <line x1="208" y1="102" x2="266" y2="102" class="svg-edge-accent" marker-end="url(#arr-ta)"/>
+
+                <!-- Control Plane Outer Frame -->
+                <rect x="268" y="14" width="756" height="386" rx="10" class="svg-panel"/>
+                <text x="286" y="36" class="svg-group-label">CONTROL PLANE (ISOLATED INTERNAL NETWORKS)</text>
+
+                <!-- Reverse Proxy -->
+                <rect x="286" y="52" width="286" height="96" rx="7" class="svg-node-accent"/>
+                <text x="300" y="76" class="svg-title">Reverse Proxy &amp; Console</text>
+                <text x="300" y="96" class="svg-subtitle">Automatic TLS &amp; static web UI</text>
+                <text x="300" y="115" class="svg-subtitle">Blocks internal gateway routes</text>
+                <text x="300" y="133" class="svg-mono">On-demand wildcard certs</text>
+
+                <!-- Proxy Subnet -->
+                <line x1="572" y1="100" x2="692" y2="100" class="svg-edge-accent" marker-end="url(#arr-ta)"/>
+                <rect x="580" y="72" width="104" height="20" rx="4" class="svg-label-bg"/>
+                <text x="632" y="86" text-anchor="middle" class="svg-mono">Proxy Network</text>
+
+                <!-- Gateway -->
+                <rect x="694" y="52" width="312" height="96" rx="7" class="svg-node-accent"/>
+                <text x="708" y="76" class="svg-title">Workspaces Gateway</text>
+                <text x="708" y="96" class="svg-subtitle">Launch-code &amp; cookie auth</text>
+                <text x="708" y="115" class="svg-subtitle">Continuous WebSocket checks</text>
+                <text x="708" y="133" class="svg-mono">No DB or cloud secrets</text>
+
+                <!-- Private Control Plane Band -->
+                <rect x="286" y="188" width="720" height="196" rx="8" class="svg-node"/>
+                <text x="302" y="210" class="svg-group-label">PRIVATE CONTROL NETWORK</text>
+
+                <!-- Connectors -->
+                <line x1="450" y1="148" x2="450" y2="222" class="svg-edge" marker-end="url(#arr-t)"/>
+                <path d="M 736 148 V 168 H 560 V 222" class="svg-edge svg-edge-dashed" marker-end="url(#arr-t)"/>
+
+                <line x1="880" y1="148" x2="880" y2="222" class="svg-edge-emerald" marker-end="url(#arr-te)"/>
+                <rect x="794" y="157" width="172" height="20" rx="4" class="svg-label-bg"/>
+                <text x="880" y="171" text-anchor="middle" class="svg-mono">Internal Relay Network</text>
+
+                <!-- API -->
+                <rect x="302" y="224" width="330" height="72" rx="6" class="svg-node"/>
+                <text x="316" y="247" class="svg-title">Workspaces API</text>
+                <text x="316" y="266" class="svg-subtitle">Orgs, RBAC, images, plans &amp; lifecycle</text>
+                <text x="316" y="284" class="svg-mono">Issues launch &amp; enrollment tokens</text>
+
+                <!-- Worker -->
+                <rect x="662" y="224" width="328" height="72" rx="6" class="svg-node-emerald"/>
+                <text x="676" y="247" class="svg-title">Workspaces Worker</text>
+                <text x="676" y="266" class="svg-subtitle">Reconciles VMs, volumes &amp; firewalls</text>
+                <text x="676" y="284" class="svg-mono">Manages private SSH port forwards</text>
+
+                <!-- Backing Stores -->
+                <rect x="302" y="312" width="164" height="56" rx="6" class="svg-panel"/>
+                <text x="314" y="334" class="svg-title">Database</text>
+                <text x="314" y="352" class="svg-subtitle">Workspace &amp; auth state</text>
+
+                <rect x="478" y="312" width="170" height="56" rx="6" class="svg-panel"/>
+                <text x="490" y="334" class="svg-title">Identity Service</text>
+                <text x="490" y="352" class="svg-subtitle">User sign-in &amp; sessions</text>
+
+                <rect x="660" y="312" width="176" height="56" rx="6" class="svg-panel"/>
+                <text x="672" y="334" class="svg-title">Secret Store</text>
+                <text x="672" y="352" class="svg-subtitle">Encrypted cloud keys</text>
+
+                <!-- Cloud Account Tier -->
+                <rect x="268" y="426" width="756" height="104" rx="10" class="svg-panel"/>
+                <text x="286" y="448" class="svg-group-label">YOUR CLOUD ACCOUNT</text>
+
+                <rect x="286" y="462" width="336" height="54" rx="6" class="svg-node"/>
+                <text x="300" y="484" class="svg-title">Cloud Provider API</text>
+                <text x="300" y="503" class="svg-subtitle">VMs, custom images, volumes &amp; firewall rules</text>
+
+                <rect x="662" y="462" width="344" height="54" rx="6" class="svg-node-emerald"/>
+                <text x="676" y="484" class="svg-title">Workspace Cloud VMs</text>
+                <text x="676" y="503" class="svg-subtitle">Your OS image &bull; Private management ingress only</text>
+
+                <path d="M 865 296 V 412 H 454 V 460" class="svg-edge svg-edge-dashed" marker-end="url(#arr-t)"/>
+                <line x1="940" y1="296" x2="940" y2="460" class="svg-edge-emerald" marker-end="url(#arr-te)"/>
+                <rect x="876" y="402" width="128" height="20" rx="4" class="svg-label-bg"/>
+                <text x="940" y="416" text-anchor="middle" class="svg-mono">Pinned Tunnel</text>
+              </svg>
+            </div>
+            <figcaption>
+              Cloud VMs only accept management tunnel connections from the Worker's addresses—no public HTTP or preview ports are exposed on the VMs themselves.
+            </figcaption>
+          </figure>
+        </section>
+
+        <!-- SECTION 2: ENROLLMENT & LAUNCH SEQUENCE -->
+        <section id="relay-sequence">
+          <h2>2. Generation-bound VM enrollment &amp; session launch</h2>
+          <p>
+            Every time a workspace VM starts, Municode increments its <strong>generation</strong> counter. Host keys, volume mounts, launch links, and active browser sockets are all bound to that exact generation:
+          </p>
+          <ol>
+            <li><strong>VM bootstrap &amp; enrollment:</strong> After booting a VM from your selected image, the Worker configures the guest over a pinned tunnel and supplies a one-time enrollment token. The VM verifies its workspace mount and local services, then posts an enrollment receipt to the API before routes open.</li>
+            <li><strong>Single-use launch links:</strong> Opening a workspace IDE or preview calls the API to mint a generation-bound URL with a single-use code.</li>
+            <li><strong>Isolated origin cookies &amp; live revocation:</strong> The Gateway exchanges the code for a host-only cookie on that service's dedicated subdomain, injects session credentials server-side over the private tunnel, and closes WebSockets immediately if access is revoked or the VM stops.</li>
+          </ol>
+
+          <figure class="diagram-figure">
+            <div class="diagram-header">
+              <span>ENROLLMENT &amp; LAUNCH SEQUENCE</span>
+              <span>End-to-end sequence from VM boot to live browser WebSocket session</span>
+            </div>
+            <div class="diagram-canvas">
+              <svg viewBox="0 0 1040 486" role="img" aria-labelledby="diag-seq-title">
+                <title id="diag-seq-title">Sequence diagram across Browser/CLI, Proxy+Gateway, Workspaces API, Worker, and Cloud VM showing VM bootstrap and one-time enrollment in Phase A, followed by launch request, single-use URL redemption, cookie issuance, and private tunnel streaming in Phase B.</title>
+                <defs>
+                  <marker id="arr-q" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                    <path d="M1 1.5L8.5 5L1 8.5Z" class="svg-arrow"/>
+                  </marker>
+                  <marker id="arr-qa" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                    <path d="M1 1.5L8.5 5L1 8.5Z" class="svg-arrow-accent"/>
+                  </marker>
+                  <marker id="arr-qe" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                    <path d="M1 1.5L8.5 5L1 8.5Z" class="svg-arrow-emerald"/>
+                  </marker>
+                </defs>
+
+                <!-- Actors -->
+                <rect x="16" y="16" width="168" height="42" rx="6" class="svg-node"/>
+                <text x="100" y="42" text-anchor="middle" class="svg-title">Browser / CLI</text>
+
+                <rect x="226" y="16" width="168" height="42" rx="6" class="svg-node-accent"/>
+                <text x="310" y="42" text-anchor="middle" class="svg-title">Proxy + Gateway</text>
+
+                <rect x="436" y="16" width="168" height="42" rx="6" class="svg-node"/>
+                <text x="520" y="42" text-anchor="middle" class="svg-title">Workspaces API</text>
+
+                <rect x="646" y="16" width="168" height="42" rx="6" class="svg-node-emerald"/>
+                <text x="730" y="42" text-anchor="middle" class="svg-title">Worker</text>
+
+                <rect x="856" y="16" width="168" height="42" rx="6" class="svg-node"/>
+                <text x="940" y="42" text-anchor="middle" class="svg-title">Cloud VM (Gen N)</text>
+
+                <!-- Lifelines -->
+                <line x1="100" y1="58" x2="100" y2="468" class="svg-edge svg-edge-dashed"/>
+                <line x1="310" y1="58" x2="310" y2="468" class="svg-edge svg-edge-dashed"/>
+                <line x1="520" y1="58" x2="520" y2="468" class="svg-edge svg-edge-dashed"/>
+                <line x1="730" y1="58" x2="730" y2="468" class="svg-edge svg-edge-dashed"/>
+                <line x1="940" y1="58" x2="940" y2="468" class="svg-edge svg-edge-dashed"/>
+
+                <!-- Phase A -->
+                <rect x="436" y="72" width="588" height="24" rx="4" class="svg-panel"/>
+                <text x="450" y="88" class="svg-group-label">PHASE A: VM BOOTSTRAP &amp; ONE-TIME ENROLLMENT</text>
+
+                <line x1="730" y1="124" x2="938" y2="124" class="svg-edge-emerald" marker-end="url(#arr-qe)"/>
+                <rect x="740" y="100" width="190" height="19" rx="4" class="svg-label-bg"/>
+                <text x="835" y="113" text-anchor="middle" class="svg-mono">1. Configure guest &amp; storage</text>
+
+                <line x1="940" y1="164" x2="522" y2="164" class="svg-edge" marker-end="url(#arr-q)"/>
+                <rect x="595" y="140" width="270" height="19" rx="4" class="svg-label-bg"/>
+                <text x="730" y="153" text-anchor="middle" class="svg-mono">2. POST /enroll (1-time receipt)</text>
+
+                <line x1="730" y1="204" x2="938" y2="204" class="svg-edge-emerald" marker-end="url(#arr-qe)"/>
+                <rect x="738" y="180" width="194" height="19" rx="4" class="svg-label-bg"/>
+                <text x="835" y="193" text-anchor="middle" class="svg-mono">3. Open private relay forward</text>
+
+                <!-- Phase B -->
+                <rect x="16" y="226" width="1008" height="24" rx="4" class="svg-panel"/>
+                <text x="30" y="242" class="svg-group-label">PHASE B: SINGLE-USE LAUNCH &amp; AUTHENTICATED STREAMING</text>
+
+                <line x1="100" y1="278" x2="518" y2="278" class="svg-edge-accent" marker-end="url(#arr-qa)"/>
+                <rect x="170" y="254" width="280" height="19" rx="4" class="svg-label-bg"/>
+                <text x="310" y="267" text-anchor="middle" class="svg-mono">4. Request launch (IDE or preview)</text>
+
+                <line x1="520" y1="316" x2="102" y2="316" class="svg-edge" marker-end="url(#arr-q)"/>
+                <rect x="155" y="292" width="310" height="19" rx="4" class="svg-label-bg"/>
+                <text x="310" y="305" text-anchor="middle" class="svg-mono">5. Return single-use origin URL</text>
+
+                <line x1="100" y1="354" x2="308" y2="354" class="svg-edge-accent" marker-end="url(#arr-qa)"/>
+                <rect x="128" y="330" width="154" height="19" rx="4" class="svg-label-bg"/>
+                <text x="205" y="343" text-anchor="middle" class="svg-mono">6. Navigate to URL</text>
+
+                <line x1="310" y1="376" x2="518" y2="376" class="svg-edge" marker-end="url(#arr-q)"/>
+                <rect x="322" y="352" width="186" height="19" rx="4" class="svg-label-bg"/>
+                <text x="415" y="365" text-anchor="middle" class="svg-mono">7. Verify &amp; redeem code</text>
+
+                <line x1="310" y1="408" x2="102" y2="408" class="svg-edge" marker-end="url(#arr-q)"/>
+                <rect x="118" y="384" width="174" height="19" rx="4" class="svg-label-bg"/>
+                <text x="205" y="397" text-anchor="middle" class="svg-mono">8. Set host cookie; 302 /</text>
+
+                <line x1="100" y1="448" x2="308" y2="448" class="svg-edge-accent" marker-end="url(#arr-qa)"/>
+                <rect x="142" y="424" width="126" height="19" rx="4" class="svg-label-bg"/>
+                <text x="205" y="437" text-anchor="middle" class="svg-mono">9. HTTP &amp; WSS</text>
+
+                <line x1="310" y1="448" x2="728" y2="448" class="svg-edge-accent" marker-end="url(#arr-qa)"/>
+                <rect x="382" y="424" width="276" height="19" rx="4" class="svg-label-bg"/>
+                <text x="520" y="437" text-anchor="middle" class="svg-mono">Authorize &amp; relay stream</text>
+
+                <line x1="730" y1="448" x2="938" y2="448" class="svg-edge-emerald" marker-end="url(#arr-qe)"/>
+                <rect x="752" y="424" width="166" height="19" rx="4" class="svg-label-bg"/>
+                <text x="835" y="437" text-anchor="middle" class="svg-mono">Tunnel &rarr; VM loopback</text>
+              </svg>
+            </div>
+            <figcaption>
+              Each preview service runs on its own distinct subdomain so application cookies, storage, and WebSockets stay isolated from the main workspace IDE.
+            </figcaption>
+          </figure>
+        </section>
+
+        <!-- SECTION 3: STORAGE & WORKSPACE MODES -->
+        <section id="storage-model">
+          <h2>3. Storage tiers &amp; ephemeral Git VMs</h2>
+          <p>
+            Municode supports two complementary VM modes inside a workspace, and keeps durable project state separate from disposable caches:
+          </p>
+          <ul>
+            <li><strong>Persistent Volume (Primary VMs):</strong> Holds your repositories, IDE threads, home configuration, and workspace files. Ownership and volume identity are verified before mounting, and old VM compute is proven absent before reattaching to a new VM generation.</li>
+            <li><strong>Local Scratch Disk:</strong> Package caches, temporary files, and heavy build outputs stay on the VM's fast local disk rather than bloating your persistent volume, and rebuild cleanly when a VM is replaced.</li>
+            <li><strong>Ephemeral Git VMs:</strong> Boot with no persistent volume attached, clone an authorized repository and commit onto a dedicated branch using short-lived repository-scoped credentials, and verify that commits are pushed before shutting down.</li>
+          </ul>
+
+          <figure class="diagram-figure">
+            <div class="diagram-header">
+              <span>STORAGE &amp; WORKSPACE MODES</span>
+              <span>Persistent primary workspaces vs. local scratch &amp; ephemeral Git VMs</span>
+            </div>
+            <div class="diagram-canvas">
+              <svg viewBox="0 0 920 310" role="img" aria-labelledby="diag-storage-title">
+                <title id="diag-storage-title">Three-column comparison inside Cloud VMs showing Persistent Workspace Volume on the left, Local VM Scratch Disk in the center, and Ephemeral Git-Backed VMs on the right.</title>
+                <defs>
+                  <marker id="arr-st" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                    <path d="M1 1.5L8.5 5L1 8.5Z" class="svg-arrow-accent"/>
+                  </marker>
+                </defs>
+
+                <!-- Col 1: Persistent Volume -->
+                <rect x="16" y="16" width="284" height="278" rx="9" class="svg-panel"/>
+                <text x="32" y="40" class="svg-group-label">PERSISTENT VOLUME (PRIMARY VM)</text>
+
+                <rect x="32" y="56" width="252" height="54" rx="7" class="svg-node-emerald"/>
+                <text x="46" y="78" class="svg-title">Ownership-Verified Mount</text>
+                <text x="46" y="97" class="svg-subtitle">Pinned to workspace &amp; volume ID</text>
+
+                <rect x="32" y="122" width="252" height="154" rx="7" class="svg-node"/>
+                <text x="46" y="145" class="svg-title">Durable Developer State</text>
+                <text x="46" y="166" class="svg-mono">Repositories &amp; local edits</text>
+                <text x="46" y="185" class="svg-mono">IDE history &amp; settings</text>
+                <text x="46" y="204" class="svg-mono">Agent &amp; CLI configurations</text>
+                <text x="46" y="232" class="svg-subtitle">Survives VM stop, start,</text>
+                <text x="46" y="250" class="svg-subtitle">resize &amp; image upgrades</text>
+
+                <!-- Col 2: Local Scratch -->
+                <rect x="318" y="16" width="284" height="278" rx="9" class="svg-panel"/>
+                <text x="334" y="40" class="svg-group-label">LOCAL SCRATCH DISK (EPHEMERAL)</text>
+
+                <rect x="334" y="56" width="252" height="128" rx="7" class="svg-node-accent"/>
+                <text x="348" y="78" class="svg-title">Fast Local VM Storage</text>
+                <text x="348" y="99" class="svg-mono">Package &amp; toolchain caches</text>
+                <text x="348" y="118" class="svg-mono">Build-output directories</text>
+                <text x="348" y="137" class="svg-mono">Temporary runtime files</text>
+                <text x="348" y="161" class="svg-subtitle">Recreated fresh on new VMs</text>
+
+                <rect x="334" y="196" width="252" height="80" rx="7" class="svg-node"/>
+                <text x="348" y="219" class="svg-title">Lean Volumes</text>
+                <text x="348" y="240" class="svg-subtitle">Keeps persistent storage compact</text>
+                <text x="348" y="258" class="svg-subtitle">and attach/backup times fast</text>
+
+                <line x1="284" y1="168" x2="332" y2="120" class="svg-edge-accent svg-edge-dashed" marker-end="url(#arr-st)"/>
+
+                <!-- Col 3: Ephemeral Git VM -->
+                <rect x="620" y="16" width="284" height="278" rx="9" class="svg-panel"/>
+                <text x="636" y="40" class="svg-group-label">EPHEMERAL GIT VM (SANDBOX)</text>
+
+                <rect x="636" y="56" width="252" height="128" rx="7" class="svg-node-amber"/>
+                <text x="650" y="78" class="svg-title">Clean-Room Branch VM</text>
+                <text x="650" y="99" class="svg-mono">No persistent volume attached</text>
+                <text x="650" y="118" class="svg-mono">Clones exact repo &amp; commit</text>
+                <text x="650" y="137" class="svg-mono">Short-lived repo-scoped Git auth</text>
+                <text x="650" y="161" class="svg-subtitle">Isolated from primary files</text>
+
+                <rect x="636" y="196" width="252" height="80" rx="7" class="svg-node"/>
+                <text x="650" y="219" class="svg-title">Git-Save Guard</text>
+                <text x="650" y="240" class="svg-subtitle">Verifies commits are pushed</text>
+                <text x="650" y="258" class="svg-subtitle">before destroying the VM</text>
+              </svg>
+            </div>
+            <figcaption>
+              Primary VMs preserve everything on your persistent volume across stops and starts; ephemeral VMs provide disposable, Git-fenced machines for parallel tasks.
+            </figcaption>
+          </figure>
+        </section>
+
+        <!-- SECTION 4: CODEBASE MAP -->
+        <section id="source-map">
+          <h2>4. Navigating the repository</h2>
+          <ul>
+            <li><a href="https://github.com/muniperez/municode/tree/main/src/Workspaces.Api"><code>src/Workspaces.Api</code></a> &mdash; Authentication, organization RBAC, image/plan admission, and workspace lifecycle API.</li>
+            <li><a href="https://github.com/muniperez/municode/tree/main/src/Workspaces.Worker"><code>src/Workspaces.Worker</code></a> &mdash; Cloud VM/volume reconciliation, guest bootstrap, and private tunnel management.</li>
+            <li><a href="https://github.com/muniperez/municode/tree/main/src/Workspaces.Gateway"><code>src/Workspaces.Gateway</code></a> &mdash; Launch-code redemption, origin isolation, and HTTP/WebSocket session relay.</li>
+            <li><a href="https://github.com/muniperez/municode/tree/main/src/Workspaces.Cli"><code>src/Workspaces.Cli</code></a> &mdash; Standalone <code>municode</code> / <code>workspaces</code> CLI and <code>seed</code> bootstrap workflow.</li>
+            <li><a href="https://github.com/muniperez/municode/tree/main/modules/dashboard"><code>modules/dashboard</code></a> &mdash; Web console frontend.</li>
+            <li><a href="https://github.com/muniperez/municode/tree/main/templates/development-workspaces"><code>templates/development-workspaces</code></a> &mdash; Reference guest runtime scripts and image builder template.</li>
+          </ul>
+          <p>
+            Next: <a href="cli-and-workflows.html"><strong>Read the CLI &amp; Developer Workflows Guide &rarr;</strong></a>
+          </p>
+        </section>
+      </article>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div>
+        <strong>Municode</strong> &mdash; Self-hosted cloud coding workspaces.
+      </div>
+      <ul class="footer-links" role="list">
+        <li><a href="../index.html">Overview</a></li>
+        <li><a href="getting-started.html">Setup</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="cli-and-workflows.html">CLI &amp; Guides</a></li>
+        <li><a href="https://github.com/muniperez/municode">GitHub</a></li>
+      </ul>
+    </div>
+  </footer>
+</body>
+</html>

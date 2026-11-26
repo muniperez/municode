@@ -109,5 +109,7 @@ services.
 See the [control-plane setup](docs/setup/control-plane.md) for fresh operator
 bootstrap, provider policy and API contracts. Use the
 [operator guide](docs/operator.md) for a packaged installation and the
-[user guide](docs/user.md) for the installed product. See
+[user guide](docs/user.md) for the installed product. The static landing page
+and architecture diagrams live under [`site/`](site/index.html) and deploy via
+[GitHub Pages](.github/workflows/pages.yml). See
 [licensing](docs/licensing.md) for extracted source and contract notices.
