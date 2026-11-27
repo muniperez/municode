@@ -20,12 +20,14 @@ public sealed partial class DevelopmentWorkspaceService
                 var existing = await db.DevelopmentWorkspaceOperations.SingleAsync(x => x.Id == primary.OperationId, ct);
                 if (existing.Kind == "delete-workspace" && existing.Status == "failed")
                 {
+                    await WorkspaceMaintenanceMode.RequireAdmissionAsync(db, ct);
                     existing.Status = "pending"; existing.UpdatedAt = Now; existing.Revision++;
                     primary.Phase = "deleting"; Touch(primary); Touch(workspace);
                 }
                 return workspace;
             }
 
+            await WorkspaceMaintenanceMode.RequireAdmissionAsync(db, ct);
             if (workspace.Vms.Any(vm => vm.Phase != "stopped" || vm.DesiredState != "stopped" || vm.ComputeReserved
                     || vm.StartAfterStop || vm.GatewayReady || vm.ProviderServerId is not null || vm.ProviderIpId is not null
                     || vm.ProviderFirewallId is not null || vm.RuntimeCredentialRef is not null)

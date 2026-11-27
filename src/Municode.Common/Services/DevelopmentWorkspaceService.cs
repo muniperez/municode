@@ -67,7 +67,7 @@ public sealed partial class DevelopmentWorkspaceService(
     {
         await db.SaveChangesAsync(ct);
         try { await StartCoreAsync(workspace, primary, ct); }
-        catch (DevelopmentWorkspaceException error)
+        catch (DevelopmentWorkspaceException error) when (error.Code != WorkspaceMaintenanceMode.ErrorCode)
         {
             primary.ErrorCode = error.Code; primary.ErrorMessage = error.Message;
             Touch(primary);
@@ -366,6 +366,7 @@ public sealed partial class DevelopmentWorkspaceService(
     private async Task StartCoreAsync(DevelopmentWorkspace workspace, DevelopmentWorkspaceVm vm, CancellationToken ct)
     {
         if (vm.DesiredState == "running") return;
+        await WorkspaceMaintenanceMode.RequireAdmissionAsync(db, ct);
         if (vm.Kind == DevelopmentWorkspaceVmKinds.Ephemeral)
             vm.RepositoryCredentialRef = RepositoryCredential(ApprovedRepository(workspace.OrganizationId, vm.Repository, vm.BaseRef),
                 workspace.OrganizationId);
@@ -425,12 +426,14 @@ public sealed partial class DevelopmentWorkspaceService(
                 var existing = await db.DevelopmentWorkspaceOperations.SingleAsync(x => x.Id == vm.OperationId, ct);
                 if (existing.Kind == "stop" && existing.Status == "blocked")
                 {
+                    await WorkspaceMaintenanceMode.RequireAdmissionAsync(db, ct);
                     existing.Status = "pending"; existing.LeaseExpiresAt = null; existing.LeaseToken = null;
                     existing.Revision++; existing.UpdatedAt = Now;
                 }
             }
             return;
         }
+        await WorkspaceMaintenanceMode.RequireAdmissionAsync(db, ct);
         if (vm.OperationId is not null)
         {
             var previous = await db.DevelopmentWorkspaceOperations.SingleAsync(x => x.Id == vm.OperationId, ct);
@@ -564,8 +567,7 @@ public sealed partial class DevelopmentWorkspaceService(
         {
             await using var tx = await db.Database.BeginTransactionAsync(ct);
             // Cross-process admission is serialized globally, including organization and storage reservations.
-            if (db.Database.IsNpgsql())
-                await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock({AdmissionLockId})", ct);
+            await WorkspaceMaintenanceMode.LockAdmissionAsync(db, ct);
             db.ChangeTracker.Clear();
             var result = await action();
             await db.SaveChangesAsync(ct);

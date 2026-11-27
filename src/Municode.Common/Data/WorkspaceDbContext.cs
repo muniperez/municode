@@ -22,6 +22,7 @@ public partial class WorkspaceDbContext : DbContext
     public DbSet<ProviderPlan> ProviderPlans => Set<ProviderPlan>();
     public DbSet<ProviderPlanName> ProviderPlanNames => Set<ProviderPlanName>();
     public DbSet<ProviderCredentialCleanup> ProviderCredentialCleanups => Set<ProviderCredentialCleanup>();
+    public DbSet<WorkspaceMaintenance> WorkspaceMaintenanceFlags => Set<WorkspaceMaintenance>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -29,6 +30,13 @@ public partial class WorkspaceDbContext : DbContext
         ConfigureDevelopmentWorkspaces(modelBuilder);
         ConfigureDevelopmentWorkspaceGateway(modelBuilder);
         ConfigureBudgets(modelBuilder);
+
+        modelBuilder.Entity<WorkspaceMaintenance>(entity =>
+        {
+            entity.ToTable("workspace_maintenance");
+            entity.Property(x => x.Id).ValueGeneratedNever();
+            entity.HasData(new WorkspaceMaintenance { Id = WorkspaceMaintenance.SingletonId });
+        });
 
         modelBuilder.Entity<User>(entity =>
         {

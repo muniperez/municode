@@ -1005,6 +1005,35 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task MaintenanceDrainsAnAcceptedStopAcrossLeaseReleasesAndDefersItsQueuedRestart()
+    {
+        var (workspace, vm, operation) = await SeedStop("quiesce");
+        runtime.Phase = "Frozen";
+        var queued = await lifecycle.StartVmAsync(workspace.Id, "org", vm.Id, vm.Generation, default);
+        Assert.True(queued.Vms.Single().StartAfterStop);
+        await WorkspaceMaintenanceMode.SetAsync(db, true);
+
+        foreach (var step in new[] { "detach", "detached", "delete-intent", "commit-delete", "delete", "delete-confirm", "delete", "cleanup" })
+        {
+            await Hop(step);
+            var pending = await CurrentOperation(operation.Id);
+            Assert.Equal("pending", pending.Status);
+            Assert.Null(pending.LeaseExpiresAt);
+            Assert.Equal(new WorkspaceMaintenanceStatus(true, 1), await WorkspaceMaintenanceMode.GetStatusAsync(db));
+        }
+
+        await Hop("stopped");
+        Assert.Equal("completed", (await CurrentOperation(operation.Id)).Status);
+        Assert.Equal(new WorkspaceMaintenanceStatus(true, 0), await WorkspaceMaintenanceMode.GetStatusAsync(db));
+        Assert.False(await Processor().ProcessNextAsync(default));
+        Assert.True((await CurrentVm(vm.Id)).StartAfterStop);
+
+        await WorkspaceMaintenanceMode.SetAsync(db, false);
+        Assert.True(await Processor().ProcessNextAsync(default));
+        Assert.Equal(new WorkspaceMaintenanceStatus(false, 1), await WorkspaceMaintenanceMode.GetStatusAsync(db));
+    }
+
+    [Fact]
     public async Task PrimaryStopDeletesOnlyOwnedComputeAndRestartReusesRetainedVolume()
     {
         var (workspace, vm, operation) = await SeedStop("quiesce");

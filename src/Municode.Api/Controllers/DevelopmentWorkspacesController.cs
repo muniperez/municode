@@ -219,9 +219,19 @@ public sealed class DevelopmentWorkspacesController(
     private Task<bool> CanAsync(string organizationId, OrganizationAction action, CancellationToken ct) =>
         authorization.CanAccessOrganizationAsync(EndpointResults.RequirePrincipal(HttpContext).ToActorIdentity(), organizationId, action, ct);
 
-    private static IResult Error(DevelopmentWorkspaceException error) =>
-        error.Code.EndsWith("_not_found", StringComparison.Ordinal)
+    private IResult Error(DevelopmentWorkspaceException error)
+    {
+        if (error.Code == WorkspaceMaintenanceMode.ErrorCode)
+        {
+            Response.Headers.RetryAfter = WorkspaceMaintenanceMode.RetryAfterSeconds;
+            Response.Headers.CacheControl = "no-store";
+            return Results.Json(new ErrorResponse(new ErrorBody(error.Code, error.Message, [])),
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        return error.Code.EndsWith("_not_found", StringComparison.Ordinal)
             ? EndpointResults.NotFound(error.Code, error.Message)
             : error.Conflict ? EndpointResults.Conflict(error.Code, error.Message)
             : Results.BadRequest(new ErrorResponse(new ErrorBody(error.Code, error.Message, [])));
+    }
 }

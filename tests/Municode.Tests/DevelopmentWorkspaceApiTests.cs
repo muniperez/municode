@@ -14,6 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Municode.Api.Auth;
+using Municode.Api.Services;
 using Municode.Common.Contracts;
 using Municode.Common.Data;
 using Municode.Common.Models;
@@ -50,6 +51,81 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
         token = AddKey(db, tokens, "org", ApiKeyScopes.All);
         otherToken = AddKey(db, tokens, "other", ApiKeyScopes.All);
         await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task MaintenanceRejectsNewOperationsAndLeavesReadsAndOtherWritesAvailable()
+    {
+        using var owner = Client(token);
+        var running = await Create(owner);
+        using var created = await owner.PostAsJsonAsync(Root, Request() with { Name = "Stopped", IdempotencyKey = "stopped" });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var stopped = (await created.Content.ReadFromJsonAsync<DevelopmentWorkspaceResponse>())!;
+        string Action(string workspaceId, string action) => $"{Root}/{workspaceId}/{action}?organizationId=org";
+        Assert.Equal(HttpStatusCode.OK, (await owner.PostAsync(Action(running.Id, "start"), null)).StatusCode);
+
+        Assert.Equal(new WorkspaceMaintenanceStatus(true, 1), await RunMaintenance("enter"));
+        Assert.Equal(new WorkspaceMaintenanceStatus(true, 1), await RunMaintenance("enter"));
+
+        var newWorkspace = Request() with { Name = "New workspace", IdempotencyKey = "new", StartPrimaryVm = true };
+        foreach (var response in new[]
+        {
+            await owner.PostAsJsonAsync(Root, newWorkspace),
+            await owner.PostAsync(Action(stopped.Id, "start"), null),
+            await owner.PostAsync(Action(running.Id, "stop"), null),
+            await owner.DeleteAsync($"{Root}/{stopped.Id}?organizationId=org&confirmPermanentDeletion=true")
+        })
+        {
+            using (response)
+            {
+                Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+                Assert.Equal(TimeSpan.FromSeconds(60), response.Headers.RetryAfter?.Delta);
+                Assert.Equal("workspace_maintenance", (await response.Content.ReadFromJsonAsync<ErrorResponse>())!.Error.Code);
+            }
+        }
+
+        Assert.Equal(HttpStatusCode.OK, (await owner.PutAsJsonAsync(Action(stopped.Id, "idle-timeout"),
+            new UpdateDevelopmentWorkspaceIdleTimeoutRequest(90))).StatusCode);
+        var listed = await owner.GetFromJsonAsync<DevelopmentWorkspaceResponse[]>($"{Root}?organizationId=org");
+        Assert.Equal(2, listed!.Length); // The rejected create rolled back the workspace as well.
+        Assert.Equal(HttpStatusCode.Created, (await owner.PostAsJsonAsync(Root,
+            newWorkspace with { Name = "Without start", IdempotencyKey = "without-start", StartPrimaryVm = false })).StatusCode);
+        Assert.Equal(new WorkspaceMaintenanceStatus(true, 1), await RunMaintenance("status"));
+        Assert.Equal(new WorkspaceMaintenanceStatus(false, 1), await RunMaintenance("exit"));
+        Assert.Equal(HttpStatusCode.Created, (await owner.PostAsJsonAsync(Root, newWorkspace)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await owner.PostAsync(Action(stopped.Id, "start"), null)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await owner.PostAsync(Action(running.Id, "stop"), null)).StatusCode);
+    }
+
+    [Fact]
+    public async Task MaintenanceStatusCountsPendingAndRunningButNotTerminalOperations()
+    {
+        using var owner = Client(token);
+        var workspace = await Create(owner);
+        var vm = Assert.Single(workspace.Vms!);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<WorkspaceDbContext>();
+        foreach (var status in new[] { "completed", "failed", "cancelled", "superseded", "pending", "running" })
+            db.DevelopmentWorkspaceOperations.Add(new DevelopmentWorkspaceOperation
+            {
+                Id = status, Status = status, Kind = "start", WorkspaceId = workspace.Id, VmId = vm.Id,
+                PlanId = "plan", ProviderAccountId = "account", Region = "nbg1", Sku = "cx-test",
+                ImageId = "image", ProviderImage = "fixture", ImageManifestSha256 = new('a', 64),
+                LeaseExpiresAt = status == "running" ? DateTimeOffset.UtcNow.AddMinutes(1) : null
+            });
+        await db.SaveChangesAsync();
+
+        Assert.Equal(new WorkspaceMaintenanceStatus(false, 2), await RunMaintenance("status"));
+    }
+
+    private async Task<WorkspaceMaintenanceStatus> RunMaintenance(string action)
+    {
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        Assert.Equal(0, await MaintenanceCommand.RunAsync([action, "--json"], factory.Services, stdout, stderr));
+        Assert.Empty(stderr.ToString());
+        using var json = JsonDocument.Parse(stdout.ToString());
+        return new(json.RootElement.GetProperty("enabled").GetBoolean(), json.RootElement.GetProperty("nonterminalOperations").GetInt32());
     }
 
     [Fact]

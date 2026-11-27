@@ -261,6 +261,24 @@ a new exact archive, stop accepted work, back up, install into a new root, and
 switch only after migrations and health checks pass. Do not overwrite an active
 release or reuse its installation ID on another host.
 
+On a release that supports maintenance mode, run the following against the active
+release's database before stopping the worker. Use the API executable with the
+same database configuration as the running API:
+
+```sh
+Municode.Api maintenance enter
+Municode.Api maintenance status --json
+```
+
+For the Compose bundle, use `docker compose run --rm --no-deps api-migrate`,
+passing the DLL path from that service's `command` followed by the maintenance arguments.
+
+Keep the worker running until `enabled` is `true` and `nonterminalOperations`
+is `0`; operations can be pending without an active lease. If the drain times out,
+do not stop the worker. Use `maintenance exit` to reopen admission after an aborted
+drain or once the new release and its worker are running. Reads and existing
+workspace connections remain available while only maintenance mode is active.
+
 The worker evaluates budgets and delivers budget webhooks. Tune it with the
 `BudgetAlerts` configuration section: `Enabled` (default `true`),
 `EvaluationIntervalSeconds` (300), `DeliveryPollSeconds` (30),

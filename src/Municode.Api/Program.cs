@@ -10,13 +10,17 @@ if (args.Length > 0 && args[0] == "bootstrap")
 }
 
 var migrate = args.Length > 0 && args[0] == "migrate";
-var builder = WebApplication.CreateBuilder(migrate ? args[1..] : args);
+var maintenance = args.Length > 0 && args[0] == "maintenance";
+var builder = WebApplication.CreateBuilder(maintenance ? [] : migrate ? args[1..] : args);
 builder.Configuration.AddDevelopmentWorkspaceConfiguration();
 builder.Services.AddWorkspacesApi(builder.Configuration);
 builder.Services.AddWorkspacesBootstrap();
 builder.Services.AddSetupTransport();
 
-var app = builder.Build();
+await using var app = builder.Build();
+
+if (maintenance)
+    return await MaintenanceCommand.RunAsync(args[1..], app.Services, Console.Out, Console.Error);
 
 if (migrate || app.Configuration.GetValue<bool>("Database:RunMigrationsOnStartup"))
 {

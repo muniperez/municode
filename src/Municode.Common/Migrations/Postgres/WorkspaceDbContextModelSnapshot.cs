@@ -3,8 +3,8 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
-using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Municode.Common.Data;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
 #nullable disable
 
@@ -2118,6 +2118,28 @@ namespace Municode.Common.Migrations.Postgres
                         .IsUnique();
 
                     b.ToTable("users", (string)null);
+                });
+
+            modelBuilder.Entity("Municode.Common.Models.WorkspaceMaintenance", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("integer")
+                        .HasColumnName("id");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("enabled");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("workspace_maintenance", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            Id = 1,
+                            Enabled = false
+                        });
                 });
 
             modelBuilder.Entity("Municode.Common.Models.ApiKey", b =>
