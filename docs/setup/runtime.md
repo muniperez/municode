@@ -1,8 +1,8 @@
 # Workspaces runtime
 
 The API manages the database, lifecycle reservations, enrollment and gateway authorization.
-`Workspaces.Worker` reconciles provider resources and operates the generation-bound guest over SSH.
-`Workspaces.Gateway` relays browser HTTP and WebSocket traffic to the worker's private SSH forwards.
+`Municode.Worker` reconciles provider resources and operates the generation-bound guest over SSH.
+`Municode.Gateway` relays browser HTTP and WebSocket traffic to the worker's private SSH forwards.
 The worker and API use the same Workspaces database and OpenBao KV mount. The gateway needs only its
 service credential and private network access to the API and worker.
 
@@ -130,7 +130,7 @@ record the image ID and failed step, and keep the previous approved image availa
 - Disk usage and directory deletion use generation-bound filesystem jobs with concrete target
   identity checks. Resource samples, idle activity and T3 work inventory are captured through the
   generation-bound guest supervisor. Unknown runtime or provider state keeps reservations intact.
-  The gateway exposes low-cardinality .NET metrics through the `Workspaces.Gateway` meter.
+  The gateway exposes low-cardinality .NET metrics through the `Municode.Gateway` meter.
 
 ## Build and verify locally
 
@@ -138,15 +138,15 @@ record the image ID and failed step, and keep the previous approved image availa
 The browser fixture also needs OpenSSL and Chromium's Linux shared libraries.
 
 ```sh
-dotnet build src/Workspaces.Worker
-dotnet build src/Workspaces.Gateway
-dotnet test Workspaces.slnx --results-directory .local/artifacts/test-results
+dotnet build src/Municode.Worker
+dotnet build src/Municode.Gateway
+dotnet test Municode.slnx --results-directory .local/artifacts/test-results
 templates/development-workspaces/test.sh
 python3 -B templates/development-workspaces/image/test-t3-candidate.py
 node --test scripts/workspace-image-release-acceptance.test.mjs
 
-dotnet publish src/Workspaces.Worker -c Release -o .local/artifacts/publish/worker
-dotnet publish src/Workspaces.Gateway -c Release -o .local/artifacts/publish/gateway
+dotnet publish src/Municode.Worker -c Release -o .local/artifacts/publish/worker
+dotnet publish src/Municode.Gateway -c Release -o .local/artifacts/publish/gateway
 ```
 
 The PostgreSQL matrix is optional. Set `WORKSPACES_TEST_POSTGRES_PORT` to the TCP port
@@ -177,7 +177,7 @@ npm_config_cache="$PWD/.local/artifacts/npm-cache" npm install --prefix .local/a
   --no-save playwright@1.61.0 ws@8.21.0
 PLAYWRIGHT_BROWSERS_PATH="$PWD/.local/artifacts/browser/chromium" TMPDIR="$PWD/.local/artifacts/tmp" \
   .local/artifacts/browser/node_modules/.bin/playwright install chromium --only-shell
-dotnet build src/Workspaces.Gateway
+dotnet build src/Municode.Gateway
 node scripts/workspace-browser-acceptance.mjs
 ```
 

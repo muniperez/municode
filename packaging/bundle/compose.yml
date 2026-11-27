@@ -216,7 +216,7 @@ services:
   api-migrate:
     <<: *runtime
     restart: "no"
-    command: ["/opt/workspaces/Workspaces.Api.dll", "migrate"]
+    command: ["/opt/workspaces/Municode.Api.dll", "migrate"]
     environment:
       <<: *shared-environment
     secrets:
@@ -233,7 +233,7 @@ services:
     <<: *runtime
     profiles: ["maintenance"]
     restart: "no"
-    entrypoint: ["/usr/bin/dotnet", "/opt/workspaces/Workspaces.Api.dll", "bootstrap"]
+    entrypoint: ["/usr/bin/dotnet", "/opt/workspaces/Municode.Api.dll", "bootstrap"]
     command: []
     environment:
       Database__Provider: Postgres
@@ -254,7 +254,7 @@ services:
 
   api:
     <<: *runtime
-    command: ["/opt/workspaces/Workspaces.Api.dll"]
+    command: ["/opt/workspaces/Municode.Api.dll"]
     environment:
       <<: *shared-environment
       ASPNETCORE_URLS: http://+:8080
@@ -286,7 +286,7 @@ services:
 
   worker:
     <<: *runtime
-    command: ["/opt/workspaces/Workspaces.Worker.dll"]
+    command: ["/opt/workspaces/Municode.Worker.dll"]
     environment:
       <<: *shared-environment
       WorkspaceSsh__PrivateKeyFile: /run/workspaces-ssh/worker-key
@@ -318,7 +318,7 @@ services:
 
   workspace-gateway:
     <<: *runtime
-    command: ["/opt/workspaces/Workspaces.Gateway.dll"]
+    command: ["/opt/workspaces/Municode.Gateway.dll"]
     environment:
       ASPNETCORE_URLS: http://+:8080
       DevelopmentWorkspaceGateway__Enabled: "true"

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Municode.Gateway</AssemblyName>
+    <RootNamespace>Municode.Gateway</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Municode.Common/Services/DevelopmentWorkspaceGatewayOptions.cs" Link="DevelopmentWorkspaceGatewayOptions.cs" />
+    <Compile Include="../Municode.Common/Extensions/DevelopmentWorkspaceConfigurationExtensions.cs" Link="DevelopmentWorkspaceConfigurationExtensions.cs" />
+  </ItemGroup>
+</Project>

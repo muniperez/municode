@@ -6,6 +6,6 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../src/Workspaces.Gateway/Workspaces.Gateway.csproj" />
+    <ProjectReference Include="../../src/Municode.Gateway/Municode.Gateway.csproj" />
   </ItemGroup>
 </Project>

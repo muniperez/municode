@@ -21,9 +21,9 @@ ROOT = Path(__file__).resolve().parents[2]
 BUNDLE = ROOT / "packaging" / "bundle"
 TARGETS = ROOT / "packaging" / "targets.json"
 REQUIRED_BACKEND_FILES = {
-    "api": "Workspaces.Api.dll",
-    "worker": "Workspaces.Worker.dll",
-    "gateway": "Workspaces.Gateway.dll",
+    "api": "Municode.Api.dll",
+    "worker": "Municode.Worker.dll",
+    "gateway": "Municode.Gateway.dll",
 }
 
 

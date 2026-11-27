@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Municode.Api/Municode.Api.csproj" />
+    <Project Path="src/Municode.Cli/Municode.Cli.csproj" />
+    <Project Path="src/Municode.Common/Municode.Common.csproj" />
+    <Project Path="src/Municode.Gateway/Municode.Gateway.csproj" />
+    <Project Path="src/Municode.Worker/Municode.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Municode.Cli.Tests/Municode.Cli.Tests.csproj" />
+    <Project Path="tests/Municode.Gateway.Tests/Municode.Gateway.Tests.csproj" />
+    <Project Path="tests/Municode.Tests/Municode.Tests.csproj" />
+    <Project Path="tests/Municode.Worker.Tests/Municode.Worker.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/workspace-gateway-benchmark/WorkspaceGatewayBenchmark.csproj" />
+  </Folder>
+</Solution>

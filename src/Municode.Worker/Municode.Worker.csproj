@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Municode.Worker</AssemblyName>
+    <RootNamespace>Municode.Worker</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Municode.Common/Municode.Common.csproj" />
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
+    <InternalsVisibleTo Include="Municode.Worker.Tests" />
+    <Content Include="../../templates/development-workspaces/**/*"
+             Exclude="../../templates/development-workspaces/image/**;../../templates/development-workspaces/tests/**;../../templates/development-workspaces/README.md;../../templates/development-workspaces/test.sh;../../templates/development-workspaces/**/__pycache__/**"
+             Link="development-workspaces/%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

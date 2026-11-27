@@ -75,7 +75,7 @@
         <header>
           <h1 id="main-heading" tabindex="-1">System architecture</h1>
           <p class="hero-lead">
-            Municode separates control-plane state (<code>Workspaces.Api</code>), cloud reconciliation and SSH forwarding (<code>Workspaces.Worker</code>), and browser session proxying (<code>Workspaces.Gateway</code>).
+            Municode separates control-plane state (<code>Municode.Api</code>), cloud reconciliation and SSH forwarding (<code>Municode.Worker</code>), and browser session proxying (<code>Municode.Gateway</code>).
           </p>
         </header>
 
@@ -369,10 +369,10 @@
         <section id="source-map">
           <h2>4. Repository layout</h2>
           <ul class="plain-list">
-            <li><a href="https://github.com/muniperez/municode/tree/main/src/Workspaces.Api"><code>src/Workspaces.Api</code></a> &mdash; Authentication, organization RBAC, image/plan admission, and workspace lifecycle API.</li>
-            <li><a href="https://github.com/muniperez/municode/tree/main/src/Workspaces.Worker"><code>src/Workspaces.Worker</code></a> &mdash; Cloud VM/volume reconciliation, guest bootstrap, and SSH port forwarding.</li>
-            <li><a href="https://github.com/muniperez/municode/tree/main/src/Workspaces.Gateway"><code>src/Workspaces.Gateway</code></a> &mdash; Launch-code redemption, origin isolation, and HTTP/WebSocket session relay.</li>
-            <li><a href="https://github.com/muniperez/municode/tree/main/src/Workspaces.Cli"><code>src/Workspaces.Cli</code></a> &mdash; Standalone <code>municode</code> / <code>workspaces</code> CLI and <code>seed</code> bootstrap commands.</li>
+            <li><a href="https://github.com/muniperez/municode/tree/main/src/Municode.Api"><code>src/Municode.Api</code></a> &mdash; Authentication, organization RBAC, image/plan admission, and workspace lifecycle API.</li>
+            <li><a href="https://github.com/muniperez/municode/tree/main/src/Municode.Worker"><code>src/Municode.Worker</code></a> &mdash; Cloud VM/volume reconciliation, guest bootstrap, and SSH port forwarding.</li>
+            <li><a href="https://github.com/muniperez/municode/tree/main/src/Municode.Gateway"><code>src/Municode.Gateway</code></a> &mdash; Launch-code redemption, origin isolation, and HTTP/WebSocket session relay.</li>
+            <li><a href="https://github.com/muniperez/municode/tree/main/src/Municode.Cli"><code>src/Municode.Cli</code></a> &mdash; Standalone <code>municode</code> / <code>workspaces</code> CLI and <code>seed</code> bootstrap commands.</li>
             <li><a href="https://github.com/muniperez/municode/tree/main/modules/dashboard"><code>modules/dashboard</code></a> &mdash; Web console frontend.</li>
             <li><a href="https://github.com/muniperez/municode/tree/main/templates/development-workspaces"><code>templates/development-workspaces</code></a> &mdash; Reference guest runtime scripts and image builder template.</li>
           </ul>

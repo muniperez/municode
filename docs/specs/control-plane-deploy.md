@@ -143,8 +143,8 @@ prefix. It stays when it means development workspaces.
 
 | Area | Before | After |
 | --- | --- | --- |
-| .NET projects, assemblies, namespaces | `Workspaces.Api`, `.Cli`, `.Common`, `.Gateway`, `.Worker`, `Workspaces.*.Tests`, `Workspaces.Tests` | `Municode.Api`, `.Cli`, `.Common`, `.Gateway`, `.Worker`, `Municode.*.Tests`, `Municode.Tests` |
-| Solution | `Workspaces.slnx` | `Municode.slnx` |
+| .NET projects, assemblies, namespaces | Workspaces-prefixed component and test identities | `Municode.Api`, `.Cli`, `.Common`, `.Gateway`, `.Worker`, `Municode.*.Tests`, `Municode.Tests` |
+| Solution | Legacy Workspaces-prefixed solution file | `Municode.slnx` |
 | Environment variables | `WORKSPACES_*` (`.env`, tests, scripts) | `MUNICODE_*` |
 | .NET config keys | `ConnectionStrings__Workspaces` | `ConnectionStrings__Municode` |
 | Database | `workspaces` database and role, `__WorkspacesMigrationsHistory` | `municode`, `__MunicodeMigrationsHistory` |

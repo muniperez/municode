@@ -80,7 +80,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
           test -f modules/dashboard/package.json
           test -f modules/dashboard/package-lock.json
-          test -f src/Workspaces.Cli/Workspaces.Cli.csproj
+          test -f src/Municode.Cli/Municode.Cli.csproj
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             echo "::error::Release tags and assets are immutable."
             exit 1
@@ -88,9 +88,9 @@ jobs:
       - name: Publish API worker and gateway
         run: |
           mkdir -p "$PAYLOAD"
-          dotnet publish src/Workspaces.Api -c Release -o "$PAYLOAD/api"
-          dotnet publish src/Workspaces.Worker -c Release -o "$PAYLOAD/worker"
-          dotnet publish src/Workspaces.Gateway -c Release -o "$PAYLOAD/gateway"
+          dotnet publish src/Municode.Api -c Release -o "$PAYLOAD/api"
+          dotnet publish src/Municode.Worker -c Release -o "$PAYLOAD/worker"
+          dotnet publish src/Municode.Gateway -c Release -o "$PAYLOAD/gateway"
       - name: Build the expected dashboard static target
         run: |
           npm ci --prefix modules/dashboard
@@ -102,7 +102,7 @@ jobs:
           for rid in linux-x64 linux-arm64 osx-arm64 win-x64; do
             suffix=
             [ "$rid" = win-x64 ] && suffix=.exe
-            dotnet publish src/Workspaces.Cli/Workspaces.Cli.csproj -c Release \
+            dotnet publish src/Municode.Cli/Municode.Cli.csproj -c Release \
               --runtime "$rid" --self-contained true \
               -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
               -p:PublishTrimmed=false -p:DebugType=None -p:DebugSymbols=false \

@@ -41,9 +41,9 @@ WORKSPACES_CADDY_IMAGE=synthetic
 WORKSPACES_WORKER_SSH_PUBLIC_KEY=synthetic
 EOF
 printf synthetic > "$install/release-manifest.json"
-printf synthetic > "$install/runtime/api/Workspaces.Api.dll"
-printf synthetic > "$install/runtime/worker/Workspaces.Worker.dll"
-printf synthetic > "$install/runtime/gateway/Workspaces.Gateway.dll"
+printf synthetic > "$install/runtime/api/Municode.Api.dll"
+printf synthetic > "$install/runtime/worker/Municode.Worker.dll"
+printf synthetic > "$install/runtime/gateway/Municode.Gateway.dll"
 printf '<html>' > "$install/dashboard/index.html"
 cat > "$install/verify_bundle.py" <<'PY'
 raise SystemExit(0)
