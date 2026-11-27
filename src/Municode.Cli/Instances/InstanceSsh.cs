@@ -119,7 +119,8 @@ internal sealed class InstanceSsh(ISeedProcess process)
                 && IsHostname(host.DashboardHostname) && IsHostname(host.ApiHostname) && IsHostname(host.GatewayDomain)
                 && host.Release is { } release && IsToken(release.ReleaseId)
                 && (release.Tag is null || IsToken(release.Tag))
-                && IsHex(release.SourceRevision, 40) && IsHex(release.BundleSha256, 64)
+                && (IsHex(release.SourceRevision, 40) || IsHex(release.SourceRevision, 64))
+                && IsHex(release.BundleSha256, 64)
                 && IsToken(release.Trust) && release.ActivatedAt != default,
                 "The host returned incomplete or invalid deploy metadata.");
             return host!;
@@ -131,12 +132,16 @@ internal sealed class InstanceSsh(ISeedProcess process)
     }
 
     private Task<SeedProcessResult> RunPinnedAsync(
-        InstanceConnection entry, string knownHosts, string command, CancellationToken ct)
+        InstanceConnection entry, string knownHosts, string command, CancellationToken ct) =>
+        RunPinnedAsync(entry, knownHosts, command, ct, null);
+
+    internal Task<SeedProcessResult> RunPinnedAsync(
+        InstanceConnection entry, string knownHosts, string command, CancellationToken ct, Stream? input)
     {
         SeedFiles.Check(knownHosts);
         SeedGuard.Require(InstancePin.Parse(File.ReadAllText(knownHosts), InstancePin.Alias).Fingerprint
             == entry.HostFingerprint, "The registry's pinned host key does not match the recorded fingerprint.");
-        var args = new List<string>(Options(knownHosts, "yes"));
+        var args = new List<string>(Options(knownHosts, "yes", input is not null));
         if (entry.SeedOperationId is not null)
         {
             SeedFiles.Check(entry.IdentityFile!);
@@ -145,10 +150,11 @@ internal sealed class InstanceSsh(ISeedProcess process)
         if (entry.IdentityFile is not null) args.AddRange(["-i", entry.IdentityFile]);
         args.AddRange(DestinationArguments(entry.Destination));
         args.Add(command);
-        return process.RunAsync("ssh", args, null, ct);
+        return input is null ? process.RunAsync("ssh", args, null, ct)
+            : process.RunStreamAsync("ssh", args, input, ct);
     }
 
-    private static string[] Options(string knownHosts, string checking)
+    private static string[] Options(string knownHosts, string checking, bool streamInput = false)
     {
         SeedGuard.Require(!knownHosts.Contains("${", StringComparison.Ordinal) && !knownHosts.Any(char.IsControl),
             "The registry path cannot contain SSH environment expansions or control characters.");
@@ -156,7 +162,8 @@ internal sealed class InstanceSsh(ISeedProcess process)
             .Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
         return
         [
-            "-n", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
+            "-o", streamInput ? "StdinNull=no" : "StdinNull=yes",
+            "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
             "-o", "StrictHostKeyChecking=" + checking, "-o", "HostKeyAlias=" + InstancePin.Alias,
             "-o", $"UserKnownHostsFile=\"{path}\"", "-o", "GlobalKnownHostsFile=none",
             "-o", "KnownHostsCommand=none", "-o", "VerifyHostKeyDNS=no", "-o", "CheckHostIP=no",
@@ -195,7 +202,11 @@ internal sealed class InstanceSsh(ISeedProcess process)
         return (destination, null);
     }
 
-    private static string Quote(string value) => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+    internal static string Quote(string value) => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+
+    internal static string AsRoot(string command) =>
+        $"if [ \"$(id -u)\" = 0 ]; then exec /bin/sh -c {Quote(command)}; "
+        + $"else exec sudo -n -- /bin/sh -c {Quote(command)}; fi";
 
     private static bool IsToken(string? value) =>
         value is not null && Regex.IsMatch(value, @"\A[A-Za-z0-9][A-Za-z0-9._+-]{0,252}\z");

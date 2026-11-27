@@ -4,6 +4,7 @@ using System.Formats.Tar;
 using System.IO.Compression;
 using System.Reflection;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Municode.Cli.Commands;
@@ -17,14 +18,16 @@ internal sealed class SeedRelease(
     private readonly ISeedProcess _process = runner ?? SeedProcess.Default;
     private readonly HttpMessageHandler? _handler = handler;
 
-    public async Task<SeedVerifiedRelease> VerifyAsync(
+    public Task<SeedVerifiedRelease> VerifyAsync(
         string tag,
         string directory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) => VerifyAsync(tag, directory, cancellationToken, deployProtocol: null);
+
+    internal async Task<SeedVerifiedRelease> VerifyAsync(
+        string tag, string directory, CancellationToken cancellationToken, int? deployProtocol)
     {
-        SeedGuard.Require(Regex.IsMatch(tag,
-                @"^municode-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$"),
-            "Seed requires an exact Municode release tag.");
+        SeedGuard.Require(IsReleaseTag(tag),
+            $"{(deployProtocol is null ? "Seed" : "Deploy")} requires an exact Municode release tag.");
         SeedFiles.CreateDirectory(directory);
         var version = tag["municode-v".Length..];
         var bundle = $"municode-{version}-linux-any.tar.gz";
@@ -47,10 +50,13 @@ internal sealed class SeedRelease(
         ], null, cancellationToken);
         SeedGuard.Require(verification.ExitCode == 0,
             "The release inventory does not verify against the exact Municode GitHub Actions signing identity.");
-        return VerifyFiles(tag, directory);
+        return VerifyFiles(tag, directory, deployProtocol);
     }
 
-    internal static SeedVerifiedRelease VerifyFiles(string tag, string directory)
+    internal static bool IsReleaseTag(string tag) => Regex.IsMatch(tag,
+        @"\Amunicode-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?\z");
+
+    internal static SeedVerifiedRelease VerifyFiles(string tag, string directory, int? deployProtocol = null)
     {
         var version = tag["municode-v".Length..];
         var bundle = $"municode-{version}-linux-any.tar.gz";
@@ -68,12 +74,17 @@ internal sealed class SeedRelease(
         var revision = manifest.GetProperty("sourceRevision").GetString();
         SeedGuard.Require(Regex.IsMatch(revision ?? "", "^[0-9a-f]{40}$"),
             "The signed release source revision is not an exact Git object ID.");
-        var cliRevision = CliSourceRevision();
-        if (cliRevision.Length == 40)
+        if (deployProtocol is { } protocol)
+        {
+            RequireDeployProtocol(manifest, protocol);
+            SeedGuard.Require(!manifest.TryGetProperty("imageArchives", out _),
+                "A signed deploy release must not include a local image archive inventory.");
+        }
+        else if (CliSourceRevision() is { Length: 40 } cliRevision)
             SeedGuard.Require(cliRevision == revision,
                 "This release's CLI and server payloads do not come from the same source revision.");
         VerifyDependencies(manifest);
-        VerifyComponentsAndArchive(directory, manifest, bundle);
+        VerifyComponentsAndArchive(directory, manifest, bundle, deploy: deployProtocol is not null);
         var identity = SeedReleaseIdentity.Validate(new(
             tag,
             manifest.GetProperty("product").GetString()!,
@@ -86,38 +97,59 @@ internal sealed class SeedRelease(
         return new(identity, directory);
     }
 
-    internal static void VerifyInventory(string directory, IReadOnlyCollection<string> expected)
+    internal static Dictionary<string, string> VerifyInventory(
+        string directory, IReadOnlyCollection<string> expected, bool local = false)
     {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var line in File.ReadAllLines(Path.Combine(directory, "checksums.txt")))
+        var seen = new Dictionary<string, string>(StringComparer.Ordinal);
+        var checksums = Path.Combine(directory, "checksums.txt");
+        if (local) CheckLocalAsset(checksums, 4096);
+        foreach (var line in File.ReadLines(checksums))
         {
             var match = Regex.Match(line, @"^([0-9a-f]{64})  ([A-Za-z0-9._-]+)$");
             SeedGuard.Require(match.Success
                 && expected.Contains(match.Groups[2].Value, StringComparer.Ordinal)
-                && seen.Add(match.Groups[2].Value),
-                "The signed checksum inventory is duplicate, unsafe or contains an unexpected asset.");
+                && seen.TryAdd(match.Groups[2].Value, match.Groups[1].Value),
+                "The release checksum inventory is duplicate, unsafe or contains an unexpected asset.");
             var path = Path.Combine(directory, match.Groups[2].Value);
-            SeedFiles.Check(path);
+            if (local) CheckLocalAsset(path, path.EndsWith(".tar.gz", StringComparison.Ordinal)
+                ? 32L * 1024 * 1024 * 1024 : 128L * 1024 * 1024);
+            else SeedFiles.Check(path);
             SeedGuard.Require(FileDigest(path) == match.Groups[1].Value,
-                "A signed release asset checksum does not match.");
+                "A release asset checksum does not match.");
         }
-        SeedGuard.Require(seen.SetEquals(expected), "The signed release checksum inventory is incomplete.");
+        SeedGuard.Require(seen.Count == expected.Count, "The release checksum inventory is incomplete.");
+        return seen;
     }
 
-    private static void VerifyDependencies(JsonElement manifest)
+    internal static void CheckLocalAsset(string path, long limit)
+    {
+        var file = new FileInfo(path);
+        SeedGuard.Require(file.Exists && (file.Attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0
+            && file.Length > 0 && file.Length <= limit, "A local release asset is missing or unsafe.");
+    }
+
+    internal static void RequireDeployProtocol(JsonElement manifest, int protocol) =>
+        SeedGuard.Require(manifest.TryGetProperty("deployProtocol", out var value)
+            && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var actual) && actual == protocol,
+            "Deploy protocol mismatch; use the CLI from the target release (cli/<rid>/).");
+
+    internal static void VerifyDependencies(JsonElement manifest)
     {
         var images = manifest.GetProperty("dependencies").EnumerateObject().ToArray();
         SeedGuard.Require(images.Length > 0, "The release dependency inventory is empty.");
         foreach (var image in images)
             SeedGuard.Require(Regex.IsMatch(image.Value.GetString() ?? "",
                     @"^[^ \t\r\n]+@sha256:(?!0{64}$)[0-9a-f]{64}$"),
-                "A signed release dependency is not pinned by an immutable image digest.");
+                "A release dependency is not pinned by an immutable image digest.");
     }
 
-    private static void VerifyComponentsAndArchive(
+    internal static void VerifyComponentsAndArchive(
         string directory,
         JsonElement manifest,
-        string bundle)
+        string bundle,
+        bool deploy,
+        IReadOnlyDictionary<string, string>? imageDigests = null,
+        string? manifestDigest = null)
     {
         const string suffix = "-linux-any.tar.gz";
         SeedGuard.Require(bundle.EndsWith(suffix, StringComparison.Ordinal),
@@ -142,6 +174,10 @@ internal sealed class SeedRelease(
             };
             var files = component.GetProperty("files").EnumerateArray().ToArray();
             SeedGuard.Require(files.Length > 0, $"The {name} release component is empty.");
+            if (deploy)
+                SeedGuard.Require(Hash(Encoding.UTF8.GetBytes(string.Concat(files.Select(file =>
+                    $"{file.GetProperty("sha256").GetString()}  {file.GetProperty("path").GetString()}\n"))))
+                    == component.GetProperty("sha256").GetString(), "A release component inventory digest does not match.");
             foreach (var file in files)
             {
                 var path = expectedRoot + "/" + prefix + "/" + file.GetProperty("path").GetString();
@@ -150,11 +186,21 @@ internal sealed class SeedRelease(
                     "The signed release component inventory contains a duplicate or unsafe path.");
             }
         }
+        if (imageDigests is not null)
+            foreach (var (path, digest) in imageDigests) expectedFiles.Add(expectedRoot + "/" + path, digest);
+        if (deploy)
+        {
+            var agent = manifest.GetProperty("hostAgent");
+            SeedGuard.Require(agent.GetProperty("path").GetString() == "deploy_host.py",
+                "The release host agent has an unexpected path.");
+            expectedFiles.Add(expectedRoot + "/deploy_host.py", agent.GetProperty("sha256").GetString()!);
+        }
         var archive = Path.Combine(directory, bundle);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var verifiedFiles = new HashSet<string>(StringComparer.Ordinal);
         long expanded = 0;
-        byte[]? inArchiveManifest = null;
+        var expectedManifest = manifestDigest ?? FileDigest(Path.Combine(directory, "release-manifest.json"));
+        var manifestVerified = false;
         using var raw = File.OpenRead(archive);
         using var gzip = new GZipStream(raw, CompressionMode.Decompress);
         using var tar = new TarReader(gzip);
@@ -173,24 +219,23 @@ internal sealed class SeedRelease(
                 || (entry.EntryType == TarEntryType.Directory && name == expectedRoot),
                 "The release archive contains a member outside its exact root.");
             expanded += entry.Length;
-            SeedGuard.Require(entry.Length <= 128L * 1024 * 1024 && expanded <= 2L * 1024 * 1024 * 1024,
+            var relative = name.Length > expectedRoot.Length ? name[(expectedRoot.Length + 1)..] : "";
+            var image = imageDigests?.ContainsKey(relative) is true;
+            SeedGuard.Require(entry.Length <= (image ? 16L * 1024 : 128) * 1024 * 1024
+                && expanded <= (imageDigests is null ? 2L : 32L) * 1024 * 1024 * 1024,
                 "The release archive exceeds its member or expanded-size safety bound.");
             if (entry.EntryType is not (TarEntryType.RegularFile or TarEntryType.V7RegularFile)) continue;
-            using var memory = new MemoryStream();
-            entry.DataStream!.CopyTo(memory);
-            var bytes = memory.ToArray();
             if (name == expectedRoot + "/release-manifest.json")
-                inArchiveManifest = bytes;
+                manifestVerified = StreamDigest(entry.DataStream ?? Stream.Null) == expectedManifest;
             if (expectedFiles.TryGetValue(name, out var digest))
             {
-                SeedGuard.Require(Hash(bytes) == digest,
-                    "A signed archive component digest does not match the external manifest.");
+                SeedGuard.Require(StreamDigest(entry.DataStream ?? Stream.Null) == digest,
+                    "An archive component digest does not match the external manifest.");
                 verifiedFiles.Add(name);
             }
         }
         SeedGuard.Require(expectedFiles.Keys.All(verifiedFiles.Contains)
-            && inArchiveManifest is not null && Hash(inArchiveManifest) == Hash(File.ReadAllBytes(
-                Path.Combine(directory, "release-manifest.json"))),
+            && manifestVerified,
             "The release archive is missing signed components or carries a different manifest.");
     }
 
@@ -260,12 +305,14 @@ internal sealed class SeedRelease(
         return match.Success ? match.Groups[1].Value : "";
     }
 
-    private static string FileDigest(string path)
+    internal static string FileDigest(string path)
     {
         using var stream = File.OpenRead(path);
-        return Convert.ToHexStringLower(SHA256.HashData(stream));
+        return StreamDigest(stream);
     }
 
-    private static string Hash(byte[] bytes) =>
+    private static string StreamDigest(Stream stream) => Convert.ToHexStringLower(SHA256.HashData(stream));
+
+    internal static string Hash(byte[] bytes) =>
         Convert.ToHexStringLower(SHA256.HashData(bytes));
 }
