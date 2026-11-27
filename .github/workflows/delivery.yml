@@ -93,7 +93,8 @@ jobs:
           mkdir -p .local/artifacts/install
           .local/artifacts/package/municode-0.0.0-ci/install.sh \
             --install-root "$PWD/.local/artifacts/install/release" \
-            --secrets-dir "$PWD/.local/artifacts/install/secrets"
+            --secrets-dir "$PWD/.local/artifacts/install/secrets" \
+            --policy-file "$PWD/.local/artifacts/install/config/municode.json"
           jq -e '.product == "municode"' .local/artifacts/package/release-manifest.json
           dashboard_probe="$PWD/scripts/delivery/probe_dashboard.py"
           cd .local/artifacts/install/release

@@ -15,6 +15,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "scripts" / "delivery" / "package.py"
+MIGRATIONS = {"postgres": ["20260101000000_InitialPostgres", "20260102000000_AddPostgres"],
+              "sqlite": ["20260101000000_InitialSqlite"]}
 
 
 class PackageTests(unittest.TestCase):
@@ -42,6 +44,14 @@ class PackageTests(unittest.TestCase):
                 target.chmod(0o755)
             self.payloads[name] = payload
         self.output = self.root / "output"
+        dotnet = self.root / "dotnet"
+        dotnet.write_text(
+            "#!/bin/sh\n"
+            '[ "$#" -eq 4 ] && [ "$1" = "$PWD/Municode.Api.dll" ] && '
+            '[ "$2 $3 $4" = "migrations list --json" ] || exit 2\n'
+            f"printf '%s\\n' '{json.dumps(MIGRATIONS)}'\n"
+        )
+        dotnet.chmod(0o755)
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -71,8 +81,12 @@ class PackageTests(unittest.TestCase):
             str(self.output),
         ]
 
+    def package(self, command=None, *, check=True):
+        env = dict(os.environ, PATH=str(self.root) + os.pathsep + os.environ["PATH"])
+        return subprocess.run(command or self.command(), check=check, capture_output=True, text=True, env=env)
+
     def test_package_contains_all_product_payloads_and_installer(self):
-        subprocess.run(self.command(), check=True, capture_output=True, text=True)
+        self.package()
         archive = next(self.output.glob("*.tar.gz"))
         with tarfile.open(archive, "r:gz") as bundle:
             names = {member.name for member in bundle.getmembers()}
@@ -90,8 +104,18 @@ class PackageTests(unittest.TestCase):
             self.assertTrue(all(not member.issym() and not member.islnk() for member in bundle.getmembers()))
 
     def test_manifest_records_component_digests_and_no_floating_dependencies(self):
-        subprocess.run(self.command(), check=True, capture_output=True, text=True)
+        self.package()
         manifest = json.loads((self.output / "release-manifest.json").read_text())
+        self.assertEqual(manifest["deployProtocol"], 1)
+        self.assertEqual(manifest["migrations"], MIGRATIONS)
+        contract = json.loads((ROOT / "packaging" / "bundle" / "env-contract.json").read_text())
+        self.assertEqual(manifest["envContract"], contract)
+        env_keys = {
+            line.partition("=")[0]
+            for line in (ROOT / "packaging" / "bundle" / ".env.example").read_text().splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        self.assertEqual(env_keys, set(contract))
         self.assertEqual(
             set(manifest["components"]), {"api", "worker", "gateway", "dashboard", "cli"}
         )
@@ -117,7 +141,7 @@ class PackageTests(unittest.TestCase):
             self.assertIn(service, compose + caddy)
 
     def test_packaged_caddy_pins_gateway_routes_to_dedicated_proxy_network(self):
-        subprocess.run(self.command(), check=True, capture_output=True, text=True)
+        self.package()
         archive = next(self.output.glob("*.tar.gz"))
         with tarfile.open(archive, "r:gz") as bundle:
             prefix = "municode-0.0.0-test/"
@@ -163,7 +187,7 @@ class PackageTests(unittest.TestCase):
             networks,
         )
 
-    def test_passkeys_bind_to_the_configured_dashboard_origin(self):
+    def test_compose_renders_passkeys_and_external_policy(self):
         bundle = ROOT / "packaging" / "bundle"
         self.assertIn(
             "    passkey:\n"
@@ -207,9 +231,10 @@ class PackageTests(unittest.TestCase):
                 env=environment, check=True, capture_output=True, text=True,
             ).stdout
             services = json.loads(rendered)["services"]
-            return services["kratos"]["environment"], services["api"]["environment"]
+            return services
 
-        kratos, api = render()
+        services = render()
+        kratos, api = services["kratos"]["environment"], services["api"]["environment"]
         self.assertEqual(kratos["SELFSERVICE_METHODS_PASSKEY_ENABLED"], "true")
         self.assertEqual(kratos["SELFSERVICE_METHODS_PASSKEY_CONFIG_RP_ID"], "dashboard.customer.test")
         self.assertEqual(kratos["SELFSERVICE_METHODS_PASSKEY_CONFIG_RP_ORIGINS"],
@@ -217,12 +242,19 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(api["Kratos__DashboardOrigin"], "https://dashboard.customer.test")
         self.assertEqual(api["Kratos__PasskeyEnabled"], "true")
 
-        kratos, api = render(MUNICODE_PASSKEYS_ENABLED="false")
+        policy = str(self.root / "config" / "municode.json")
+        services = render(MUNICODE_PASSKEYS_ENABLED="false", MUNICODE_POLICY_FILE=policy)
+        kratos, api = services["kratos"]["environment"], services["api"]["environment"]
         self.assertEqual(kratos["SELFSERVICE_METHODS_PASSKEY_ENABLED"], "false")
         self.assertEqual(api["Kratos__PasskeyEnabled"], "false")
+        for name in ("api", "api-migrate", "worker"):
+            mount = next(v for v in services[name]["volumes"] if v["target"] == "/etc/municode/municode.json")
+            self.assertEqual(mount["source"], policy)
+            self.assertTrue(mount["read_only"])
+            self.assertFalse(mount["bind"].get("create_host_path", False))
 
     def test_archive_checksum_is_present(self):
-        subprocess.run(self.command(), check=True, capture_output=True, text=True)
+        self.package()
         lines = (self.output / "checksums.txt").read_text().splitlines()
         self.assertEqual(len(lines), 2)
         self.assertEqual({line.split("  ", 1)[1] for line in lines},
@@ -253,7 +285,7 @@ class PackageTests(unittest.TestCase):
             command[command.index("--version") + 1] = f"0.0.0-test{number}"
             output = self.root / f"output{number}"
             command[command.index("--output") + 1] = str(output)
-            subprocess.run(command, check=True, capture_output=True, text=True)
+            self.package(command)
             with tarfile.open(output / f"municode-0.0.0-test{number}-linux-x64.tar.gz") as bundle:
                 bundle.extractall(self.root / f"release{number}", filter="data")
             release = self.root / f"release{number}" / f"municode-0.0.0-test{number}"
@@ -363,7 +395,7 @@ class PackageTests(unittest.TestCase):
 
     def test_missing_dashboard_output_fails_without_partial_archive(self):
         (self.payloads["dashboard"] / "index.html").unlink()
-        result = subprocess.run(self.command(), capture_output=True, text=True)
+        result = self.package(check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Dashboard payload lacks index.html", result.stderr)
         self.assertEqual(list(self.output.glob("*.tar.gz")), [])
@@ -371,13 +403,13 @@ class PackageTests(unittest.TestCase):
     def test_unsafe_package_version_fails_before_creating_output(self):
         command = self.command()
         command[command.index("--version") + 1] = "../../release"
-        result = subprocess.run(command, capture_output=True, text=True)
+        result = self.package(command, check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("exact semantic version", result.stderr)
         self.assertFalse(self.output.exists())
 
     def test_installer_verifies_and_stages_a_fresh_release(self):
-        subprocess.run(self.command(), check=True, capture_output=True, text=True)
+        self.package()
         archive = next(self.output.glob("*.tar.gz"))
         extracted = self.root / "extracted"
         extracted.mkdir()
@@ -386,6 +418,7 @@ class PackageTests(unittest.TestCase):
         release_root = next(extracted.iterdir())
         install_root = self.root / "installed"
         secrets = self.root / "secrets"
+        policy = self.root / "config" / "municode.json"
         subprocess.run(
             [
                 str(release_root / "install.sh"),
@@ -393,6 +426,8 @@ class PackageTests(unittest.TestCase):
                 str(install_root),
                 "--secrets-dir",
                 str(secrets),
+                "--policy-file",
+                str(policy),
             ],
             check=True,
             capture_output=True,
@@ -407,6 +442,11 @@ class PackageTests(unittest.TestCase):
         env = (install_root / ".env").read_text()
         self.assertNotIn("synthetic-contract", env)
         self.assertEqual(env.count("MUNICODE_SECRETS_DIR="), 1)
+        self.assertIn(f"MUNICODE_POLICY_FILE={policy}", env.splitlines())
+        self.assertIn("MUNICODE_RELEASE_TAG=municode-v0.0.0-test", env.splitlines())
+        self.assertIn(f"MUNICODE_RELEASE_SOURCE_REVISION={'a' * 40}", env.splitlines())
+        self.assertIn("MUNICODE_RELEASE_TRUST=local-build", env.splitlines())
+        self.assertEqual(policy.read_bytes(), (release_root / "municode.json").read_bytes())
 
         kratos_env = secrets / "kratos.env"
         cipher_values = [
@@ -419,6 +459,26 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(all(byte in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
                             for byte in cipher_values[0]))
         self.assertEqual(kratos_env.stat().st_mode & 0o7777, 0o600)
+
+        policy.write_text('{"operator":true}\n')
+        second_install = self.root / "second-install"
+        subprocess.run(
+            [str(release_root / "install.sh"), "--install-root", str(second_install),
+             "--secrets-dir", str(self.root / "second-secrets"), "--policy-file", str(policy),
+             "--verified-release-tag", "municode-v0.0.0-test"],
+            check=True, capture_output=True, text=True,
+        )
+        self.assertEqual(policy.read_text(), '{"operator":true}\n')
+        self.assertIn("MUNICODE_RELEASE_TRUST=github-sigstore", (second_install / ".env").read_text().splitlines())
+
+        with (release_root / ".env.example").open("a") as template:
+            template.write("UNKNOWN_KEY=not-in-contract\n")
+        rejected = subprocess.run(
+            [sys.executable, "-B", str(release_root / "verify_bundle.py")],
+            capture_output=True, text=True,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("Environment contract keys do not match", rejected.stderr)
 
 
 if __name__ == "__main__":

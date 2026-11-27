@@ -223,7 +223,13 @@ services:
       - app-db-password
     volumes:
       - ./runtime/api:/opt/municode:ro
-      - ./municode.json:/etc/municode/municode.json:ro
+      - &workspace-policy
+        type: bind
+        source: ${MUNICODE_POLICY_FILE:?set MUNICODE_POLICY_FILE}
+        target: /etc/municode/municode.json
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       database-initialize:
         condition: service_completed_successfully
@@ -273,7 +279,7 @@ services:
       - openbao-ca.crt
     volumes:
       - ./runtime/api:/opt/municode:ro
-      - ./municode.json:/etc/municode/municode.json:ro
+      - *workspace-policy
       - openbao-agent-token:/run/municode-openbao:ro
     depends_on:
       api-migrate:
@@ -297,7 +303,7 @@ services:
       - openbao-ca.crt
     volumes:
       - ./runtime/worker:/opt/municode:ro
-      - ./municode.json:/etc/municode/municode.json:ro
+      - *workspace-policy
       - openbao-agent-token:/run/municode-openbao:ro
       - relay-state:/var/lib/municode
       - type: bind

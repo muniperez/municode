@@ -20,10 +20,12 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --install-root) install=$2; shift 2 ;;
         --secrets-dir) secrets=$2; shift 2 ;;
-        *) shift ;;
+        --policy-file) policy=$2; shift 2 ;;
+        --verified-release-tag) tag=$2; shift 2 ;;
+        *) exit 2 ;;
     esac
 done
-mkdir -p "$install/runtime/api" "$install/runtime/worker" "$install/runtime/gateway" \
+mkdir -p "$(dirname "$policy")" "$install/runtime/api" "$install/runtime/worker" "$install/runtime/gateway" \
     "$install/dashboard" "$secrets/ssh" "$secrets/bootstrap" "$secrets/openbao-approle"
 cat > "$install/.env" <<'EOF'
 MUNICODE_INSTALLATION_ID=replace
@@ -40,6 +42,9 @@ MUNICODE_KRATOS_IMAGE=synthetic
 MUNICODE_CADDY_IMAGE=synthetic
 MUNICODE_WORKER_SSH_PUBLIC_KEY=synthetic
 EOF
+[ -f "$policy" ] || printf '{}\n' > "$policy"
+printf 'MUNICODE_POLICY_FILE=%s\nMUNICODE_RELEASE_TAG=%s\nMUNICODE_RELEASE_TRUST=github-sigstore\n' \
+    "$policy" "$tag" >> "$install/.env"
 printf synthetic > "$install/release-manifest.json"
 printf synthetic > "$install/runtime/api/Municode.Api.dll"
 printf synthetic > "$install/runtime/worker/Municode.Worker.dll"
@@ -219,6 +224,7 @@ class SeedStartTests(unittest.TestCase):
         self.state.mkdir()
         self.install = self.root / "install"
         self.secrets = self.root / "secrets"
+        self.policy = self.root / "config" / "municode.json"
         self.token = self.root / "local" / "setup-token"
         self.env = os.environ.copy()
         self.env.update({
@@ -243,6 +249,7 @@ class SeedStartTests(unittest.TestCase):
             "--gateway-domain", "workspaces.example.net",
             "--install-root", str(self.install),
             "--secrets-dir", str(self.secrets),
+            "--policy-file", str(self.policy),
             "--setup-token-output", str(self.token),
         ]
 
@@ -250,6 +257,15 @@ class SeedStartTests(unittest.TestCase):
         env = self.env.copy()
         env.update(values)
         return subprocess.run(self.command(), env=env, capture_output=True, text=True)
+
+    def test_seed_installs_host_policy_and_records_verified_release(self):
+        completed = self.run_seed()
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertTrue(self.policy.is_file())
+        env = (self.install / ".env").read_text().splitlines()
+        self.assertIn(f"MUNICODE_POLICY_FILE={self.policy}", env)
+        self.assertIn("MUNICODE_RELEASE_TAG=municode-v1.2.3", env)
+        self.assertIn("MUNICODE_RELEASE_TRUST=github-sigstore", env)
 
     def test_openbao_commands_use_verified_internal_tls(self):
         completed = self.run_seed(

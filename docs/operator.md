@@ -183,6 +183,9 @@ an OpenBao service certificate and a dedicated worker SSH key. Protect and back
 up `/etc/municode/secrets`; do not put it in the installation tree.
 Tagged releases also carry `checksums.txt.sigstore.json`; seed requires its exact
 Municode workflow identity before any provider mutation.
+The installer records the manifest's release tag and source revision in `.env`
+and records `local-build` trust by default. Seed supplies
+`--verified-release-tag` only after verifying the tag's Sigstore provenance.
 
 ## Configure and initialize
 
@@ -190,6 +193,12 @@ Edit `/opt/municode/workspaces/.env`. Replace all `example.test` names and the
 installation ID, and retain image references from the exact release metadata. If a
 reverse proxy or firewall imposes another private address, retain the API,
 gateway and worker consistency described in [runtime setup](setup/runtime.md).
+
+Workspace policy lives at `/etc/municode/config/municode.json`, outside the
+release tree. The installer copies the bundled template there only if no
+policy file exists. To use a different absolute path, pass `--policy-file`
+to the installer; Compose reads the resulting `MUNICODE_POLICY_FILE` and
+requires the file to exist.
 
 Passkey sign-in is enabled by default. Kratos uses `CONSOLE_HOSTNAME` as the
 WebAuthn relying-party ID and `CONSOLE_URL` as its only allowed origin, so

@@ -1,0 +1,21 @@
+{
+  "API_HOSTNAME": {"owner": "operator"},
+  "API_URL": {"owner": "operator"},
+  "CONSOLE_HOSTNAME": {"owner": "operator"},
+  "CONSOLE_URL": {"owner": "operator"},
+  "MUNICODE_CADDY_IMAGE": {"owner": "release"},
+  "MUNICODE_DOTNET_IMAGE": {"owner": "release"},
+  "MUNICODE_GATEWAY_DOMAIN": {"owner": "operator"},
+  "MUNICODE_INSTALLATION_ID": {"owner": "operator"},
+  "MUNICODE_KRATOS_IMAGE": {"owner": "release"},
+  "MUNICODE_OPENBAO_IMAGE": {"owner": "release"},
+  "MUNICODE_PASSKEYS_ENABLED": {"owner": "operator", "default": "true"},
+  "MUNICODE_POLICY_FILE": {"owner": "operator", "default": "/etc/municode/config/municode.json"},
+  "MUNICODE_POSTGRES_IMAGE": {"owner": "release"},
+  "MUNICODE_RELEASE_SOURCE_REVISION": {"owner": "release"},
+  "MUNICODE_RELEASE_TAG": {"owner": "release"},
+  "MUNICODE_RELEASE_TRUST": {"owner": "release"},
+  "MUNICODE_SECRETS_DIR": {"owner": "installer"},
+  "MUNICODE_SOURCE_URL": {"owner": "release"},
+  "MUNICODE_WORKER_SSH_PUBLIC_KEY": {"owner": "installer"}
+}
