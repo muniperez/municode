@@ -28,7 +28,7 @@ describe("browser account transport", () => {
     await expect(apiRequest("/api/development-workspaces", { method: "POST", body: { name: "Example" } }))
       .rejects.toMatchObject({ status: 403 });
     expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(fetcher.mock.calls[0][1].headers).toHaveProperty("X-Workspaces-CSRF", "synthetic-csrf");
+    expect(fetcher.mock.calls[0][1].headers).toHaveProperty("X-Municode-CSRF", "synthetic-csrf");
     setCsrfToken(null);
     await expect(apiRequest("/api/development-workspaces", { method: "POST" })).rejects.toMatchObject({ status: 401 });
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -67,7 +67,7 @@ describe("browser account transport", () => {
     expect(fetcher.mock.calls[0][0]).toContain("returnTo=%2Fcli%2Flogin%3Fsession%3Drequest-1");
     await submitAccountFlow(flow, { csrf_token: "upstream-csrf", password: "synthetic-password", method: "password" });
     expect(JSON.parse(fetcher.mock.calls[1][1].body).csrf_token).toBe("upstream-csrf");
-    expect(fetcher.mock.calls[1][1].headers).not.toHaveProperty("X-Workspaces-CSRF");
+    expect(fetcher.mock.calls[1][1].headers).not.toHaveProperty("X-Municode-CSRF");
     for (const action of ["https://evil.test/api/account", "//evil.test/api/account", "/api/account/logout"]) {
       expect(() => validateFlow({ ...flow, ui: { ...flow.ui, action } }, "login")).toThrow();
     }
@@ -93,7 +93,7 @@ describe("optional Google provider transport", () => {
     const [url, init] = fetcher.mock.calls[0];
     expect(url).toBe(apiUrl(`/api/account/flows/login/oidc?flow=${googleFlow().id}&returnTo=%2Fcli%2Flogin%3Fsession%3Drequest-1`));
     expect(JSON.parse(init.body)).toEqual({ csrf_token: "upstream-csrf", provider: "google" });
-    expect(init.headers).not.toHaveProperty("X-Workspaces-CSRF");
+    expect(init.headers).not.toHaveProperty("X-Municode-CSRF");
     for (const redirectUrl of ["http://accounts.google.com/o/oauth2/v2/auth", "https://evil.test/o/oauth2/v2/auth",
       "https://accounts.google.com.evil.test/o/oauth2/v2/auth", "https://user@accounts.google.com/o/oauth2/v2/auth",
       "https://accounts.google.com:8443/o/oauth2/v2/auth", "javascript:alert(1)"]) {

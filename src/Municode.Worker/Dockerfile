@@ -9,7 +9,7 @@ RUN dotnet publish src/Municode.Worker -c Release -o /out --no-self-contained
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=build /out/ ./
-COPY LICENSE /usr/share/workspaces/LICENSE
-COPY LICENSES /usr/share/workspaces/LICENSES
+COPY LICENSE /usr/share/municode/LICENSE
+COPY LICENSES /usr/share/municode/LICENSES
 USER $APP_UID
 ENTRYPOINT ["dotnet", "Municode.Worker.dll"]

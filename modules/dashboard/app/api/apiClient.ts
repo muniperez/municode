@@ -55,7 +55,7 @@ async function request(path: string, options: RequestOptions): Promise<Response>
   const method = options.method ?? "GET";
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (method !== "GET") {
-    if (csrfToken) headers["X-Workspaces-CSRF"] = csrfToken;
+    if (csrfToken) headers["X-Municode-CSRF"] = csrfToken;
     else if (!options.browserFlow) {
       throw new ApiError(401, { code: "unauthenticated", message: "Refresh your session before trying again.", details: [] });
     }

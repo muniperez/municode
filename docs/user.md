@@ -1,4 +1,4 @@
-# Use Municode Workspaces
+# Use Municode
 
 Sign in at the console origin supplied by your operator. The first owner completes
 one-time installation setup; subsequent users receive access from an organization
@@ -14,8 +14,8 @@ password keeps working, and a canceled passkey prompt leaves the password form
 available. The same account settings list your passkeys and remove them; the
 last remaining sign-in method cannot be removed. Adding or removing a passkey,
 like changing your password, may first ask you to confirm it's you and then
-signs out your other browser sessions. Passkey sign-in also approves `workspaces
-login` requests from the CLI.
+signs out your other browser sessions. Passkey sign-in also approves
+`municode login` requests from the CLI.
 
 ## Dashboard
 
@@ -32,15 +32,13 @@ account assumptions.
 ## CLI
 
 The release archive stores executables below `cli/<runtime>/municode`
-(`municode.exe` on Windows) plus the canonical `workspaces` wrapper
-(`workspaces.cmd` on Windows). Install the matching directory contents into a
+(`municode.exe` on Windows). Install the matching directory contents into a
 protected location on your `PATH`. The CLI child project owns command behavior
-and exact help; run `workspaces --help` or `municode --help` from its released
+and exact help; run `municode --help` from its released
 binary for the accepted commands.
 
-Operators use `workspaces seed` before ordinary authenticated workspace commands.
-`municode seed` and `municode workspaces seed` are equivalent compatibility
-spellings. Seed never authenticates a workspace user or registers its bootstrap
+Operators use `municode seed` before ordinary authenticated workspace commands.
+Seed never authenticates a workspace user or registers its bootstrap
 provider credential automatically. After first-owner setup, register a provider,
 image and plan in the dashboard before creating the first coding VM.
 

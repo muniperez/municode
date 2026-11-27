@@ -8,19 +8,19 @@ credentials, existing customer data or a shared installation.
 ## Safety gates
 
 - [ ] Select a new, funded test provider account; record its billing and cleanup
-      owner. No provider credential may be registered in Workspaces.
+      owner. No provider credential may be registered in Municode.
 - [ ] Use a fresh public DNS zone or isolated records under operator control.
-- [ ] Use an exact published `workspaces-vX.Y.Z`, released `workspaces` CLI,
+- [ ] Use an exact published `municode-vX.Y.Z`, released `municode` CLI,
       Cosign 2.6.5 and the provider's current API token in an owner-only file.
 - [ ] Confirm no pre-existing control-plane server carries the generated seed
       operation label. Confirm baseline zero coding VMs separately.
 
 ## Plan and interruption
 
-- [ ] Run `workspaces seed plan` for each provider path selected for qualification.
+- [ ] Run `municode seed plan` for each provider path selected for qualification.
       Check the provider-reported region, size, monthly/hourly amount, currency,
       exclusions, exact source revision, manifest digest and bundle digest.
-- [ ] Run `workspaces seed apply` with the displayed approval digest.
+- [ ] Run `municode seed apply` with the displayed approval digest.
 - [ ] Interrupt or terminate the workstation process immediately after the
       provider reports VPS creation and before any SSH trust completes.
 - [ ] Confirm exactly one operation-owned control-plane VPS exists in the
@@ -56,7 +56,7 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
       fingerprint:
 
 ```sh
-workspaces seed resume <operation> \
+municode seed resume <operation> \
   --credential-file /protected/provider.token \
   --confirm-console-fingerprint SHA256:...
 ```

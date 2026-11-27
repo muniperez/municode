@@ -1,4 +1,4 @@
-pid_file = "/run/workspaces-openbao/agent.pid"
+pid_file = "/run/municode-openbao/agent.pid"
 
 vault {
   address   = "https://openbao:8200"
@@ -18,7 +18,7 @@ auto_auth {
 
   sink "file" {
     config = {
-      path = "/run/workspaces-openbao/token"
+      path = "/run/municode-openbao/token"
       mode = 0640
     }
   }

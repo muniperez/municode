@@ -12,7 +12,7 @@ public sealed class DevelopmentWorkspaceRegionalProviderTests
 {
     private static Dictionary<string, string> Labels(string kind = "primary") => new()
     {
-        ["managed-by"] = "municode-workspaces", ["organization"] = "org_test",
+        ["managed-by"] = "municode", ["organization"] = "org_test",
         ["workspace"] = "workspace_test", ["kind"] = kind
     };
 

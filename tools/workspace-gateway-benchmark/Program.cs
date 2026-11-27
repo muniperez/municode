@@ -473,7 +473,7 @@ static class GatewayChildProcess
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
-            if (instrument.Meter.Name == "Municode.Gateway" && instrument.Name.StartsWith("workspaces.gateway.", StringComparison.Ordinal))
+            if (instrument.Meter.Name == "Municode.Gateway" && instrument.Name.StartsWith("municode.gateway.", StringComparison.Ordinal))
                 l.EnableMeasurementEvents(instrument);
         };
         listener.SetMeasurementEventCallback<long>((instrument, value, tags, _) =>

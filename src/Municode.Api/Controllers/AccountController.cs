@@ -183,7 +183,7 @@ public sealed class AccountController(
     {
         NoStore();
         var principal = RequirePrincipal(HttpContext);
-        var cookie = Request.Cookies["__Host-workspaces-session"];
+        var cookie = Request.Cookies["__Host-municode-session"];
         if (!principal.IsDashboardUser || principal.UserId is null ||
             string.IsNullOrWhiteSpace(cookie) || principal.BrowserSessionId is null)
         {
@@ -295,7 +295,7 @@ public sealed class AccountController(
     {
         var names = Request.Cookies.Keys
             .Where(name => name.StartsWith("csrf_token_", StringComparison.Ordinal))
-            .Append("__Host-workspaces-session")
+            .Append("__Host-municode-session")
             .Append("ory_kratos_session")
             .Distinct(StringComparer.Ordinal);
         foreach (var name in names)

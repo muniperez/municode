@@ -1349,7 +1349,7 @@ at a coding-user-readable location (for example `/opt/municode-image-source`) an
 run as root:
 
 ```sh
-WORKSPACES_DISK_USAGE_GUEST=RUN-DISK-USAGE-ON-DISPOSABLE-GUEST \
+MUNICODE_DISK_USAGE_GUEST=RUN-DISK-USAGE-ON-DISPOSABLE-GUEST \
   unshare --mount --propagation private \
   python3 -B -m unittest discover \
   -s templates/development-workspaces/tests -p test_disk_usage.py \

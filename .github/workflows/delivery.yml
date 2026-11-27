@@ -1,4 +1,4 @@
-name: Workspaces delivery
+name: Municode delivery
 
 on:
   pull_request:
@@ -60,7 +60,7 @@ jobs:
             'DSN=postgres://kratos:synthetic@postgres:5432/kratos?sslmode=disable' \
             'SECRETS_COOKIE=synthetic' \
             'SECRETS_CIPHER=synthetic' > "$secrets/kratos.env"
-          WORKSPACES_SECRETS_DIR="$secrets" docker compose \
+          MUNICODE_SECRETS_DIR="$secrets" docker compose \
             -f packaging/bundle/compose.yml \
             --env-file packaging/bundle/.env.example config --quiet
       - name: Smoke-test the packaged dashboard and CLI handoff
@@ -86,15 +86,15 @@ jobs:
             --api "$root/api" --worker "$root/worker" --gateway "$root/gateway" \
             --dashboard "$root/dashboard" --cli "$root/cli" \
             --output .local/artifacts/package
-          tar -xzf .local/artifacts/package/municode-workspaces-0.0.0-ci-linux-x64.tar.gz \
+          tar -xzf .local/artifacts/package/municode-0.0.0-ci-linux-x64.tar.gz \
             -C .local/artifacts/package
-          .local/artifacts/package/municode-workspaces-0.0.0-ci/cli/linux-x64/workspaces \
-            help seed | grep -F 'workspaces seed plan'
+          .local/artifacts/package/municode-0.0.0-ci/cli/linux-x64/municode \
+            help seed | grep -F 'municode seed plan'
           mkdir -p .local/artifacts/install
-          .local/artifacts/package/municode-workspaces-0.0.0-ci/install.sh \
+          .local/artifacts/package/municode-0.0.0-ci/install.sh \
             --install-root "$PWD/.local/artifacts/install/release" \
             --secrets-dir "$PWD/.local/artifacts/install/secrets"
-          grep -F 'workspaces' .local/artifacts/package/release-manifest.json
+          jq -e '.product == "municode"' .local/artifacts/package/release-manifest.json
           dashboard_probe="$PWD/scripts/delivery/probe_dashboard.py"
           cd .local/artifacts/install/release
           project="runtime-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -105,7 +105,7 @@ jobs:
                 CONSOLE_HOSTNAME: http://localhost
                 API_HOSTNAME: http://api.localhost
                 API_URL: https://api.localhost
-                WORKSPACES_SOURCE_URL: https://github.com/muniperez/municode
+                MUNICODE_SOURCE_URL: https://github.com/muniperez/municode
               ports: !override
                 - "127.0.0.1::80"
               networks: !override
@@ -149,5 +149,5 @@ jobs:
       - name: Build current runtime image targets
         run: |
           docker build --file src/Municode.Api/Dockerfile --tag municode-api:ci .
-          docker build --file src/Municode.Worker/Dockerfile --tag municode-workspaces-worker:ci .
-          docker build --file src/Municode.Gateway/Dockerfile --tag municode-workspaces-gateway:ci .
+          docker build --file src/Municode.Worker/Dockerfile --tag municode-worker:ci .
+          docker build --file src/Municode.Gateway/Dockerfile --tag municode-gateway:ci .

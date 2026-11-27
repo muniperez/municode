@@ -157,7 +157,7 @@ describe("passkey settings", () => {
     const [url, request] = fetcher.mock.calls[1];
     expect(url).toContain(`/api/account/flows/settings?flow=${enrolled.id}`);
     expect(url).not.toContain("keepSignedIn");
-    expect(request.headers["X-Workspaces-CSRF"] ?? new Headers(request.headers).get("X-Workspaces-CSRF")).toBe("synthetic-csrf");
+    expect(request.headers["X-Municode-CSRF"] ?? new Headers(request.headers).get("X-Municode-CSRF")).toBe("synthetic-csrf");
     const body = JSON.parse(request.body);
     expect(body).toMatchObject({ csrf_token: "upstream-csrf", method: "passkey" });
     expect(JSON.parse(body.passkey_settings_register)).toEqual({

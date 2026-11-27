@@ -19,7 +19,7 @@ public sealed partial class CliApplication
         var action = args.FirstOrDefault();
         if (action is not ("plan" or "apply" or "resume" or "status"))
             throw new CliCommandException(CliExitCodes.ValidationError,
-                "Usage: workspaces seed <plan|apply|resume|status> [operation] [options].");
+                "Usage: municode seed <plan|apply|resume|status> [operation] [options].");
         var operationId = action == "plan" ? null : args.ElementAtOrDefault(1);
         var optionOffset = action == "plan" ? 1 : 2;
         if (action != "plan")
@@ -74,7 +74,7 @@ public sealed partial class CliApplication
                 + " manifest " + release.Identity.ManifestSha256
                 + " bundle " + release.Identity.BundleSha256);
             _console.WriteLine("Approval digest: " + state.Plan.Approval);
-            _console.WriteLine("No provider mutations. Review the costs and run: workspaces seed apply "
+            _console.WriteLine("No provider mutations. Review the costs and run: municode seed apply "
                 + operationId + " --credential-file <owner-only-path> --approve " + state.Plan.Approval);
             return CliExitCodes.Success;
         }
@@ -133,13 +133,12 @@ public sealed partial class CliApplication
     private void PrintSeedHelp()
     {
         _console.WriteLine("Usage:");
-        _console.WriteLine("  workspaces seed plan --provider <hetzner|digitalocean|vultr> --region <id> --size <id>");
+        _console.WriteLine("  municode seed plan --provider <hetzner|digitalocean|vultr> --region <id> --size <id>");
         _console.WriteLine("    --dashboard-hostname <name> --api-hostname <name> --gateway-domain <name>");
-        _console.WriteLine("    --release <workspaces-vX.Y.Z> --credential-file <owner-only-path>");
-        _console.WriteLine("  workspaces seed apply <operation> --credential-file <path> --approve <digest>");
-        _console.WriteLine("  workspaces seed resume <operation> --credential-file <path> [--confirm-console-fingerprint <SHA256:...>]");
-        _console.WriteLine("  workspaces seed status <operation>");
-        _console.WriteLine("Compatibility: 'municode seed ...' and 'municode workspaces seed ...' use the same command.");
+        _console.WriteLine("    --release <municode-vX.Y.Z> --credential-file <owner-only-path>");
+        _console.WriteLine("  municode seed apply <operation> --credential-file <path> --approve <digest>");
+        _console.WriteLine("  municode seed resume <operation> --credential-file <path> [--confirm-console-fingerprint <SHA256:...>]");
+        _console.WriteLine("  municode seed status <operation>");
         _console.WriteLine("Plan is read-only except for protected local state and exact release verification.");
         _console.WriteLine("Seed provisions one control-plane VPS only. It never registers provider credentials in the control plane or creates coding VMs.");
     }

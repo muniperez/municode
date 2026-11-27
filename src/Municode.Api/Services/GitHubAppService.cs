@@ -59,9 +59,9 @@ public sealed class GitHubAppService(WorkspaceDbContext db, ISecretStore secrets
         var hostLabel = new Uri(console).Host.Replace('.', '-');
         return new(connection.Id, post + "?state=" + state, new
         {
-            name = "Workspaces-" + hostLabel[..Math.Min(16, hostLabel.Length)] + "-" + connection.Id[..6],
+            name = "Municode-" + hostLabel[..Math.Min(16, hostLabel.Length)] + "-" + connection.Id[..6],
             url = console,
-            description = "Private GitHub connection for this Workspaces organization. The registering administrator owns this App.",
+            description = "Private GitHub connection for this Municode organization. The registering administrator owns this App.",
             @public = false,
             redirect_url = console + "/settings/github/callback?connectionId=" + connection.Id,
             setup_url = console + "/settings/github/installed?connectionId=" + connection.Id,

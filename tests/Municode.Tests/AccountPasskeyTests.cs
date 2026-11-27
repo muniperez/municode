@@ -158,7 +158,7 @@ public sealed class AccountPasskeyTests : IAsyncLifetime
     {
         var cookie = response.Headers.GetValues("Set-Cookie")
             .Select(value => value.Split(';')[0])
-            .Single(value => value.StartsWith("__Host-workspaces-session=", StringComparison.Ordinal))
+            .Single(value => value.StartsWith("__Host-municode-session=", StringComparison.Ordinal))
             .Split('=', 2)[1];
         var session = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("session");
         return (cookie, session.GetProperty("csrfToken").GetString()!, session);
@@ -168,8 +168,8 @@ public sealed class AccountPasskeyTests : IAsyncLifetime
     {
         var client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false });
         client.DefaultRequestHeaders.Add("Origin", Console);
-        if (cookie is not null) client.DefaultRequestHeaders.Add("Cookie", "__Host-workspaces-session=" + cookie);
-        if (csrf is not null) client.DefaultRequestHeaders.Add("X-Workspaces-CSRF", csrf);
+        if (cookie is not null) client.DefaultRequestHeaders.Add("Cookie", "__Host-municode-session=" + cookie);
+        if (csrf is not null) client.DefaultRequestHeaders.Add("X-Municode-CSRF", csrf);
         return client;
     }
 
@@ -180,7 +180,7 @@ public sealed class AccountPasskeyTests : IAsyncLifetime
             builder.UseEnvironment("Development").ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Database:Provider"] = "Sqlite", ["Database:RunMigrationsOnStartup"] = "false",
-                ["ConnectionStrings:Workspaces"] = connection.ConnectionString, ["Console:BaseUrl"] = Console,
+                ["ConnectionStrings:Municode"] = connection.ConnectionString, ["Console:BaseUrl"] = Console,
                 ["Cors:AllowedOrigins:0"] = Console, ["Kratos:PublicBaseUrl"] = "http://kratos:4433/",
                 ["Kratos:DashboardOrigin"] = Console, ["Kratos:PasskeyEnabled"] = "true"
             }));

@@ -12,13 +12,44 @@ namespace Municode.Cli.Tests;
 
 public sealed class SeedReleaseTests
 {
+    [Fact]
+    public async Task SeedPinsCosignToTheExactMunicodeReleaseWorkflowAndTag()
+    {
+        using var fixture = new ReleaseFixture();
+        var signature = Path.Combine(fixture.Root, "checksums.txt.sigstore.json");
+        File.WriteAllText(signature, "{}");
+        ReleaseFixture.Protect(signature);
+        var process = new CosignProcess();
+
+        await new SeedRelease(process).VerifyAsync("municode-v1.2.3", fixture.Root, CancellationToken.None);
+
+        Assert.Equal("https://github.com/muniperez/municode/.github/workflows/municode-release.yml@refs/tags/municode-v1.2.3",
+            process.CertificateIdentity);
+    }
+
+    private sealed class CosignProcess : ISeedProcess
+    {
+        internal string? CertificateIdentity { get; private set; }
+
+        public Task<SeedProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments,
+            byte[]? input, CancellationToken cancellationToken)
+        {
+            Assert.Equal("cosign", fileName);
+            if (arguments[0] == "version")
+                return Task.FromResult(new SeedProcessResult(0, "v2.6.5"));
+            Assert.Equal("verify-blob", arguments[0]);
+            CertificateIdentity = arguments.SkipWhile(value => value != "--certificate-identity").Skip(1).First();
+            return Task.FromResult(new SeedProcessResult(0, ""));
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void ExactSignedInventoryAndArchiveIdentityAreVerified(bool includeDirectories)
     {
         using var fixture = new ReleaseFixture(includeDirectories: includeDirectories);
-        var verified = SeedRelease.VerifyFiles("workspaces-v1.2.3", fixture.Root);
+        var verified = SeedRelease.VerifyFiles("municode-v1.2.3", fixture.Root);
         Assert.Equal(ReleaseFixture.Revision(), verified.Identity.SourceRevision);
         Assert.Equal("github-sigstore", verified.Identity.Trust);
     }
@@ -28,42 +59,42 @@ public sealed class SeedReleaseTests
     {
         using var fixture = new ReleaseFixture(tamperComponent: true);
         var error = Assert.Throws<CliCommandException>(
-            () => SeedRelease.VerifyFiles("workspaces-v1.2.3", fixture.Root));
+            () => SeedRelease.VerifyFiles("municode-v1.2.3", fixture.Root));
         Assert.Contains("component digest", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]
-    [InlineData("municode-workspaces-1.2.3//", TarEntryType.Directory)]
-    [InlineData("municode-workspaces-1.2.3/runtime/api//", TarEntryType.Directory)]
-    [InlineData("municode-workspaces-1.2.3/runtime//extra/", TarEntryType.Directory)]
-    [InlineData("municode-workspaces-1.2.3/../extra/", TarEntryType.Directory)]
-    [InlineData("municode-workspaces-1.2.3/./extra/", TarEntryType.Directory)]
-    [InlineData("/municode-workspaces-1.2.3/extra/", TarEntryType.Directory)]
-    [InlineData("municode-workspaces-1.2.3/runtime\\extra/", TarEntryType.Directory)]
-    [InlineData("municode-workspaces-1.2.3/C:extra/", TarEntryType.Directory)]
-    [InlineData("municode-workspaces-1.2.3/extra.txt/", TarEntryType.RegularFile)]
-    [InlineData("municode-workspaces-1.2.3/extra.txt/", TarEntryType.V7RegularFile)]
-    [InlineData("municode-workspaces-1.2.3/runtime/api", TarEntryType.Directory)]
-    [InlineData("municode-workspaces-1.2.3/runtime/api/", TarEntryType.Directory)]
-    [InlineData("municode-workspaces-1.2.3/runtime/api/Municode.Api.dll/", TarEntryType.Directory)]
-    [InlineData("municode-workspaces-1.2.3/runtime/api/Municode.Api.dll", TarEntryType.RegularFile)]
+    [InlineData("municode-1.2.3//", TarEntryType.Directory)]
+    [InlineData("municode-1.2.3/runtime/api//", TarEntryType.Directory)]
+    [InlineData("municode-1.2.3/runtime//extra/", TarEntryType.Directory)]
+    [InlineData("municode-1.2.3/../extra/", TarEntryType.Directory)]
+    [InlineData("municode-1.2.3/./extra/", TarEntryType.Directory)]
+    [InlineData("/municode-1.2.3/extra/", TarEntryType.Directory)]
+    [InlineData("municode-1.2.3/runtime\\extra/", TarEntryType.Directory)]
+    [InlineData("municode-1.2.3/C:extra/", TarEntryType.Directory)]
+    [InlineData("municode-1.2.3/extra.txt/", TarEntryType.RegularFile)]
+    [InlineData("municode-1.2.3/extra.txt/", TarEntryType.V7RegularFile)]
+    [InlineData("municode-1.2.3/runtime/api", TarEntryType.Directory)]
+    [InlineData("municode-1.2.3/runtime/api/", TarEntryType.Directory)]
+    [InlineData("municode-1.2.3/runtime/api/Municode.Api.dll/", TarEntryType.Directory)]
+    [InlineData("municode-1.2.3/runtime/api/Municode.Api.dll", TarEntryType.RegularFile)]
     public void UnsafeOrDuplicateArchiveMembersFailClosed(string name, TarEntryType type)
     {
         using var fixture = new ReleaseFixture(extraMember: name, extraType: type);
         var error = Assert.Throws<CliCommandException>(
-            () => SeedRelease.VerifyFiles("workspaces-v1.2.3", fixture.Root));
+            () => SeedRelease.VerifyFiles("municode-v1.2.3", fixture.Root));
         Assert.Contains("unsafe or duplicate member", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]
     [InlineData("other-root/")]
-    [InlineData("municode-workspaces-1.2.30/extra/")]
-    [InlineData("municode-workspaces-1.2.3-extra/")]
+    [InlineData("municode-1.2.30/extra/")]
+    [InlineData("municode-1.2.3-extra/")]
     public void DirectoriesOutsideTheExactArchiveRootFailClosed(string name)
     {
         using var fixture = new ReleaseFixture(extraMember: name);
         var error = Assert.Throws<CliCommandException>(
-            () => SeedRelease.VerifyFiles("workspaces-v1.2.3", fixture.Root));
+            () => SeedRelease.VerifyFiles("municode-v1.2.3", fixture.Root));
         Assert.Contains("outside its exact root", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -71,9 +102,9 @@ public sealed class SeedReleaseTests
     public void DirectoryCannotSubstituteForSignedComponentFile()
     {
         using var fixture = new ReleaseFixture(omitApi: true,
-            extraMember: "municode-workspaces-1.2.3/runtime/api/Municode.Api.dll/");
+            extraMember: "municode-1.2.3/runtime/api/Municode.Api.dll/");
         var error = Assert.Throws<CliCommandException>(
-            () => SeedRelease.VerifyFiles("workspaces-v1.2.3", fixture.Root));
+            () => SeedRelease.VerifyFiles("municode-v1.2.3", fixture.Root));
         Assert.Contains("missing signed components", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -85,7 +116,7 @@ public sealed class SeedReleaseTests
             new string('0', 64) + "  release-manifest.json\n");
         ReleaseFixture.Protect(Path.Combine(fixture.Root, "checksums.txt"));
         Assert.Throws<CliCommandException>(
-            () => SeedRelease.VerifyFiles("workspaces-v1.2.3", fixture.Root));
+            () => SeedRelease.VerifyFiles("municode-v1.2.3", fixture.Root));
     }
 
     private sealed class ReleaseFixture : IDisposable
@@ -111,7 +142,7 @@ public sealed class SeedReleaseTests
             bool omitApi)
         {
             var version = "1.2.3";
-            var archiveRoot = "municode-workspaces-" + version;
+            var archiveRoot = "municode-" + version;
             var componentBytes = new Dictionary<string, byte[]>
             {
                 ["api/Municode.Api.dll"] = "api"u8.ToArray(),
@@ -150,7 +181,7 @@ public sealed class SeedReleaseTests
             var manifest = JsonSerializer.SerializeToUtf8Bytes(new
             {
                 schemaVersion = 1,
-                product = "municode-workspaces",
+                product = "municode",
                 version,
                 rid = "linux-any",
                 sourceRepository = "https://github.com/muniperez/municode",
@@ -161,13 +192,13 @@ public sealed class SeedReleaseTests
                     dotnet = "mcr.microsoft.com/dotnet/aspnet@sha256:" + new string('1', 64)
                 },
                 components,
-                bundle = $"municode-workspaces-{version}-linux-any.tar.gz"
+                bundle = $"municode-{version}-linux-any.tar.gz"
             }, new JsonSerializerOptions { WriteIndented = true });
             var manifestPath = Path.Combine(Root, "release-manifest.json");
             File.WriteAllBytes(manifestPath, manifest);
             Protect(manifestPath);
 
-            var archivePath = Path.Combine(Root, $"municode-workspaces-{version}-linux-any.tar.gz");
+            var archivePath = Path.Combine(Root, $"municode-{version}-linux-any.tar.gz");
             using (var raw = File.Create(archivePath))
             using (var gzip = new GZipStream(raw, CompressionMode.Compress))
             using (var tar = new TarWriter(gzip, TarEntryFormat.Pax))
@@ -213,7 +244,7 @@ public sealed class SeedReleaseTests
             File.WriteAllText(checksums,
                 Hash(File.ReadAllBytes(manifestPath)) + "  release-manifest.json\n"
                 + Hash(File.ReadAllBytes(archivePath))
-                + $"  municode-workspaces-{version}-linux-any.tar.gz\n");
+                + $"  municode-{version}-linux-any.tar.gz\n");
             Protect(checksums);
         }
 

@@ -1,9 +1,9 @@
-# Workspaces runtime
+# Municode runtime
 
 The API manages the database, lifecycle reservations, enrollment and gateway authorization.
 `Municode.Worker` reconciles provider resources and operates the generation-bound guest over SSH.
 `Municode.Gateway` relays browser HTTP and WebSocket traffic to the worker's private SSH forwards.
-The worker and API use the same Workspaces database and OpenBao KV mount. The gateway needs only its
+The worker and API use the same Municode database and OpenBao KV mount. The gateway needs only its
 service credential and private network access to the API and worker.
 
 ## Configure a fresh installation
@@ -13,7 +13,7 @@ service credential and private network access to the API and worker.
    Ubuntu amd64 image builder, pinned inputs, and release procedure. Use the **installed** manifest's
    SHA-256, matching provider snapshot ID, account, region, T3 version and protocol in the image
    registration. Set current pricing before enabling workspace lifecycle requests.
-2. Create a dedicated Workspaces worker SSH keypair, for example with
+2. Create a dedicated Municode worker SSH keypair, for example with
    `ssh-keygen -t ed25519 -f <protected-directory>/worker-ssh`. Set
    `WorkspaceSsh:PrivateKeyFile` to its absolute owner-only path and
    `WorkspaceSsh:PublicKey` to the OpenSSH public key. The worker uses port 22, one independently
@@ -34,12 +34,12 @@ service credential and private network access to the API and worker.
    services-only ingress. Configure the same `HttpTimeoutSeconds` on worker and gateway so a
    recycled relay port stays fenced for the duration of any outstanding connection attempt.
    Keep full request URLs out of request logs, especially at the TLS proxy.
-5. Supply the [example configuration](workspaces.example.json) via an absolute
+5. Supply the [example configuration](municode.example.json) via an absolute
    `DevelopmentWorkspaces__ConfigurationFile` and environment overrides. Start the processes on
    distinct bindings as needed (`ASPNETCORE_URLS` for API and gateway). The API and worker may
    use separate scoped OpenBao tokens. The worker needs provider account secret reads and workspace
    runtime secret writes, reads and metadata deletion. Ephemeral Git also uses the
-   organization's Workspaces GitHub App or explicitly approved repository-scoped credentials.
+   organization's Municode GitHub App or explicitly approved repository-scoped credentials.
 
 The gateway's internal certificate check at `/internal/certificate?domain=…` returns success
 only to the configured proxy for an authorized generation/service hostname. It can be used
@@ -149,10 +149,10 @@ dotnet publish src/Municode.Worker -c Release -o .local/artifacts/publish/worker
 dotnet publish src/Municode.Gateway -c Release -o .local/artifacts/publish/gateway
 ```
 
-The PostgreSQL matrix is optional. Set `WORKSPACES_TEST_POSTGRES_PORT` to the TCP port
+The PostgreSQL matrix is optional. Set `MUNICODE_TEST_POSTGRES_PORT` to the TCP port
 of a **disposable loopback** PostgreSQL instance with trust authentication for the test
 superuser `postgres`. The suite creates, migrates and drops isolated test databases.
-SQLite tests exercise the Workspaces initial migration and run by default.
+SQLite tests exercise the Municode initial migration and run by default.
 
 Run the gateway benchmark in Release mode. It starts synthetic loopback control and guest
 endpoints and prints JSON to stdout.

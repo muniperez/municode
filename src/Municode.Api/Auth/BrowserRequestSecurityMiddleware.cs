@@ -21,7 +21,7 @@ public sealed class BrowserRequestSecurityMiddleware(RequestDelegate next)
                 ? null
                 : await sessions.FindByIdAsync(sessionId, context.RequestAborted);
             var origin = context.Request.Headers.Origin;
-            var csrf = context.Request.Headers["X-Workspaces-CSRF"].ToString();
+            var csrf = context.Request.Headers["X-Municode-CSRF"].ToString();
             if (session is null || session.RevokedAt is not null ||
                 !origins.IsAllowed(origin.Count == 1 ? origin.ToString() : null) ||
                 !sessions.ValidateCsrf(session, csrf))

@@ -6,10 +6,10 @@ namespace Municode.Gateway;
 internal static class GatewayDiagnostics
 {
     private static readonly Meter Meter = new("Municode.Gateway");
-    public const string ActiveConnectionsName = "workspaces.gateway.connections.active";
-    public const string AdmissionWaitName = "workspaces.gateway.admission.wait";
-    public const string RelayBytesName = "workspaces.gateway.relay.bytes";
-    public const string WebSocketClosesName = "workspaces.gateway.websocket.closes";
+    public const string ActiveConnectionsName = "municode.gateway.connections.active";
+    public const string AdmissionWaitName = "municode.gateway.admission.wait";
+    public const string RelayBytesName = "municode.gateway.relay.bytes";
+    public const string WebSocketClosesName = "municode.gateway.websocket.closes";
 
     private static readonly UpDownCounter<long> ActiveConnections =
         Meter.CreateUpDownCounter<long>(ActiveConnectionsName, "{connection}");

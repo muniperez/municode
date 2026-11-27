@@ -101,7 +101,7 @@ internal sealed class SeedLifecycle(
         if (state.HostFingerprint is null && consoleFingerprint is null)
         {
             write("Pause for independent SSH identity. Obtain the ed25519 host fingerprint from the "
-                + "provider's authenticated console, then run: workspaces seed resume " + state.Id
+                + "provider's authenticated console, then run: municode seed resume " + state.Id
                 + " --credential-file <owner-only-path> --confirm-console-fingerprint SHA256:...");
             return;
         }
@@ -129,7 +129,7 @@ internal sealed class SeedLifecycle(
         }
         state.Phase = "installing";
         state.InstallStarted = true;
-        state.InstallationId ??= "workspaces-" + state.Id;
+        state.InstallationId ??= "municode-" + state.Id;
         journal.Save(state);
         await host.InstallAsync(state, journal.DirectoryPath, releaseDirectory, cancellationToken);
         state.Phase = "verifying";

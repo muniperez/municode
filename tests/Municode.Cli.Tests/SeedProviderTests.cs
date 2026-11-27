@@ -64,7 +64,7 @@ public sealed class SeedProviderTests
     public async Task HetznerRequiresExactOwnershipForCreateAndFind(bool create)
     {
         var handler = new ProviderHandler("hetzner");
-        handler.HetznerServer["labels"]!["municode-workspaces-seed"] = new string('a', 32) + "-other";
+        handler.HetznerServer["labels"]!["municode-seed"] = new string('a', 32) + "-other";
         using var subject = new SeedProvider("hetzner", "synthetic-credential", handler);
         if (create)
         {
@@ -183,7 +183,7 @@ public sealed class SeedProviderTests
         provider, provider == "vultr" ? "ewr" : "nbg1",
         provider == "digitalocean" ? "s-2vcpu-4gb" : provider == "vultr" ? "vc2-2c-4gb" : "cx22",
         "console.example.com", "api.example.com", "workspaces.example.net",
-        "workspaces-v1.2.3");
+        "municode-v1.2.3");
 
     private static SeedState State(string provider, SeedQuote quote) => new()
     {
@@ -192,8 +192,8 @@ public sealed class SeedProviderTests
     };
 
     private static SeedReleaseIdentity ReleaseFixture() => new(
-        "workspaces-v1.2.3", "municode-workspaces", "https://github.com/muniperez/municode",
-        new string('a', 40), "municode-workspaces-1.2.3-linux-any.tar.gz",
+        "municode-v1.2.3", "municode", "https://github.com/muniperez/municode",
+        new string('a', 40), "municode-1.2.3-linux-any.tar.gz",
         new string('b', 64), new string('c', 64), "github-sigstore");
 
     private sealed class ProviderHandler(string provider) : HttpMessageHandler
@@ -206,7 +206,7 @@ public sealed class SeedProviderTests
         {
             id = 42, labels = new Dictionary<string, string>
             {
-                ["municode-workspaces-seed"] = new string('a', 32)
+                ["municode-seed"] = new string('a', 32)
             },
             location = new { name = "nbg1" },
             server_type = new { name = "cx22" }, image = new { id = 101 },

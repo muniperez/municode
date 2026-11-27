@@ -14,7 +14,7 @@ it.each([[202, "deleting"], [200, "deleted"]])("parses HTTP %s permanent deletio
   expect(fetcher).toHaveBeenCalledExactlyOnceWith(
     expect.stringContaining("/api/development-workspaces/work%2Fspace?organizationId=org%20a&confirmPermanentDeletion=true"),
     expect.objectContaining({ method: "DELETE", body: undefined, credentials: "include",
-      headers: expect.objectContaining({ "X-Workspaces-CSRF": "synthetic-csrf" }) }),
+      headers: expect.objectContaining({ "X-Municode-CSRF": "synthetic-csrf" }) }),
   );
 });
 
@@ -41,5 +41,5 @@ it("uses organization-scoped routes, escaped identities, generation fencing and 
   expect(fetcher.mock.calls[2][1].method).toBe("PUT");
   expect(JSON.parse(fetcher.mock.calls[3][1].body)).toEqual({ generation: 4, cancelled: true });
   expect(JSON.parse(fetcher.mock.calls[4][1].body)).toEqual({ generation: 4, service: "preview" });
-  expect(fetcher.mock.calls[0][1]).toMatchObject({ credentials: "include", headers: { "X-Workspaces-CSRF": "synthetic-csrf" } });
+  expect(fetcher.mock.calls[0][1]).toMatchObject({ credentials: "include", headers: { "X-Municode-CSRF": "synthetic-csrf" } });
 });

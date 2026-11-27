@@ -1,4 +1,4 @@
-# Municode Workspaces
+# Municode
 
 Standalone coding-workspace control plane and delivery. The API owns identity,
 organizations, provider accounts, plans, workspace lifecycle and Git access; the
@@ -17,14 +17,14 @@ From a released standalone CLI on an operator workstation:
 
 ```sh
 chmod 600 /protected/hetzner.token
-workspaces seed plan \
+municode seed plan \
   --provider hetzner --region <location> --size <server-type> \
   --dashboard-hostname console.example.com \
   --api-hostname api.example.com \
   --gateway-domain workspaces.example.com \
-  --release workspaces-vX.Y.Z \
+  --release municode-vX.Y.Z \
   --credential-file /protected/hetzner.token
-workspaces seed apply <operation> \
+municode seed apply <operation> \
   --credential-file /protected/hetzner.token --approve <plan-digest>
 ```
 
@@ -32,9 +32,8 @@ Seed is a signed-release, one-control-plane-VPS workflow for Hetzner, DigitalOce
 or Vultr. It prints authoritative recurring costs and creates nothing before the
 exact plan digest is approved. The durable journal safely resumes an uncertain
 provider response, but pauses for an independently checked SSH console
-fingerprint and exact DNS records. `workspaces seed resume <operation>` continues
+fingerprint and exact DNS records. `municode seed resume <operation>` continues
 preparation, bundle verification, HTTPS/health checks and first-owner setup.
-`municode seed` and `municode workspaces seed` are compatibility spellings.
 
 The bootstrap provider token is read only from a protected local file. It is
 never copied into the control-plane journal, release, server or provider-account
@@ -61,7 +60,7 @@ python3 -B -m unittest discover -s scripts/delivery -p 'test_*.py' -v
 
 Tests use synthetic identities, repositories, secrets, HTTP transports and client
 payloads. To include the optional PostgreSQL test, set
-`WORKSPACES_TEST_POSTGRES` to a fresh disposable database.
+`MUNICODE_TEST_POSTGRES` to a fresh disposable database.
 
 ## Package
 
@@ -91,9 +90,7 @@ release checksums are written under `.local/artifacts/release`.
 
 The merged CLI and dashboard projects are built and included by delivery CI.
 Their package paths and release commands are fixed in `packaging/targets.json`;
-release tags fail closed when either artifact cannot be built. The package adds a
-`workspaces` command alias beside `municode` for each Unix RID and `workspaces.cmd`
-for Windows.
+release tags fail closed when either artifact cannot be built.
 
 ## Start with a fresh database
 
@@ -102,7 +99,7 @@ dotnet run --project src/Municode.Api -c Release --no-build -- migrate
 dotnet run --project src/Municode.Api -c Release --no-build -- --urls http://127.0.0.1:5080
 ```
 
-The default database is `.local/artifacts/data/workspaces.db`. Check `/health`
+The default database is `.local/artifacts/data/municode.db`. Check `/health`
 on the local listener. Workspace admission and gateway launch are disabled by
 default. This configuration verifies migration and API startup without external
 services.

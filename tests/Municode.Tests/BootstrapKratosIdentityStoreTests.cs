@@ -15,7 +15,7 @@ public sealed class BootstrapKratosIdentityStoreTests
     {
         id = IdentityId, schema_id = "default", state = "active",
         traits = new { email = "operator@example.test", name = new { first = "Original" } },
-        metadata_admin = new { preserved = "private", workspaces_bootstrap = new { installationId = installation, operationId = operation } },
+        metadata_admin = new { preserved = "private", municode_bootstrap = new { installationId = installation, operationId = operation } },
         metadata_public = new { preserved = "public" }
     };
 
@@ -48,7 +48,7 @@ public sealed class BootstrapKratosIdentityStoreTests
             new
             {
                 id = IdentityId, traits = new { email = "operator@example.test" },
-                metadata_public = new { workspaces_bootstrap = new { installationId = "installation", operationId = "operation" } }
+                metadata_public = new { municode_bootstrap = new { installationId = "installation", operationId = "operation" } }
             }
         })));
         Assert.Null(await store.FindOperationAsync("installation", "operation", CancellationToken.None));
@@ -95,8 +95,8 @@ public sealed class BootstrapKratosIdentityStoreTests
             using var body = JsonDocument.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
             Assert.Equal("user", body.RootElement.GetProperty("schema_id").GetString());
             Assert.Equal(password, body.RootElement.GetProperty("credentials").GetProperty("password").GetProperty("config").GetProperty("password").GetString());
-            Assert.Equal("installation", body.RootElement.GetProperty("metadata_admin").GetProperty("workspaces_bootstrap").GetProperty("installationId").GetString());
-            Assert.Equal("operation", body.RootElement.GetProperty("metadata_admin").GetProperty("workspaces_bootstrap").GetProperty("operationId").GetString());
+            Assert.Equal("installation", body.RootElement.GetProperty("metadata_admin").GetProperty("municode_bootstrap").GetProperty("installationId").GetString());
+            Assert.Equal("operation", body.RootElement.GetProperty("metadata_admin").GetProperty("municode_bootstrap").GetProperty("operationId").GetString());
             return Json(Identity());
         });
         var result = await Store(handler).CreateAsync("installation", "operation", "operator@example.test",

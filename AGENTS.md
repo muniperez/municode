@@ -1,6 +1,6 @@
 # Municode repository instructions
 
-This repository contains Municode Workspaces, the standalone coding-workspace product: API, worker, gateway, dashboard, CLI, and release delivery.
+This repository contains Municode, the standalone coding-workspace product: API, worker, gateway, dashboard, CLI, and release delivery.
 Keep changes focused. Never push code unless explicitly asked.
 
 - Start with the README and the operator and user documentation under `docs/`.

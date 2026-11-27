@@ -105,8 +105,8 @@ import sys
 
 source, destination, secrets, public_key = map(Path, sys.argv[1:])
 values = {
-    "WORKSPACES_SECRETS_DIR": str(secrets),
-    "WORKSPACES_WORKER_SSH_PUBLIC_KEY": public_key.read_text().strip(),
+    "MUNICODE_SECRETS_DIR": str(secrets),
+    "MUNICODE_WORKER_SSH_PUBLIC_KEY": public_key.read_text().strip(),
 }
 lines = []
 for line in source.read_text().splitlines():

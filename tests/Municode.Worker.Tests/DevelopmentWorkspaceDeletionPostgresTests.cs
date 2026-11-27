@@ -41,7 +41,7 @@ public sealed class DevelopmentWorkspaceDeletionPostgresTests
 
     private static async Task WithPostgres(Func<DevelopmentWorkspaceProcessorTests, Task> test)
     {
-        var fixturePort = int.Parse(Environment.GetEnvironmentVariable("WORKSPACES_TEST_POSTGRES_PORT")!,
+        var fixturePort = int.Parse(Environment.GetEnvironmentVariable("MUNICODE_TEST_POSTGRES_PORT")!,
             System.Globalization.CultureInfo.InvariantCulture);
         var database = "workspaces_test_" + Guid.NewGuid().ToString("N");
         var connection = new NpgsqlConnectionStringBuilder
@@ -49,7 +49,7 @@ public sealed class DevelopmentWorkspaceDeletionPostgresTests
             Host = "127.0.0.1", Port = fixturePort, Database = database, Username = "postgres", Pooling = false
         };
         var options = new DbContextOptionsBuilder<WorkspaceDbContext>();
-        WorkspacesDatabase.ConfigurePostgres(options, connection.ConnectionString);
+        MunicodeDatabase.ConfigurePostgres(options, connection.ConnectionString);
         var fixture = new DevelopmentWorkspaceProcessorTests(options.Options);
         try
         {
@@ -70,8 +70,8 @@ internal sealed class PostgresFactAttribute : FactAttribute
 {
     public PostgresFactAttribute()
     {
-        if (Environment.GetEnvironmentVariable("WORKSPACES_TEST_POSTGRES_PORT") is null)
-            Skip = "Set WORKSPACES_TEST_POSTGRES_PORT to a disposable loopback PostgreSQL fixture.";
+        if (Environment.GetEnvironmentVariable("MUNICODE_TEST_POSTGRES_PORT") is null)
+            Skip = "Set MUNICODE_TEST_POSTGRES_PORT to a disposable loopback PostgreSQL fixture.";
     }
 }
 
@@ -80,8 +80,8 @@ internal sealed class PostgresTheoryAttribute : TheoryAttribute
 {
     public PostgresTheoryAttribute()
     {
-        if (Environment.GetEnvironmentVariable("WORKSPACES_TEST_POSTGRES_PORT") is null)
-            Skip = "Set WORKSPACES_TEST_POSTGRES_PORT to a disposable loopback PostgreSQL fixture.";
+        if (Environment.GetEnvironmentVariable("MUNICODE_TEST_POSTGRES_PORT") is null)
+            Skip = "Set MUNICODE_TEST_POSTGRES_PORT to a disposable loopback PostgreSQL fixture.";
     }
 }
 
