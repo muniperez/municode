@@ -60,7 +60,7 @@ def drill(root, run):
                 timeout=300)
         compose("initialize drill databases", "run", "--rm", "--no-deps", "-T", "database-initialize")
         compose("start drill OpenBao", "up", "-d", "--no-deps", "openbao", timeout=300)
-        compose("create real Caddy volume", "create", "--no-deps", "caddy", timeout=300)
+        compose("create real Caddy volume", "up", "--no-start", "--no-deps", "caddy", timeout=300)
         deploy.await_probe("wait for drill OpenBao", initialize_bao, 120)
         initialized = json.loads(deploy.bao_exec(run, release, "initialize drill OpenBao", "operator", "init",
                                                  *deploy.BAO_OPTIONS, "-key-shares=1", "-key-threshold=1",
