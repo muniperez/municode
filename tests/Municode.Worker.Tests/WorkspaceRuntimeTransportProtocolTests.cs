@@ -13,8 +13,8 @@ public sealed class WorkspaceRuntimeTransportProtocolTests
     public void T3SessionGrantsOnlyWorkspaceTerminalOrchestrationCloneAndBrowseScopes(string kind)
     {
         var target = new WorkspaceRuntimeTarget("vm-current", 7, kind, "203.0.113.8", "");
-        Assert.Equal("python3 -B /opt/workspaces-workspace/issue-t3-session.py --vm-id vm-current " +
-            "--generation 7 --operation-id session-current --subject workspaces-gateway --ttl 300 " +
+        Assert.Equal("python3 -B /opt/municode-workspace/issue-t3-session.py --vm-id vm-current " +
+            "--generation 7 --operation-id session-current --subject municode-gateway --ttl 300 " +
             "--scope terminal:operate --scope orchestration:operate --scope terminal:read " +
             "--scope orchestration:read --scope source-control:write --scope filesystem:read",
             WorkspaceRuntimeTransport.IssueT3SessionCommand(target, "session-current", 300));
@@ -45,9 +45,9 @@ public sealed class WorkspaceRuntimeTransportProtocolTests
             Assert.Throws<InvalidOperationException>(() => WorkspaceRuntimeTransport.ConnectAdmissionCommand(target));
             return;
         }
-        Assert.Equal("python3 -B /opt/workspaces-workspace/t3_connect.py credential --vm-id vm-current --generation 7",
+        Assert.Equal("python3 -B /opt/municode-workspace/t3_connect.py credential --vm-id vm-current --generation 7",
             WorkspaceRuntimeTransport.ConnectCredentialCommand(target));
-        Assert.Equal("python3 -B /opt/workspaces-workspace/t3_connect.py admission --vm-id vm-current --generation 7",
+        Assert.Equal("python3 -B /opt/municode-workspace/t3_connect.py admission --vm-id vm-current --generation 7",
             WorkspaceRuntimeTransport.ConnectAdmissionCommand(target));
     }
 
@@ -102,7 +102,7 @@ public sealed class WorkspaceRuntimeTransportProtocolTests
                 vmId = "stale-vm", generation = -1, operationId = "stale-operation", action = "stop", text
             });
         const string prefix = "printf '%s' '";
-        const string suffix = "' | base64 -d | python3 -B /opt/workspaces-workspace/runtime.py call";
+        const string suffix = "' | base64 -d | python3 -B /opt/municode-workspace/runtime.py call";
         Assert.StartsWith(prefix, command);
         Assert.EndsWith(suffix, command);
         var bytes = Convert.FromBase64String(command[prefix.Length..^suffix.Length]);

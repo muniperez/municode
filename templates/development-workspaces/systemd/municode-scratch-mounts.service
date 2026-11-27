@@ -1,13 +1,13 @@
 [Unit]
 Description=Bind git-ignored build outputs in /workspace/repos onto local scratch
-After=workspaces-workspace.service workspaces-workspace-mount.service
-Requires=workspaces-workspace-mount.service
-Before=workspaces-t3.service workspaces-scratch-watch.service
+After=municode-workspace.service municode-workspace-mount.service
+Requires=municode-workspace-mount.service
+Before=municode-t3.service municode-scratch-watch.service
 ConditionPathIsDirectory=/workspace/repos
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 -I -B /opt/workspaces-workspace/scratch_mounts.py apply --budget-seconds 60
+ExecStart=/usr/bin/python3 -I -B /opt/municode-workspace/scratch_mounts.py apply --budget-seconds 60
 User=root
 UMask=0077
 TimeoutStartSec=100

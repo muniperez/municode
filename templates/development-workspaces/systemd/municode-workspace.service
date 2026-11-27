@@ -1,17 +1,17 @@
 [Unit]
 Description=Workspaces generation-fenced local workspace supervisor
 After=local-fs.target
-Requires=workspaceswork.slice
-ConditionPathExists=/etc/workspaces-workspace/runtime.json
+Requires=municodework.slice
+ConditionPathExists=/etc/municode-workspace/runtime.json
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 -B /opt/workspaces-workspace/runtime.py serve
+ExecStart=/usr/bin/python3 -B /opt/municode-workspace/runtime.py serve
 User=root
 UMask=0077
-RuntimeDirectory=workspaces-workspace
+RuntimeDirectory=municode-workspace
 RuntimeDirectoryMode=0700
-StateDirectory=workspaces-workspace
+StateDirectory=municode-workspace
 StateDirectoryMode=0700
 Restart=on-failure
 RestartSec=3

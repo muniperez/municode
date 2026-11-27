@@ -28,7 +28,7 @@ MAX_COMPONENTS = 64
 MAX_NAME_BYTES = 255
 DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 # Storage tiers (#202): build outputs bind-mounted from the local scratch disk are labelled, never walked.
-SCRATCH_ROOT = "/var/lib/workspaces-scratch"
+SCRATCH_ROOT = "/var/lib/municode-scratch"
 MOUNTINFO = "/proc/self/mountinfo"
 ERROR_CATEGORIES = ("permission_denied", "vanished", "separate_mount", "io_error", "limit_reached",
                     "name_not_supported", "changed_during_scan")
@@ -133,7 +133,7 @@ def ext4_recovery_directory(root_fd, root, info, mountinfo=MOUNTINFO):
             info.st_mode & 0o022:
         return False
     try:
-        marker = os.stat(".workspaces-volume.json", dir_fd=root_fd, follow_symlinks=False)
+        marker = os.stat(".municode-volume.json", dir_fd=root_fd, follow_symlinks=False)
         if not stat.S_ISREG(marker.st_mode) or marker.st_uid != 0 or marker.st_mode & 0o022:
             return False
         point = os.readlink(f"/proc/self/fd/{root_fd}")

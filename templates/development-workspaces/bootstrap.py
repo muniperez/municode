@@ -17,7 +17,7 @@ from runtime import (Blocked, atomic_json, canonical_remote, load_config, qualif
                      read_image_manifest, require, run, t3_descriptor_matches)
 
 
-GIT_CREDENTIAL_HELPER = "/opt/workspaces-workspace/git-credential.py"
+GIT_CREDENTIAL_HELPER = "/opt/municode-workspace/git-credential.py"
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -25,7 +25,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         raise Blocked("Enrollment redirects are forbidden")
 
 
-def call(request, socket_path="/run/workspaces-workspace/control.sock"):
+def call(request, socket_path="/run/municode-workspace/control.sock"):
     deadline = time.monotonic() + 30
     last_reason = "not attempted"
     while True:
@@ -92,11 +92,11 @@ def bootstrap(config_path, enrollment_path, state_dir):
     t3 = qualified_t3(manifest)
     request = dict(vmId=c["vmId"], generation=c["generation"],
                    operationId=enrollment["operationId"], action="bootstrap")
-    run(["systemctl", "start", "workspaces-workspace.service"])
+    run(["systemctl", "start", "municode-workspace.service"])
     ready = call(request)
     configure_user_git(c)
     if c.get("startServices", True):
-        run(["systemctl", "start", "workspaces-t3.service"])
+        run(["systemctl", "start", "municode-t3.service"])
         descriptor = None
         for attempt in range(30):
             try:
@@ -112,9 +112,9 @@ def bootstrap(config_path, enrollment_path, state_dir):
         require(t3_descriptor_matches(descriptor, t3), "Qualified T3 version or protocol is not ready")
         if c["kind"] == "primary":
             # Only a successfully bootstrapped primary should start T3 automatically on this VM.
-            run(["systemctl", "enable", "workspaces-t3.service"])
+            run(["systemctl", "enable", "municode-t3.service"])
             try:
-                run(["systemctl", "start", "workspaces-t3-connect.service"], timeout=15)
+                run(["systemctl", "start", "municode-t3-connect.service"], timeout=15)
             except Blocked:
                 # Optional enrollment readiness is probed separately; never break routine Open T3.
                 pass
@@ -172,7 +172,7 @@ def block_signatures(device):
     return dict(line.split("=", 1) for line in found.stdout.splitlines() if "=" in line)
 
 
-FORMAT_LOCK = "/run/workspaces-workspace/volume-format.lock"
+FORMAT_LOCK = "/run/municode-workspace/volume-format.lock"
 
 
 def format_volume(device, provider_device_id):
@@ -213,9 +213,9 @@ def format_volume(device, provider_device_id):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("bootstrap", "volume-probe", "volume-format"))
-    parser.add_argument("--config", default="/etc/workspaces-workspace/runtime.json")
-    parser.add_argument("--enrollment", default="/run/workspaces-workspace/enrollment.json")
-    parser.add_argument("--state-dir", default="/var/lib/workspaces-workspace")
+    parser.add_argument("--config", default="/etc/municode-workspace/runtime.json")
+    parser.add_argument("--enrollment", default="/run/municode-workspace/enrollment.json")
+    parser.add_argument("--state-dir", default="/var/lib/municode-workspace")
     parser.add_argument("--device")
     parser.add_argument("--provider-device-id")
     args = parser.parse_args()

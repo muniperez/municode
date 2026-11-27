@@ -23,15 +23,18 @@ public sealed class GatewayRelayTests
         await using var fixture = await Fixture.StartAsync();
         using var anonymous = await fixture.SendAsync("/");
         Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
-        using var launch = await fixture.SendAsync("/__workspaces/launch?code=" + Fixture.Code);
+        using var launch = await fixture.SendAsync("/__municode/launch?code=" + Fixture.Code);
         Assert.Equal(HttpStatusCode.Redirect, launch.StatusCode);
         var cookie = Assert.Single(launch.Headers.GetValues("Set-Cookie"));
+        Assert.StartsWith("__Host-municode-workspace=", cookie);
         Assert.Contains("secure", cookie);
         Assert.Contains("httponly", cookie);
         Assert.Contains("samesite=lax", cookie);
         Assert.DoesNotContain("Domain", cookie, StringComparison.OrdinalIgnoreCase);
-        using var replay = await fixture.SendAsync("/__workspaces/launch?code=" + Fixture.Code);
+        using var replay = await fixture.SendAsync("/__municode/launch?code=" + Fixture.Code);
         Assert.Equal(HttpStatusCode.Unauthorized, replay.StatusCode);
+        using var reserved = await fixture.SendAsync("/__municode/unknown", authenticated: true);
+        Assert.Equal(HttpStatusCode.NotFound, reserved.StatusCode);
         using var request = new HttpRequestMessage(HttpMethod.Get, "/.well-known/t3/environment");
         request.Headers.Add("Cookie", fixture.Cookie);
         request.Headers.Add("Authorization", "Bearer attacker");
@@ -324,9 +327,13 @@ public sealed class GatewayRelayTests
         fixture.Control.Target = fixture.Control.Target! with { Bearer = null };
         using var request = new HttpRequestMessage(HttpMethod.Get, "/");
         request.Headers.Add("Cookie", fixture.Cookie + "; preview_session=app-only");
+        request.Headers.Add("X-Municode-Gateway-Credential", "private-credential");
+        request.Headers.Add("X-Preview-Test", "app-header");
         using var response = await fixture.Client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
         Assert.Contains("preview_session=app-only", body);
+        Assert.Contains("app-header", body);
+        Assert.DoesNotContain("private-credential", body);
         Assert.DoesNotContain(Fixture.Session, body);
         Assert.DoesNotContain("secret-t3", body);
     }
@@ -541,7 +548,7 @@ public sealed class GatewayRelayTests
                     catch (Exception ex) when (ex is WebSocketException or OperationCanceledException) { }
                     return;
                 }
-                await context.Response.WriteAsync($"{context.Request.Headers.Authorization}|{context.Request.Host}|{context.Request.Headers["X-Forwarded-Host"]}|{context.Request.Headers["X-Forwarded-Proto"]}|{context.Request.Headers.Cookie}");
+                await context.Response.WriteAsync($"{context.Request.Headers.Authorization}|{context.Request.Host}|{context.Request.Headers["X-Forwarded-Host"]}|{context.Request.Headers["X-Forwarded-Proto"]}|{context.Request.Headers.Cookie}|{context.Request.Headers["X-Municode-Gateway-Credential"]}|{context.Request.Headers["X-Preview-Test"]}");
             });
             await fixture.upstream.StartAsync();
             var address = fixture.upstream.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();

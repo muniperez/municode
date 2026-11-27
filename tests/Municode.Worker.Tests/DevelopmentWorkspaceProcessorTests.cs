@@ -328,7 +328,7 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         vm.EnrollmentTokenExpiresAt = clock.GetUtcNow().AddMinutes(30);
         if (preview)
             workerOptions.PreviewServices["web"] = new()
-                { Port = 8080, SupervisedUnit = "workspaces-preview-static.service" };
+                { Port = 8080, SupervisedUnit = "municode-preview-static.service" };
         await db.SaveChangesAsync();
 
         if (ephemeral)
@@ -342,8 +342,8 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         var config = runtime.BootstrapConfiguration.Value;
         var stops = config.GetProperty("stopUnits").EnumerateArray().Select(x => x.GetString()).ToArray();
         Assert.Equal(preview
-            ? new[] { "workspaces-t3.service", "workspaces-preview-static.service" }
-            : ["workspaces-t3.service"], stops);
+            ? new[] { "municode-t3.service", "municode-preview-static.service" }
+            : ["municode-t3.service"], stops);
         Assert.Equal(!ephemeral, config.TryGetProperty("volume", out _));
         Assert.False(config.TryGetProperty("storageLayout", out _));
         Assert.Equal(0, cloud.Deletes);

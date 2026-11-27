@@ -82,21 +82,21 @@ class CopilotProviderTests(unittest.TestCase):
         self.assertEqual(first["agents"], {"muse": "Configured", "antigravity": "AlreadyConfigured"})
         written = self.settings.read_bytes()
         instances = json.loads(written)["providerInstances"]
-        self.assertEqual(instances["workspaces-muse"], dict(
+        self.assertEqual(instances["municode-muse"], dict(
             driver="muse", displayName="Muse Code", enabled=True,
             environment=[dict(name="MUSE_NO_AUTO_UPDATE", value="1", sensitive=False)],
             config=dict(binaryPath=str(executable))))
         self.assertEqual(instances["mine"], dict(driver="antigravity", enabled=False))
-        self.assertNotIn("workspaces-antigravity", instances)
+        self.assertNotIn("municode-antigravity", instances)
         self.assertEqual(provider.configure(self.settings, agents)["agents"]["muse"], "AlreadyConfigured")
         self.assertEqual(written, self.settings.read_bytes())
 
     def test_occupied_agent_id_is_reported_without_blocking_t3(self):
-        self.write_settings({"providerInstances": {"workspaces-muse": dict(driver="codex")}})
+        self.write_settings({"providerInstances": {"municode-muse": dict(driver="codex")}})
         result = provider.configure(self.settings, self.agents()[1:])
         self.assertEqual(result["state"], "Configured")
         self.assertEqual(result["agents"], {"muse": "InstanceIdOccupied"})
-        self.assertEqual(json.loads(self.settings.read_text())["providerInstances"]["workspaces-muse"], dict(driver="codex"))
+        self.assertEqual(json.loads(self.settings.read_text())["providerInstances"]["municode-muse"], dict(driver="codex"))
 
     def test_only_installed_agent_executables_are_seeded(self):
         self.assertEqual([agent["driver"] for agent in provider.AGENTS], ["antigravity", "muse"])
@@ -136,14 +136,14 @@ class CopilotProviderTests(unittest.TestCase):
         result = provider.configure(self.settings, [antigravity, muse], log=lines.append)
         self.assertEqual((result["state"], result["agents"]),
                          ("Configured", {"antigravity": "BinaryUnusable", "muse": "Configured"}))
-        self.assertIn("Permission denied", result["providers"]["workspaces-antigravity"]["detail"])
+        self.assertIn("Permission denied", result["providers"]["municode-antigravity"]["detail"])
         self.assertTrue(provider.failed(result))
         self.assertEqual(sorted(json.loads(self.settings.read_text())["providerInstances"]),
-                         ["workspaces-copilot", "workspaces-muse"])
-        self.assertEqual(lines[0], "T3 provider workspaces-copilot (acpRegistry): seeded")
-        self.assertRegex(lines[1], r"^T3 provider workspaces-antigravity \(antigravity\): error, cannot "
+                         ["municode-copilot", "municode-muse"])
+        self.assertEqual(lines[0], "T3 provider municode-copilot (acpRegistry): seeded")
+        self.assertRegex(lines[1], r"^T3 provider municode-antigravity \(antigravity\): error, cannot "
                                    r"inspect .*agy_acp_server\.par \(Permission denied\)$")
-        self.assertEqual(lines[2], "T3 provider workspaces-muse (muse): seeded")
+        self.assertEqual(lines[2], "T3 provider municode-muse (muse): seeded")
 
     def test_missing_and_non_executable_binaries_are_reported_per_provider(self):
         antigravity, muse = self.agents()
@@ -152,26 +152,26 @@ class CopilotProviderTests(unittest.TestCase):
         lines = []
         result = provider.configure(self.settings, [antigravity, muse], log=lines.append)
         self.assertEqual(result["agents"], {"antigravity": "MissingBinary", "muse": "BinaryUnusable"})
-        self.assertEqual(lines[1], "T3 provider workspaces-antigravity (antigravity): skipped, "
+        self.assertEqual(lines[1], "T3 provider municode-antigravity (antigravity): skipped, "
                                    "missing binary " + antigravity["executable"])
-        self.assertEqual(lines[2], "T3 provider workspaces-muse (muse): error, " + muse["executable"] +
+        self.assertEqual(lines[2], "T3 provider municode-muse (muse): error, " + muse["executable"] +
                                    " is not executable by this user")
-        self.assertEqual(list(json.loads(self.settings.read_text())["providerInstances"]), ["workspaces-copilot"])
+        self.assertEqual(list(json.loads(self.settings.read_text())["providerInstances"]), ["municode-copilot"])
         self.assertTrue(provider.failed(result))
         self.assertFalse(provider.failed(provider.configure(self.settings, [antigravity])))
 
     def test_occupied_copilot_id_does_not_block_agents(self):
-        self.write_settings({"providerInstances": {"workspaces-copilot": dict(driver="codex")}})
+        self.write_settings({"providerInstances": {"municode-copilot": dict(driver="codex")}})
         lines = []
         result = provider.configure(self.settings, self.agents(), log=lines.append)
         self.assertEqual((result["state"], result["agents"]),
                          ("InstanceIdOccupied", {"antigravity": "Configured", "muse": "Configured"}))
         self.assertNotIn("instanceId", result)
-        self.assertEqual(lines[0], "T3 provider workspaces-copilot (acpRegistry): error, instance ID is "
+        self.assertEqual(lines[0], "T3 provider municode-copilot (acpRegistry): error, instance ID is "
                                    "occupied; rename it in Settings → Providers")
         instances = json.loads(self.settings.read_text())["providerInstances"]
-        self.assertEqual(instances["workspaces-copilot"], dict(driver="codex"))
-        self.assertEqual(sorted(instances), ["workspaces-antigravity", "workspaces-copilot", "workspaces-muse"])
+        self.assertEqual(instances["municode-copilot"], dict(driver="codex"))
+        self.assertEqual(sorted(instances), ["municode-antigravity", "municode-copilot", "municode-muse"])
         self.assertTrue(provider.failed(result))
 
     def test_main_writes_one_journal_line_per_provider_and_fails_visibly(self):

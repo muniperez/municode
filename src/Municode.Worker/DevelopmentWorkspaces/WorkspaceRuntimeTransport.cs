@@ -89,7 +89,7 @@ public sealed class WorkspaceRuntimeTransport(IOptions<WorkspaceSshOptions> opti
         request["operationId"] = JsonSerializer.SerializeToElement(operationId);
         request["action"] = JsonSerializer.SerializeToElement(action);
         var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request) + "\n"));
-        return $"printf '%s' '{encoded}' | base64 -d | python3 -B /opt/workspaces-workspace/runtime.py call";
+        return $"printf '%s' '{encoded}' | base64 -d | python3 -B /opt/municode-workspace/runtime.py call";
     }
 
     public async Task<JsonElement> VolumeProbeAsync(WorkspaceRuntimeTarget target, string deviceId, CancellationToken ct) =>
@@ -102,7 +102,7 @@ public sealed class WorkspaceRuntimeTransport(IOptions<WorkspaceSshOptions> opti
     {
         if (!System.Text.RegularExpressions.Regex.IsMatch(deviceId, "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"))
             throw new InvalidOperationException("Invalid volume device identity.");
-        return $"python3 -B /opt/workspaces-workspace/bootstrap.py {action} --device /dev/disk/by-id/{deviceId} --provider-device-id {deviceId}";
+        return $"python3 -B /opt/municode-workspace/bootstrap.py {action} --device /dev/disk/by-id/{deviceId} --provider-device-id {deviceId}";
     }
 
     public async Task<JsonElement> BootstrapAsync(WorkspaceRuntimeTarget target, object config, object enrollment, CancellationToken ct)
@@ -111,15 +111,15 @@ public sealed class WorkspaceRuntimeTransport(IOptions<WorkspaceSshOptions> opti
         {
             Pin(sftp, target);
             await sftp.ConnectAsync(ct);
-            foreach (var directory in new[] { "/etc/workspaces-workspace", "/run/workspaces-workspace" })
+            foreach (var directory in new[] { "/etc/municode-workspace", "/run/municode-workspace" })
             {
                 if (!sftp.Exists(directory)) sftp.CreateDirectory(directory);
                 sftp.ChangePermissions(directory, PrivateDirectoryMode);
             }
-            Upload(sftp, "/etc/workspaces-workspace/runtime.json", config);
-            Upload(sftp, "/run/workspaces-workspace/enrollment.json", enrollment);
+            Upload(sftp, "/etc/municode-workspace/runtime.json", config);
+            Upload(sftp, "/run/municode-workspace/enrollment.json", enrollment);
         }
-        return Parse(await ExecuteAsync(target, "python3 -B /opt/workspaces-workspace/bootstrap.py bootstrap", ct));
+        return Parse(await ExecuteAsync(target, "python3 -B /opt/municode-workspace/bootstrap.py bootstrap", ct));
     }
 
     public async Task VerifyGitRecoverySourceAsync(WorkspaceRuntimeTarget target, DevelopmentWorkspaceGitRecoverySource source, CancellationToken ct)
@@ -146,7 +146,7 @@ public sealed class WorkspaceRuntimeTransport(IOptions<WorkspaceSshOptions> opti
         const string program = """
             import importlib.util,json,sys
             source=json.load(sys.stdin)
-            spec=importlib.util.spec_from_file_location("saved_source","/opt/workspaces-workspace/runtime.py")
+            spec=importlib.util.spec_from_file_location("saved_source","/opt/municode-workspace/runtime.py")
             runtime=importlib.util.module_from_spec(spec)
             spec.loader.exec_module(runtime)
             try:
@@ -166,7 +166,7 @@ public sealed class WorkspaceRuntimeTransport(IOptions<WorkspaceSshOptions> opti
         using var sftp = new SftpClient(Connection(target)) { OperationTimeout = TimeSpan.FromSeconds(15) };
         Pin(sftp, target);
         await sftp.ConnectAsync(ct);
-        const string directory = "/run/workspaces-git";
+        const string directory = "/run/municode-git";
         if (!sftp.Exists(directory)) sftp.CreateDirectory(directory);
         sftp.ChangePermissions(directory, RepositoryCredentialDirectoryMode);
         const string path = directory + "/credential.json";
@@ -182,7 +182,7 @@ public sealed class WorkspaceRuntimeTransport(IOptions<WorkspaceSshOptions> opti
         using var sftp = new SftpClient(Connection(target)) { OperationTimeout = TimeSpan.FromSeconds(15) };
         Pin(sftp, target);
         await sftp.ConnectAsync(ct);
-        const string path = "/run/workspaces-git/credential.json";
+        const string path = "/run/municode-git/credential.json";
         if (!sftp.Exists(path)) return null;
         using var stream = sftp.OpenRead(path);
         using var buffer = new MemoryStream();
@@ -206,7 +206,7 @@ public sealed class WorkspaceRuntimeTransport(IOptions<WorkspaceSshOptions> opti
         if (operationId.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('_' or '-')) ||
             target.VmId.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('_' or '-')) || ttlSeconds is < 60 or > 3600)
             throw new InvalidOperationException("Invalid generation session request.");
-        return $"python3 -B /opt/workspaces-workspace/issue-t3-session.py --vm-id {target.VmId} --generation {WorkspaceBootstrap.Generation(target.Generation)} --operation-id {operationId} --subject workspaces-gateway --ttl {ttlSeconds} --scope terminal:operate --scope orchestration:operate --scope terminal:read --scope orchestration:read --scope source-control:write --scope filesystem:read";
+        return $"python3 -B /opt/municode-workspace/issue-t3-session.py --vm-id {target.VmId} --generation {WorkspaceBootstrap.Generation(target.Generation)} --operation-id {operationId} --subject municode-gateway --ttl {ttlSeconds} --scope terminal:operate --scope orchestration:operate --scope terminal:read --scope orchestration:read --scope source-control:write --scope filesystem:read";
     }
 
     public Task<string> ReadConnectCredentialAsync(WorkspaceRuntimeTarget target, CancellationToken ct)
@@ -249,7 +249,7 @@ public sealed class WorkspaceRuntimeTransport(IOptions<WorkspaceSshOptions> opti
         if (target.Kind != "primary" || target.Generation <= 0 || string.IsNullOrEmpty(target.VmId) ||
             target.VmId.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('_' or '-')))
             throw new InvalidOperationException("Invalid generation credential request.");
-        return $"python3 -B /opt/workspaces-workspace/t3_connect.py {action} --vm-id {target.VmId} --generation {WorkspaceBootstrap.Generation(target.Generation)}";
+        return $"python3 -B /opt/municode-workspace/t3_connect.py {action} --vm-id {target.VmId} --generation {WorkspaceBootstrap.Generation(target.Generation)}";
     }
 
     private async Task<string> ExecuteAsync(WorkspaceRuntimeTarget target, string commandText, CancellationToken ct)

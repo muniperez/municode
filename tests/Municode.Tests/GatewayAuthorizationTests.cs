@@ -266,7 +266,7 @@ public sealed class GatewayAuthorizationTests
             Microsoft.Extensions.Options.Options.Create(fixture.Options), default);
         Assert.Equal(401, ((IStatusCodeHttpResult)denied).StatusCode);
         Assert.Equal("no-store", context.Response.Headers.CacheControl);
-        context.Request.Headers["X-Workspaces-Gateway-Credential"] = fixture.Options.ServiceCredential;
+        context.Request.Headers["X-Municode-Gateway-Credential"] = fixture.Options.ServiceCredential;
         var accepted = await controller.Redeem(request, fixture.Service,
             Microsoft.Extensions.Options.Options.Create(fixture.Options), default);
         Assert.Equal(200, ((IStatusCodeHttpResult)accepted).StatusCode);
@@ -281,7 +281,7 @@ public sealed class GatewayAuthorizationTests
         var options = Microsoft.Extensions.Options.Options.Create(fixture.Options);
         var denied = await controller.AuthorizeCertificate(fixture.Host, fixture.Service, options, default);
         Assert.Equal(404, ((IStatusCodeHttpResult)denied).StatusCode);
-        context.Request.Headers["X-Workspaces-Gateway-Credential"] = fixture.Options.ServiceCredential;
+        context.Request.Headers["X-Municode-Gateway-Credential"] = fixture.Options.ServiceCredential;
         var accepted = await controller.AuthorizeCertificate(fixture.Host, fixture.Service, options, default);
         Assert.Equal(200, ((IStatusCodeHttpResult)accepted).StatusCode);
         Assert.False(accepted is IValueHttpResult);
@@ -379,7 +379,7 @@ public sealed class GatewayAuthorizationTests
         var receipt = new DevelopmentWorkspaceGatewayReceiptRequest(fixture.Host, redeemed.Session);
         var deniedService = await controller.Activity(receipt, fixture.Service, lifecycle, options, default);
         Assert.Equal(401, ((IStatusCodeHttpResult)deniedService).StatusCode);
-        context.Request.Headers["X-Workspaces-Gateway-Credential"] = fixture.Options.ServiceCredential;
+        context.Request.Headers["X-Municode-Gateway-Credential"] = fixture.Options.ServiceCredential;
         var deniedSession = await controller.Activity(receipt with { Receipt = new string('f', 64) }, fixture.Service, lifecycle, options, default);
         Assert.Equal(401, ((IStatusCodeHttpResult)deniedSession).StatusCode);
         var deniedOrigin = await controller.Activity(receipt with { Host = fixture.Host.Replace("-g1.", "-g2.") }, fixture.Service, lifecycle, options, default);

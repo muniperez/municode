@@ -22,11 +22,11 @@ import threading
 import time
 import uuid
 
-IMAGE_MANIFEST = Path("/opt/workspaces-workspace/image-manifest.json")
-T3_ROOT = Path("/opt/workspaces-t3")
+IMAGE_MANIFEST = Path("/opt/municode-workspace/image-manifest.json")
+T3_ROOT = Path("/opt/municode-t3")
 T3_RELAY_CLIENT = "/usr/local/bin/cloudflared"
 T3_ENVIRONMENT_PROTOCOL = 2
-T3_SERVICE_CGROUP = "0::/workspaceswork.slice/workspaces-t3.service"
+T3_SERVICE_CGROUP = "0::/municodework.slice/municode-t3.service"
 LIVE_T3_TERMINAL = "Live T3 terminal shell remains in the guest"
 T3_TERMINAL_HANGUP_SECONDS = 5
 
@@ -189,12 +189,12 @@ class Git:
                    GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", GIT_OPTIONAL_LOCKS="0",
                    GIT_NO_REPLACE_OBJECTS="1", GIT_GRAFT_FILE="/dev/null",
                    GIT_SSH_COMMAND="ssh -F /dev/null -oBatchMode=yes -oStrictHostKeyChecking=yes "
-                   "-oUserKnownHostsFile=/etc/workspaces-git-known-hosts "
-                   "-oIdentitiesOnly=yes -i /run/workspaces-git/key")
+                   "-oUserKnownHostsFile=/etc/municode-git-known-hosts "
+                   "-oIdentitiesOnly=yes -i /run/municode-git/key")
         privilege = {} if self.allow_local else dict(user=2000, group=2000, extra_groups=[])
         helper = []
-        if not self.allow_local and Path("/run/workspaces-git/credential.json").exists():
-            path = Path("/opt/workspaces-workspace/git-credential.py")
+        if not self.allow_local and Path("/run/municode-git/credential.json").exists():
+            path = Path("/opt/municode-workspace/git-credential.py")
             info = path.stat()
             require(info.st_uid == 0 and not info.st_mode & 0o022 and path.is_file() and
                     not path.is_symlink(), "Selected HTTPS credential helper is not root-owned")
@@ -565,7 +565,7 @@ class Procfs:
 
     def frozen(self, process):
         group = process["cgroup"]
-        require(group.startswith("0::/workspaceswork.slice/") and
+        require(group.startswith("0::/municodework.slice/") and
                 ".." not in Path(group.removeprefix("0::")).parts,
                 "Unknown terminal freezer cgroup")
         return "frozen 1" in (Path("/sys/fs/cgroup" + group.removeprefix("0::")) /
@@ -579,7 +579,7 @@ class Procfs:
         require(process["ppid"] in t3_pids and process["uids"] == (2000,) * 4 and
                 process["tty"] == 0 and process["state"] in ("R", "S") and
                 process["cgroup"] == inventory[process["ppid"]]["cgroup"] ==
-                "0::/workspaceswork.slice/workspaces-t3.service",
+                "0::/municodework.slice/municode-t3.service",
                 "Pinned T3 relay has an unknown process identity")
         require(executable["uid"] == 0 and not executable["mode"] & 0o022,
                 "Pinned T3 relay is not root-owned immutable code")
@@ -616,7 +616,7 @@ class Procfs:
         require(process["ppid"] in t3_pids and process["uids"] == (2000,) * 4 and
                 process["tty"] == 0 and process["threads"] in (1, 2) and process["state"] in ("R", "S") and
                 process["cgroup"] == inventory[process["ppid"]]["cgroup"] ==
-                "0::/workspaceswork.slice/workspaces-t3.service",
+                "0::/municodework.slice/municode-t3.service",
                 "Pinned T3 telemetry helper has an unknown process identity")
         require(executable["uid"] == 0 and not executable["mode"] & 0o022,
                 "Pinned T3 telemetry helper is not root-owned immutable code")
@@ -728,17 +728,17 @@ def t3_idle_database(path, expected_sequence):
 
 RESOURCE_SAMPLE_SECONDS = 30
 RESOURCE_PROBE_SECONDS = 2
-FS_HELPER = "/opt/workspaces-workspace/disk_usage.py"
-SCRATCH_HELPER = "/opt/workspaces-workspace/scratch_mounts.py"
-SCRATCH_UNITS = ("workspaces-scratch-watch.service", "workspaces-scratch-mounts.service")
+FS_HELPER = "/opt/municode-workspace/disk_usage.py"
+SCRATCH_HELPER = "/opt/municode-workspace/scratch_mounts.py"
+SCRATCH_UNITS = ("municode-scratch-watch.service", "municode-scratch-mounts.service")
 FS_JOB_PATTERN = r"[A-Za-z0-9_-]{8,128}"
 FS_JOB_RETENTION_SECONDS = 24 * 3600
 FS_OUTPUT_LIMIT = 320 * 1024
 FS_DELETE_ROOTS = ("repos", "home", "artifacts")
 # Storage tiers (#202): caches, temporary files and build outputs live on the VM's local disk.
-SCRATCH_ROOT = "/var/lib/workspaces-scratch"
+SCRATCH_ROOT = "/var/lib/municode-scratch"
 # Storage layout 2: checkouts live on the VM disk and are bind-mounted at /workspace/repos.
-LOCAL_ROOT = "/var/lib/workspaces-local"
+LOCAL_ROOT = "/var/lib/municode-local"
 LOCAL_FILESYSTEMS = ("ext4", "xfs", "btrfs")
 LAYOUT_MARKER = ".workspaces-layout.json"
 CHECKPOINT_STORE = ".workspaces-checkpoints"
@@ -748,13 +748,13 @@ MIGRATION_JOURNAL = ".workspaces-layout-migration.json"
 MIGRATION_LINEAGE = ".workspaces-layout-migration.lineage.json"
 MIGRATION_OLD = ".workspaces-layout-migration-old"
 MIGRATION_OPERATION = "storage-layout-2-migration"
-SCRATCH_TRASH = ".workspaces-scratch-trash"
+SCRATCH_TRASH = ".municode-scratch-trash"
 # Periodic checkpoints: the timer fires every minute; a save starts once the interval passed
 # since the last attempt. Freshness turns Stale after CHECKPOINT_STALE_FACTOR intervals.
-CHECKPOINT_UNIT = "workspaces-repos-checkpoint.service"
+CHECKPOINT_UNIT = "municode-repos-checkpoint.service"
 CHECKPOINT_INTERVAL_SECONDS = 300
 CHECKPOINT_STALE_FACTOR = 3
-SCRATCH_ENV = "/opt/workspaces-workspace/scratch.env"
+SCRATCH_ENV = "/opt/municode-workspace/scratch.env"
 
 
 def _unescape_mount(value):
@@ -1316,7 +1316,7 @@ class Linux:
         try:
             if source is None:
                 require(self.mounted_source() == device, "Mounted device differs from the verified volume")
-            marker = self.workspace / ".workspaces-volume.json"
+            marker = self.workspace / ".municode-volume.json"
             if not marker.exists() and claim.get("initializeOwner") is True:
                 require(set(p.name for p in self.workspace.iterdir()) <= {"lost+found"} and
                         (not (self.workspace / "lost+found").exists() or
@@ -1334,7 +1334,7 @@ class Linux:
                     ("organizationId", "workspaceId", "providerAccountId", "location", "providerVolumeId"))
                 and claim["owner"]["providerVolumeId"] == claim["providerVolumeId"],
                 "Incomplete or inconsistent volume ownership claim")
-        marker = self.workspace / ".workspaces-volume.json"
+        marker = self.workspace / ".municode-volume.json"
         require(marker.is_file() and not marker.is_symlink(), "Missing volume ownership claim")
         info = marker.stat()
         require(info.st_uid == 0 and not info.st_mode & 0o022, "Unsafe volume ownership claim")
@@ -1353,7 +1353,7 @@ class Linux:
                           "/var/run/podman/podman.sock", *self.config.get("forbiddenPaths", [])):
             require(not Path(forbidden).exists(), "Ephemeral storage side-channel present")
         self.workspace.mkdir(mode=0o755, parents=True, exist_ok=True)
-        require(not (self.workspace / ".workspaces-volume.json").exists(), "Primary data on ephemeral")
+        require(not (self.workspace / ".municode-volume.json").exists(), "Primary data on ephemeral")
 
     def layout(self):
         require(self.workspace.is_dir() and not self.workspace.is_symlink(), "Workspace layout symlink")
@@ -1381,7 +1381,7 @@ class Linux:
 
     def restore_ownership(self):
         # The checkpoint store and layout marker stay root-only; layout() owns the repos mount point.
-        skipped = {self.workspace / ".workspaces-volume.json", self.workspace / "lost+found"}
+        skipped = {self.workspace / ".municode-volume.json", self.workspace / "lost+found"}
         if self.local_layout():
             skipped |= {self.workspace / LAYOUT_MARKER, self.workspace / "repos"}
         for path in self.workspace.rglob("*"):
@@ -1391,10 +1391,10 @@ class Linux:
             os.chown(path, self.config["uid"], self.config["gid"], follow_symlinks=False)
 
     def launch(self, task_id, argv):
-        unit = "workspaces-task-" + hashlib.sha256(task_id.encode()).hexdigest()[:24]
+        unit = "municode-task-" + hashlib.sha256(task_id.encode()).hexdigest()[:24]
         run(["systemd-run", "--quiet", "--unit=" + unit,
              "--uid=" + str(self.config["uid"]), "--gid=" + str(self.config["gid"]),
-             "--slice=workspaceswork.slice", "--working-directory=" + str(self.workspace),
+             "--slice=municodework.slice", "--working-directory=" + str(self.workspace),
              "--property=KillMode=control-group", "--property=NoNewPrivileges=yes",
              "--property=ProtectSystem=strict",
              "--property=ReadWritePaths=" + str(self.workspace) + " -" + SCRATCH_ROOT,
@@ -1426,15 +1426,15 @@ class Linux:
                 "-" + str(self.workspace / name) for name in FS_DELETE_ROOTS)]
         run(["systemd-run", "--quiet", "--collect", "--unit=" + unit,
              "--uid=" + str(self.config["uid"]), "--gid=" + str(self.config["gid"]),
-             "--slice=workspaceswork.slice", "--working-directory=/",
+             "--slice=municodework.slice", "--working-directory=/",
              "--property=KillMode=control-group", "--property=TimeoutStopSec=5",
              "--property=RuntimeMaxSec=" + ("90" if payload["mode"] == "delete" else "60"),
              "--property=CPUQuota=10%", "--property=MemoryMax=128M", "--property=MemorySwapMax=0",
              "--property=Nice=19", "--property=IOSchedulingClass=idle",
              "--property=NoNewPrivileges=yes", "--property=ProtectSystem=strict",
              "--property=PrivateTmp=yes", "--property=PrivateNetwork=yes",
-             "--property=InaccessiblePaths=-/run/workspaces-workspace -/var/lib/workspaces-workspace "
-             "-/etc/workspaces-workspace -/run/workspaces-git",
+             "--property=InaccessiblePaths=-/run/municode-workspace -/var/lib/municode-workspace "
+             "-/etc/municode-workspace -/run/municode-git",
              *writable,
              # The service manager opens the root-only output file before dropping privileges.
              "--property=StandardOutput=truncate:" + str(output), "--property=StandardError=null",
@@ -1490,12 +1490,12 @@ class Linux:
         return active in ("active", "activating", "deactivating")
 
     def freeze(self):
-        run(["systemctl", "freeze", "workspaceswork.slice"])
-        require("frozen 1" in Path("/sys/fs/cgroup/workspaceswork.slice/cgroup.events").read_text(),
+        run(["systemctl", "freeze", "municodework.slice"])
+        require("frozen 1" in Path("/sys/fs/cgroup/municodework.slice/cgroup.events").read_text(),
                 "Work cgroup did not freeze")
 
     def thaw(self):
-        run(["systemctl", "thaw", "workspaceswork.slice"])
+        run(["systemctl", "thaw", "municodework.slice"])
 
     def thaw_for_managed_stop(self):
         try:
@@ -1503,17 +1503,17 @@ class Linux:
         except Blocked as error:
             cause = error.__cause__
             if not (isinstance(cause, subprocess.CalledProcessError) and cause.returncode > 0 and
-                    cause.cmd == ["systemctl", "thaw", "workspaceswork.slice"]):
+                    cause.cmd == ["systemctl", "thaw", "municodework.slice"]):
                 raise
             # A queued stop job can make systemd thaw the slice before our explicit thaw.
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
                 try:
-                    events = Path("/sys/fs/cgroup/workspaceswork.slice/cgroup.events").read_text().splitlines()
+                    events = Path("/sys/fs/cgroup/municodework.slice/cgroup.events").read_text().splitlines()
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         break
-                    state = run(["systemctl", "show", "workspaceswork.slice",
+                    state = run(["systemctl", "show", "municodework.slice",
                                  "-p", "FreezerState", "--value"], timeout=min(1, remaining))
                 except (OSError, Blocked):
                     raise error
@@ -1539,18 +1539,18 @@ class Linux:
 
     def start_services(self):
         if self.config.get("startServices", True):
-            run(["systemctl", "start", "workspaces-t3.service"])
+            run(["systemctl", "start", "municode-t3.service"])
 
     def infrastructure_units(self):
-        units = self.config.get("infrastructureUnits", ["workspaces-t3.service"])
+        units = self.config.get("infrastructureUnits", ["municode-t3.service"])
         require(isinstance(units, list) and all(isinstance(unit, str) and
-                (unit == "workspaces-t3.service" or
-                 re.fullmatch(r"workspaces-preview-[a-z0-9-]{1,24}\.service", unit))
+                (unit == "municode-t3.service" or
+                 re.fullmatch(r"municode-preview-[a-z0-9-]{1,24}\.service", unit))
                 for unit in units), "Unsupported infrastructure allowlist")
         require(len(set(units)) == len(units), "Duplicate infrastructure registration")
-        stops = self.config.get("stopUnits", ["workspaces-t3.service"])
+        stops = self.config.get("stopUnits", ["municode-t3.service"])
         require(isinstance(stops, list) and all(isinstance(unit, str) and
-                (unit == "workspaces-t3.service" or unit in units)
+                (unit == "municode-t3.service" or unit in units)
                 for unit in stops), "Stop service is not explicitly registered")
         require(all(unit in stops for unit in units),
                 "Registered infrastructure must have a designated graceful stop")
@@ -1569,13 +1569,13 @@ class Linux:
                     "Preview unit must be root/operator-owned and not group/other writable")
 
     def verify_preview_unit(self, unit):
-        require(unit in self.infrastructure_units() and unit != "workspaces-t3.service",
+        require(unit in self.infrastructure_units() and unit != "municode-t3.service",
                 "Preview unit is not explicitly registered")
         properties = run(["systemctl", "show", unit, "-p", "LoadState", "-p", "FragmentPath",
                           "-p", "DropInPaths", "-p", "KillMode", "-p", "SendSIGKILL", "-p", "Slice"])
         values = dict(line.split("=", 1) for line in properties.splitlines() if "=" in line)
         require(values.get("LoadState") == "loaded" and values.get("KillMode") == "process" and
-                values.get("SendSIGKILL") == "no" and values.get("Slice") == "workspaceswork.slice",
+                values.get("SendSIGKILL") == "no" and values.get("Slice") == "municodework.slice",
                 "Preview unit requires loaded owned slice, KillMode=process and SendSIGKILL=no")
         require(values.get("FragmentPath") and "DropInPaths" in values,
                 "Preview unit needs known root/operator-owned unit files")
@@ -1583,7 +1583,7 @@ class Linux:
             self.verify_unit_file(filename)
 
     def verify_fence(self, unmounted=False):
-        require("frozen 1" in Path("/sys/fs/cgroup/workspaceswork.slice/cgroup.events").read_text(),
+        require("frozen 1" in Path("/sys/fs/cgroup/municodework.slice/cgroup.events").read_text(),
                 "Work cgroup is no longer frozen")
         result = subprocess.run(["findmnt", "-rn", "-M", str(self.workspace), "-o", "OPTIONS"],
                                 capture_output=True, text=True, timeout=30)
@@ -1600,20 +1600,20 @@ class Linux:
             require(not self.task_running(task), "Registered task still running; lease expiry is not completion")
         allowed, t3_pids, preview_pids, preview_groups = {}, set(), set(), set()
         for unit in self.infrastructure_units():
-            if unit != "workspaces-t3.service":
+            if unit != "municode-t3.service":
                 self.verify_preview_unit(unit)
-                preview_groups.add("0::/workspaceswork.slice/" + unit)
+                preview_groups.add("0::/municodework.slice/" + unit)
             pid = run(["systemctl", "show", unit, "-p", "MainPID", "--value"])
             require(pid.isdecimal(), "Unreachable tool")
             if pid != "0":
                 require(int(pid) not in allowed, "Conflicting infrastructure MainPID claims")
                 allowed[int(pid)] = unit
-                (t3_pids if unit == "workspaces-t3.service" else preview_pids).add(int(pid))
+                (t3_pids if unit == "municode-t3.service" else preview_pids).add(int(pid))
         inventory = self.processes.inventory()
         for pid, unit in allowed.items():
             require(pid in inventory and inventory[pid]["uids"] == (self.config["uid"],) * 4 and
-                    inventory[pid]["cgroup"] == "0::/workspaceswork.slice/" + unit,
-                    ("T3" if unit == "workspaces-t3.service" else "Preview") +
+                    inventory[pid]["cgroup"] == "0::/municodework.slice/" + unit,
+                    ("T3" if unit == "municode-t3.service" else "Preview") +
                     " service identity is unknown or outside its owned cgroup")
         def verify_preview_children(values):
             require(not any(p["ppid"] in preview_pids or
@@ -1629,7 +1629,7 @@ class Linux:
                                key=lambda value: (value["pid"] not in parents, value["pid"])):
             if self.config["uid"] not in process["uids"]:
                 continue
-            require("/workspaceswork.slice/" in process["cgroup"],
+            require("/municodework.slice/" in process["cgroup"],
                     "Coding process escaped supervised work slice")
             if process["pid"] not in allowed and self.processes.t3_resource_monitor(process, inventory, t3_pids):
                 allowed[process["pid"]] = "pinned-t3-resource-monitor"
@@ -1658,7 +1658,7 @@ class Linux:
         """Stop only: hang up idle T3 shells whose terminal was closed. Busy or unproven shells stay."""
         for task in tasks.values():
             require(not self.task_running(task), "Registered task still running; lease expiry is not completion")
-        pid = run(["systemctl", "show", "workspaces-t3.service", "-p", "MainPID", "--value"])
+        pid = run(["systemctl", "show", "municode-t3.service", "-p", "MainPID", "--value"])
         require(pid.isdecimal(), "Unreachable tool")
         if pid == "0":
             return dict(released=0, remaining=0)
@@ -1690,7 +1690,7 @@ class Linux:
     def verify_t3_snapshot(self, expected_sequence):
         path = self.workspace / "t3/userdata/statev2.sqlite"
         if self.config.get("startServices") is False and not path.exists():
-            require(run(["systemctl", "show", "workspaces-t3.service", "-p", "MainPID", "--value"]) == "0",
+            require(run(["systemctl", "show", "municode-t3.service", "-p", "MainPID", "--value"]) == "0",
                     "Unexpected T3 process without a state snapshot")
             return None
         require(under(path, self.workspace), "T3 state database escapes the workspace")
@@ -1698,14 +1698,14 @@ class Linux:
 
     @staticmethod
     def t3_cgroup_empty():
-        events = Path("/sys/fs/cgroup/workspaceswork.slice/workspaces-t3.service/cgroup.events")
+        events = Path("/sys/fs/cgroup/municodework.slice/municode-t3.service/cgroup.events")
         try:
             return "populated 0" in events.read_text().splitlines()
         except FileNotFoundError:
             return True  # systemd can remove the empty service cgroup
 
     def verify_t3_stopped(self):
-        unit = "workspaces-t3.service"
+        unit = "municode-t3.service"
 
         def stopped_state():
             output = run(["systemctl", "show", unit, "-p", "ActiveState", "-p", "SubState",
@@ -1727,19 +1727,19 @@ class Linux:
 
     def stop_services(self):
         self.infrastructure_units()
-        for unit in self.config.get("stopUnits", ["workspaces-t3.service"]):
-            if unit != "workspaces-t3.service":
+        for unit in self.config.get("stopUnits", ["municode-t3.service"]):
+            if unit != "municode-t3.service":
                 self.verify_preview_unit(unit)
-        for unit in self.config.get("stopUnits", ["workspaces-t3.service"]):
+        for unit in self.config.get("stopUnits", ["municode-t3.service"]):
             require(re.fullmatch(r"[A-Za-z0-9@_.-]+\.service", unit), "Invalid service unit")
-            if unit != "workspaces-t3.service":
+            if unit != "municode-t3.service":
                 self.verify_preview_unit(unit)
             # Only explicitly managed infrastructure can stop; unknown work still blocks.
             try:
                 run(["systemctl", "stop", "--no-block", unit])
                 self.thaw_for_managed_stop()
                 run(["systemctl", "stop", unit])
-                if unit == "workspaces-t3.service":
+                if unit == "municode-t3.service":
                     # The monitor can still be exiting after losing its T3 parent.
                     deadline = time.monotonic() + 5
                     while not self.t3_cgroup_empty():
@@ -1747,7 +1747,7 @@ class Linux:
                         time.sleep(0.05)
             finally:
                 self.freeze()
-            if unit == "workspaces-t3.service":
+            if unit == "municode-t3.service":
                 self.verify_t3_stopped()
             else:
                 state = run(["systemctl", "show", unit, "-p", "ActiveState", "--value"])
@@ -1818,7 +1818,7 @@ class Runtime:
         self.root = Path(state_dir)
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.adapter = adapter or Linux(config)
-        verification = Path("/var/cache/workspaces-workspace/verification")
+        verification = Path("/var/cache/municode-workspace/verification")
         if git is None:
             for directory in (verification.parent, verification):
                 directory.mkdir(mode=0o711, parents=True, exist_ok=True)
@@ -1914,7 +1914,7 @@ class Runtime:
 
     @staticmethod
     def filesystem_unit(job_id):
-        return "workspaces-fsjob-" + hashlib.sha256(job_id.encode()).hexdigest()[:24] + ".service"
+        return "municode-fsjob-" + hashlib.sha256(job_id.encode()).hexdigest()[:24] + ".service"
 
     def filesystem_records(self):
         directory = self.root / "fsjobs"
@@ -2569,7 +2569,7 @@ class Runtime:
                 "Restore decryption must occur off VM with the independent recovery key")
         self.adapter.mount(target)
         workspace = Path(self.c["workspace"])
-        require(set(p.name for p in workspace.iterdir()) <= {".workspaces-volume.json", "lost+found"},
+        require(set(p.name for p in workspace.iterdir()) <= {".municode-volume.json", "lost+found"},
                 "Restore target is not empty")
         lost = workspace / "lost+found"
         require(not lost.exists() or not any(lost.iterdir()), "Restore target lost+found is not empty")
@@ -2597,7 +2597,7 @@ class Runtime:
                     require(member.name.startswith("data/") or member.name == "data",
                             "Unexpected archive member")
                     member.name = member.name.removeprefix("data").lstrip("/")
-                    if not member.name or member.name in (".workspaces-volume.json", LAYOUT_MARKER):
+                    if not member.name or member.name in (".municode-volume.json", LAYOUT_MARKER):
                         continue  # Both name the source volume; the target has or gets its own.
                     require(Path(member.name).parts and Path(member.name).parts[0] != "lost+found",
                             "Archive contains filesystem metadata")
@@ -2617,7 +2617,7 @@ class Runtime:
                         linked_file = (workspace / member.linkname).resolve()
                         require(under(linked_file, workspace) and linked_file.relative_to(workspace).parts and
                                 linked_file.relative_to(workspace).parts[0] not in
-                                (".workspaces-volume.json", "lost+found"),
+                                (".municode-volume.json", "lost+found"),
                                 "Archive hardlink targets volume ownership metadata")
                         require(linked_file.is_file() and not (workspace / member.linkname).is_symlink(),
                                 "Archive hardlink must reference an already restored regular file")
@@ -2674,7 +2674,7 @@ def file_hash(path):
     return result.hexdigest()
 
 
-BACKUP_EXCLUDED = (".workspaces-volume.json", "lost+found")
+BACKUP_EXCLUDED = (".municode-volume.json", "lost+found")
 
 
 class LocalBackupScope:
@@ -2763,7 +2763,7 @@ def validate_backup_tree(source, scope=None):
 
 def representative_hashes(root, scope=None):
     files = sorted(p for p, info in backup_paths(root, scope) if stat.S_ISREG(info.st_mode)
-                   and under(p, root) and p.name != ".workspaces-volume.json")
+                   and under(p, root) and p.name != ".municode-volume.json")
     first_per_category = {}
     for path in files:
         first_per_category.setdefault(path.relative_to(root).parts[0], path)
@@ -2981,9 +2981,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("serve", "call", "export-backup", "restore-import", "mount-for-services",
                                          "checkpoint-periodic"))
-    parser.add_argument("--config", default="/etc/workspaces-workspace/runtime.json")
-    parser.add_argument("--state-dir", default="/var/lib/workspaces-workspace")
-    parser.add_argument("--socket", default="/run/workspaces-workspace/control.sock")
+    parser.add_argument("--config", default="/etc/municode-workspace/runtime.json")
+    parser.add_argument("--state-dir", default="/var/lib/municode-workspace")
+    parser.add_argument("--socket", default="/run/municode-workspace/control.sock")
     parser.add_argument("--receipt-id")
     parser.add_argument("--operation-id")
     args = parser.parse_args()

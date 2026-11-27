@@ -303,9 +303,9 @@ class NativeScratchFixtureTests(unittest.TestCase):
                     probe.scratch_tier()
                 self.assertEqual(events, [
                     "stop", "thaw",
-                    ["systemctl", "reset-failed", "workspaces-scratch-watch.service"],
+                    ["systemctl", "reset-failed", "municode-scratch-watch.service"],
                     "start", ("recovered", 123),
-                    ["systemctl", "is-active", "workspaces-scratch-watch.service"],
+                    ["systemctl", "is-active", "municode-scratch-watch.service"],
                 ])
 
 
@@ -336,16 +336,16 @@ class NativeProviderProbeTests(unittest.TestCase):
                 return probe.copilot_provider(), calls
 
     def seeded(self):
-        return {"workspaces-copilot": self.COPILOT,
+        return {"municode-copilot": self.COPILOT,
                 **{instance_id: dict(driver=driver, enabled=True, config={"binaryPath": executable})
                    for instance_id, (driver, executable) in native.SEEDED_AGENT_PROVIDERS.items()}}
 
     def test_copilot_probe_requires_every_seeded_agent_with_an_executable_binary_as_coding(self):
-        self.assertEqual(sorted(native.SEEDED_AGENT_PROVIDERS), ["workspaces-antigravity", "workspaces-muse"])
+        self.assertEqual(sorted(native.SEEDED_AGENT_PROVIDERS), ["municode-antigravity", "municode-muse"])
         result, calls = self.run_probe(self.seeded())
-        self.assertEqual(result["agentProvidersSeeded"], ["workspaces-antigravity", "workspaces-muse"])
+        self.assertEqual(result["agentProvidersSeeded"], ["municode-antigravity", "municode-muse"])
         checked = [argv[-1] for argv in calls if "test" in argv]
-        self.assertEqual(sorted(checked), ["/opt/workspaces-antigravity/agy_acp_server.par", "/usr/local/bin/muse"])
+        self.assertEqual(sorted(checked), ["/opt/municode-antigravity/agy_acp_server.par", "/usr/local/bin/muse"])
         self.assertTrue(all(argv[:2] == ["setpriv", "--reuid=2000"] for argv in calls))
         self.assertIn("copilot-stdio-provider-setup", native.REQUIRED_PROBES)
         self.assertEqual(len(native.REQUIRED_PROBES), 24)
@@ -606,7 +606,7 @@ class ImageTests(unittest.TestCase):
         (sibling / "cgroup.kill").write_text("sibling-sentinel")
         (root / "cgroup.freeze").write_text("1\n")
         (root / "cgroup.events").write_text("populated 1\nfrozen 1\n")
-        (root / "main.cgroup").write_text("0::/workspaceswork.slice/workspaces-t3.service\n")
+        (root / "main.cgroup").write_text("0::/municodework.slice/municode-t3.service\n")
         probe = native.Native.__new__(native.Native)
         probe.owns_runtime = True
         probe.fresh_authorization = Mock()
@@ -620,15 +620,15 @@ class ImageTests(unittest.TestCase):
             return read_text(reads.get(path, path), *args, **kwargs)
         def synthetic_open(path, flags, **kwargs):
             if isinstance(path, Path):
-                self.assertEqual(path, Path("/sys/fs/cgroup/workspaceswork.slice"))
+                self.assertEqual(path, Path("/sys/fs/cgroup/municodework.slice"))
                 path = root
             else:
-                self.assertIn(path, ("workspaces-t3.service", "cgroup.kill"))
+                self.assertIn(path, ("municode-t3.service", "cgroup.kill"))
                 self.assertIn("dir_fd", kwargs)
             return open_fd(path, flags, **kwargs)
         patches = (
             patch.object(native, "command",
-                         return_value="/workspaceswork.slice/workspaces-t3.service"),
+                         return_value="/municodework.slice/municode-t3.service"),
             patch.object(Path, "resolve", autospec=True, side_effect=lambda path, **kw: path),
             patch.object(Path, "is_file", autospec=True,
                          side_effect=lambda path: path == Path("/sys/fs/cgroup/cgroup.controllers")),
@@ -661,19 +661,19 @@ class ImageTests(unittest.TestCase):
                 dict(Job="42"), dict(SubState="start-pre"), dict(ActiveState="activating"))
         ] + [
             ("group", group) for group in (
-                "", "/", "/workspaceswork.slice", "/system.slice/workspaces-t3.service",
-                "/workspaceswork.slice/unrelated.service",
-                "/workspaceswork.slice/workspaces-t3.service/nested")
-        ] + [("pid", "0::/workspaceswork.slice/unrelated.service\n"),
+                "", "/", "/municodework.slice", "/system.slice/municode-t3.service",
+                "/municodework.slice/unrelated.service",
+                "/municodework.slice/municode-t3.service/nested")
+        ] + [("pid", "0::/municodework.slice/unrelated.service\n"),
              ("freeze", "0\n"), ("events", "populated 1\nfrozen 0\n"),
              ("v2", False)]
         for kind, value in cases:
             with self.subTest(kind=kind, value=value):
                 probe.t3_unit.return_value = value if kind == "state" else state
                 mocks[0].return_value = value if kind == "group" else \
-                    "/workspaceswork.slice/workspaces-t3.service"
+                    "/municodework.slice/municode-t3.service"
                 (root / "main.cgroup").write_text(value if kind == "pid" else
-                    "0::/workspaceswork.slice/workspaces-t3.service\n")
+                    "0::/municodework.slice/municode-t3.service\n")
                 (root / "cgroup.freeze").write_text(value if kind == "freeze" else "1\n")
                 (root / "cgroup.events").write_text(value if kind == "events" else "frozen 1\n")
                 mocks[2].return_value = value if kind == "v2" else True
@@ -772,8 +772,8 @@ class ImageTests(unittest.TestCase):
             builder.install_copilot(lock, Path("/synthetic-build-cache"))
         download.assert_called_once_with(lock["copilot"], Path("/synthetic-build-cache/copilot.tar.gz"))
         run.assert_called_once_with(["tar", "--no-same-owner", "-xf",
-                                     "/synthetic-build-cache/copilot.tar.gz", "-C", "/opt/workspaces-copilot"])
-        self.assertIn('exec /opt/workspaces-copilot/copilot "$@"', write.call_args.args[0])
+                                     "/synthetic-build-cache/copilot.tar.gz", "-C", "/opt/municode-copilot"])
+        self.assertIn('exec /opt/municode-copilot/copilot "$@"', write.call_args.args[0])
         self.assertIn("COPILOT_AUTO_UPDATE=false", write.call_args.args[0])
         probe.assert_called_once_with(expected_version=lock["copilot"]["version"],
                                       environment={"PATH": "/usr/local/bin:/usr/bin:/bin",
@@ -1049,7 +1049,7 @@ class InstalledManifestTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="immutable-image-", dir=ARTIFACTS)
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
-        self.runtime = self.root / "opt/workspaces-workspace"
+        self.runtime = self.root / "opt/municode-workspace"
         self.runtime.mkdir(parents=True)
         self.manifest = self.runtime / "image-manifest.json"
         self.lock = json.loads((HERE / "image/manifest.lock.json").read_text())
@@ -1070,24 +1070,24 @@ class InstalledManifestTests(unittest.TestCase):
             for name in builder.RUNTIME_FILES:
                 shutil.copy2(HERE / name, self.runtime / name)
                 (self.runtime / name).chmod(0o755)
-            builder.install_storage_tiers(HERE / "storage", "/opt/workspaces-workspace", self.root)
+            builder.install_storage_tiers(HERE / "storage", "/opt/municode-workspace", self.root)
             units = self.root / "etc/systemd/system"
             units.mkdir(parents=True)
             builder.install_systemd_units(HERE / "systemd", units)
-        tools = self.root / "opt/workspaces-tools"
+        tools = self.root / "opt/municode-tools"
         tools.mkdir()
         for name in ("package.json", "package-lock.json"):
             shutil.copy2(HERE / "image/tools" / name, tools / name)
             (tools / name).chmod(0o644)
         for target in (*builder.PINNED_EXECUTABLE_FILES,
-                       "/opt/workspaces-tools/" + self.lock["claude"]["executable"],
-                       "/opt/workspaces-t3/" + self.lock["t3"]["resourceMonitor"]["path"],
-                       "/opt/workspaces-t3/release/t3"):
+                       "/opt/municode-tools/" + self.lock["claude"]["executable"],
+                       "/opt/municode-t3/" + self.lock["t3"]["resourceMonitor"]["path"],
+                       "/opt/municode-t3/release/t3"):
             path = self.root / target.lstrip("/")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(("synthetic installed bytes: " + target).encode())
             path.chmod(0o755)
-        (self.root / "usr/local/bin/t3").symlink_to("../../../opt/workspaces-t3/release/t3")
+        (self.root / "usr/local/bin/t3").symlink_to("../../../opt/municode-t3/release/t3")
 
     def write_manifest(self):
         builder.write_image_manifest(self.lock, HERE, self.root)
@@ -1110,10 +1110,10 @@ class InstalledManifestTests(unittest.TestCase):
             self.assertIn(str(self.runtime / name), files)
         for name in native.UNIT_HASHES:
             self.assertIn(str(self.root / "etc/systemd/system" / name), files)
-        for name in ("etc/tmpfiles.d/workspaces-scratch.conf",
-                     "etc/profile.d/workspaces-scratch.sh",
-                     "opt/workspaces-tools/package-lock.json", "opt/workspaces-node/bin/node",
-                     "opt/workspaces-t3/release/t3"):
+        for name in ("etc/tmpfiles.d/municode-scratch.conf",
+                     "etc/profile.d/municode-scratch.sh",
+                     "opt/municode-tools/package-lock.json", "opt/municode-node/bin/node",
+                     "opt/municode-t3/release/t3"):
             self.assertIn(str(self.root / name), files)
         self.assertNotIn(str(self.root / "usr/local/bin/t3"), files)
         self.assertNotIn(str(unrelated), files)
@@ -1125,14 +1125,14 @@ class InstalledManifestTests(unittest.TestCase):
         self.assertEqual(updated[str(executable)], hashlib.sha256(executable.read_bytes()).hexdigest())
 
     def test_source_copy_mismatches_block_without_publishing_manifest(self):
-        for name in ("opt/workspaces-workspace/runtime.py",
-                     "opt/workspaces-workspace/scratch_mounts.py",
-                     "opt/workspaces-workspace/t3-connect.js",
-                     "opt/workspaces-workspace/scratch.env",
-                     "etc/tmpfiles.d/workspaces-scratch.conf",
-                     "etc/profile.d/workspaces-scratch.sh",
-                     "etc/systemd/system/workspaces-t3.service",
-                     "opt/workspaces-tools/package-lock.json"):
+        for name in ("opt/municode-workspace/runtime.py",
+                     "opt/municode-workspace/scratch_mounts.py",
+                     "opt/municode-workspace/t3-connect.js",
+                     "opt/municode-workspace/scratch.env",
+                     "etc/tmpfiles.d/municode-scratch.conf",
+                     "etc/profile.d/municode-scratch.sh",
+                     "etc/systemd/system/municode-t3.service",
+                     "opt/municode-tools/package-lock.json"):
             with self.subTest(name=name):
                 path = self.root / name
                 original = path.read_bytes()

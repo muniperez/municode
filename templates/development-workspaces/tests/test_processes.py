@@ -17,7 +17,7 @@ sys.path.insert(0, str(HERE))
 import runtime as rt
 
 ARTIFACTS = HERE.parents[1] / ".local/artifacts/runtime"
-CGROUP = "0::/workspaceswork.slice/workspaces-t3.service"
+CGROUP = "0::/municodework.slice/municode-t3.service"
 
 
 class FixtureProcfs(rt.Procfs):
@@ -127,7 +127,7 @@ class IdleTerminalTests(unittest.TestCase):
         self.config["observedTerminalInputs"] = False
         original = dict(self.records[110])
         for change in (dict(ppid=1), dict(tty=0), dict(foreground=0, session=100),
-                       dict(cgroup="0::/workspaceswork.slice/other.service"),
+                       dict(cgroup="0::/municodework.slice/other.service"),
                        dict(argv=["/bin/bash", "-c", "read"])):
             with self.subTest(change=change):
                 self.write(110, **dict(original, **change))
@@ -147,7 +147,7 @@ class IdleTerminalTests(unittest.TestCase):
     def test_stop_never_hangs_up_busy_or_unattributed_shells(self):
         original = dict(self.records[110])
         for changes in ([dict(foreground=120)], [dict(state="R")], [dict(children="120")],
-                        [dict(cgroup="0::/workspaceswork.slice/other.service")], [dict(ppid=1)],
+                        [dict(cgroup="0::/municodework.slice/other.service")], [dict(ppid=1)],
                         [dict(argv=["/bin/bash", "-c", "read"])]):
             with self.subTest(changes=changes):
                 for change in changes:
@@ -165,7 +165,7 @@ class IdleTerminalTests(unittest.TestCase):
             self.inspect(report_terminal=True)
 
     def test_release_requires_owned_t3_service(self):
-        self.write(100, cgroup="0::/workspaceswork.slice/other.service")
+        self.write(100, cgroup="0::/municodework.slice/other.service")
         with self.assertRaisesRegex(rt.Blocked, "T3 service identity"):
             self.release()
         self.assertEqual([], self.reader.hung_up)
@@ -261,7 +261,7 @@ class IdleTerminalTests(unittest.TestCase):
                 self.inspect()
             self.write(120, argv=[str(binary)])
             for change in (dict(tty=123), dict(threads=3), dict(ppid=1),
-                           dict(cgroup="0::/workspaceswork.slice/other.service")):
+                           dict(cgroup="0::/municodework.slice/other.service")):
                 original = copy.deepcopy(self.records[120])
                 with self.subTest(change=change):
                     self.write(120, **change)
@@ -449,20 +449,20 @@ class IdleTerminalTests(unittest.TestCase):
 
 class PreviewServiceTests(unittest.TestCase):
     write = IdleTerminalTests.write
-    unit = "workspaces-preview-static.service"
+    unit = "municode-preview-static.service"
 
     def setUp(self):
         IdleTerminalTests.setUp(self)
-        self.config.update(infrastructureUnits=["workspaces-t3.service", self.unit],
-                           stopUnits=["workspaces-t3.service", self.unit],
+        self.config.update(infrastructureUnits=["municode-t3.service", self.unit],
+                           stopUnits=["municode-t3.service", self.unit],
                            workspace=str(self.root / "workspace"))
         self.adapter.workspace = Path(self.config["workspace"])
-        self.group = "0::/workspaceswork.slice/" + self.unit
+        self.group = "0::/municodework.slice/" + self.unit
         self.write(200, ppid=1, tty=0, argv=["static-server"], cgroup=self.group)
         self.main_pid = "200"
         self.properties = dict(LoadState="loaded", FragmentPath="/etc/systemd/system/" + self.unit,
                                DropInPaths="", KillMode="process", SendSIGKILL="no",
-                               Slice="workspaceswork.slice")
+                               Slice="municodework.slice")
         self.calls = []
 
     def systemctl(self, argv):
@@ -471,7 +471,7 @@ class PreviewServiceTests(unittest.TestCase):
             if "Job" in argv:
                 return "ActiveState=inactive\nSubState=dead\nResult=success\nJob=\nMainPID=0\nControlPID=0"
             if "MainPID" in argv:
-                return "100" if argv[2] == "workspaces-t3.service" else self.main_pid
+                return "100" if argv[2] == "municode-t3.service" else self.main_pid
             if "ActiveState" in argv:
                 return "inactive"
             return "\n".join(key + "=" + value for key, value in self.properties.items())
@@ -487,8 +487,8 @@ class PreviewServiceTests(unittest.TestCase):
         self.config["observedTerminalInputs"] = False
         self.write(110, uid=1001, ppid=1)
         self.inspect()
-        self.config["infrastructureUnits"] = ["workspaces-t3.service"]
-        self.config["stopUnits"] = ["workspaces-t3.service"]
+        self.config["infrastructureUnits"] = ["municode-t3.service"]
+        self.config["stopUnits"] = ["municode-t3.service"]
         with self.assertRaisesRegex(rt.Blocked, "not qualified"):
             self.inspect()
 
@@ -530,14 +530,14 @@ class PreviewServiceTests(unittest.TestCase):
             self.inspect()
 
     def test_invalid_names_or_missing_stop_registration_block(self):
-        for name in ("workspaces-preview-.service", "workspaces-preview-UPPER.service",
-                     "workspaces-preview-" + "x" * 25 + ".service", "unrelated-system.service"):
+        for name in ("municode-preview-.service", "municode-preview-UPPER.service",
+                     "municode-preview-" + "x" * 25 + ".service", "unrelated-system.service"):
             with self.subTest(name=name):
                 self.config["infrastructureUnits"] = [name]
                 with self.assertRaisesRegex(rt.Blocked, "allowlist"):
                     self.inspect()
-        self.config["infrastructureUnits"] = ["workspaces-t3.service", self.unit]
-        self.config["stopUnits"] = ["workspaces-t3.service"]
+        self.config["infrastructureUnits"] = ["municode-t3.service", self.unit]
+        self.config["stopUnits"] = ["municode-t3.service"]
         with self.assertRaisesRegex(rt.Blocked, "graceful stop"):
             self.inspect()
 
@@ -557,7 +557,7 @@ class PreviewServiceTests(unittest.TestCase):
                     self.adapter.verify_unit_file(str(unit))
 
     def test_preview_stop_queues_main_only_then_thaws_and_always_refreezes(self):
-        self.config["stopUnits"] = [self.unit, "workspaces-t3.service"]
+        self.config["stopUnits"] = [self.unit, "municode-t3.service"]
         with patch.object(rt, "run", side_effect=self.systemctl), \
                 patch.object(self.adapter, "verify_unit_file"), \
                 patch.object(self.adapter, "t3_cgroup_empty", return_value=True), \
@@ -599,7 +599,7 @@ class PreviewServiceTests(unittest.TestCase):
         with patch.object(rt, "run", side_effect=self.systemctl), \
                 patch.object(self.adapter, "verify_unit_file"):
             self.adapter.start_services()
-        self.assertEqual(self.calls[-1], ["systemctl", "start", "workspaces-t3.service"])
+        self.assertEqual(self.calls[-1], ["systemctl", "start", "municode-t3.service"])
 
     def test_default_shutdown_stops_only_tooling_and_leaves_user_file_data_untouched(self):
         self.config.pop("infrastructureUnits")
@@ -612,7 +612,7 @@ class PreviewServiceTests(unittest.TestCase):
                 patch.object(self.adapter, "thaw"), patch.object(self.adapter, "freeze"):
             self.adapter.stop_services()
         stopped = [call[-1] for call in self.calls if call[:2] == ["systemctl", "stop"]]
-        self.assertEqual(["workspaces-t3.service", "workspaces-t3.service"], stopped)
+        self.assertEqual(["municode-t3.service", "municode-t3.service"], stopped)
         self.assertEqual(b"user-owned data, not a lifecycle control file", state.read_bytes())
 
 

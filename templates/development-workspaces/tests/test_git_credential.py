@@ -119,7 +119,7 @@ class CredentialTests(unittest.TestCase):
             argv = command.call_args.args[0]
             helpers = [arg for arg in argv if arg.startswith("credential.helper=")]
             self.assertEqual(["credential.helper=",
-                              "credential.helper=/opt/workspaces-workspace/git-credential.py"], helpers)
+                              "credential.helper=/opt/municode-workspace/git-credential.py"], helpers)
             self.assertEqual(2000, command.call_args.kwargs["user"])
             self.assertEqual([], command.call_args.kwargs["extra_groups"])
             self.assertIn("credential.useHttpPath=true", argv)

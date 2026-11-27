@@ -1,15 +1,15 @@
 [Unit]
 Description=Watch /workspace/repos and keep build-output scratch bind mounts current
-After=workspaces-workspace.service workspaces-workspace-mount.service workspaces-scratch-mounts.service
-Requires=workspaces-workspace-mount.service
-PartOf=workspaces-t3.service
+After=municode-workspace.service municode-workspace-mount.service municode-scratch-mounts.service
+Requires=municode-workspace-mount.service
+PartOf=municode-t3.service
 ConditionPathIsDirectory=/workspace/repos
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 -I -B /opt/workspaces-workspace/scratch_mounts.py watch
+ExecStart=/usr/bin/python3 -I -B /opt/municode-workspace/scratch_mounts.py watch
 User=root
 UMask=0077
 Restart=on-failure

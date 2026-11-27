@@ -1,19 +1,19 @@
 [Unit]
 Description=Loopback-only memory-only T3 Connect account enrollment
-After=workspaces-t3.service
-Requires=workspaces-t3.service
-PartOf=workspaces-t3.service
+After=municode-t3.service
+Requires=municode-t3.service
+PartOf=municode-t3.service
 ConditionPathIsDirectory=/workspace/t3
 
 [Service]
-ExecStart=/usr/bin/python3 -B /opt/workspaces-workspace/t3_connect.py serve
-WorkingDirectory=/opt/workspaces-workspace
+ExecStart=/usr/bin/python3 -B /opt/municode-workspace/t3_connect.py serve
+WorkingDirectory=/opt/municode-workspace
 User=root
 Group=root
 UMask=0077
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/workspace /var/lib/workspaces-workspace
+ReadWritePaths=/workspace /var/lib/municode-workspace
 PrivateTmp=yes
 ProtectHome=yes
 KillMode=control-group

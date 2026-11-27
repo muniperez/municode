@@ -388,10 +388,10 @@ public sealed partial class DevelopmentWorkspaceProcessor(
         };
         config["observedTerminalInputs"] = options.Value.ObservedTerminalInputs;
         var units = options.Value.PreviewServices.Values.Select(x => x.SupervisedUnit).Where(x => x is not null).ToArray();
-        if (units.Any(unit => !System.Text.RegularExpressions.Regex.IsMatch(unit!, "^workspaces-preview-[a-z0-9-]{1,24}\\.service$")))
+        if (units.Any(unit => !System.Text.RegularExpressions.Regex.IsMatch(unit!, "^municode-preview-[a-z0-9-]{1,24}\\.service$")))
             throw new InvalidOperationException("Preview supervision requires an explicitly registered Workspaces preview unit.");
-        config["infrastructureUnits"] = new[] { "workspaces-t3.service" }.Concat(units!).ToArray();
-        config["stopUnits"] = new[] { "workspaces-t3.service" }.Concat(units!).ToArray();
+        config["infrastructureUnits"] = new[] { "municode-t3.service" }.Concat(units!).ToArray();
+        config["stopUnits"] = new[] { "municode-t3.service" }.Concat(units!).ToArray();
         if (vm.Kind == "primary")
         {
             var deviceId = evidence.VolumeDeviceId ?? "scsi-0HC_Volume_" + workspace.ProviderVolumeId;

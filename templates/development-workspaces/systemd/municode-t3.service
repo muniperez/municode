@@ -1,11 +1,11 @@
 [Unit]
 Description=Pinned loopback-only T3; no invented drain API
-After=workspaces-workspace.service workspaces-workspace-mount.service
-Requires=workspaces-workspace.service workspaces-workspace-mount.service
-Wants=workspaces-t3-connect.service
-Wants=workspaces-scratch-mounts.service workspaces-scratch-watch.service
-Wants=workspaces-repos-checkpoint.timer
-After=workspaces-scratch-mounts.service
+After=municode-workspace.service municode-workspace-mount.service
+Requires=municode-workspace.service municode-workspace-mount.service
+Wants=municode-t3-connect.service
+Wants=municode-scratch-mounts.service municode-scratch-watch.service
+Wants=municode-repos-checkpoint.timer
+After=municode-scratch-mounts.service
 ConditionPathIsDirectory=/workspace/t3
 StartLimitIntervalSec=300
 StartLimitBurst=5
@@ -13,16 +13,16 @@ StartLimitBurst=5
 [Service]
 User=coding
 Group=coding
-Slice=workspaceswork.slice
+Slice=municodework.slice
 WorkingDirectory=/workspace
 Environment=HOME=/workspace/home
 Environment=CODEX_HOME=/workspace/home/.codex
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=T3CODE_CLOUDFLARED_PATH=/usr/local/bin/cloudflared
-EnvironmentFile=-/opt/workspaces-workspace/scratch.env
-ExecStartPre=-+/usr/bin/python3 -B /opt/workspaces-workspace/storage_tiers.py prepare
-ExecStartPre=-/usr/bin/python3 -B /opt/workspaces-workspace/t3_project_defaults.py
-ExecStartPre=-/usr/bin/python3 -B /opt/workspaces-workspace/copilot_provider.py configure --base-dir /workspace/t3
+EnvironmentFile=-/opt/municode-workspace/scratch.env
+ExecStartPre=-+/usr/bin/python3 -B /opt/municode-workspace/storage_tiers.py prepare
+ExecStartPre=-/usr/bin/python3 -B /opt/municode-workspace/t3_project_defaults.py
+ExecStartPre=-/usr/bin/python3 -B /opt/municode-workspace/copilot_provider.py configure --base-dir /workspace/t3
 ExecStart=/usr/local/bin/t3 serve --host 127.0.0.1 --port 3773 --base-dir /workspace/t3 --no-browser
 Restart=on-failure
 RestartSec=5
@@ -30,7 +30,7 @@ SuccessExitStatus=130
 UMask=0077
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/workspace -/var/lib/workspaces-scratch
+ReadWritePaths=/workspace -/var/lib/municode-scratch
 PrivateTmp=yes
 KillMode=process
 TimeoutStopSec=30

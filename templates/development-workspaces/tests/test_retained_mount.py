@@ -86,13 +86,13 @@ class InstalledMountUnitTests(unittest.TestCase):
         return config
 
     def test_storage_unit_blocks_t3_and_both_scratch_units(self):
-        mount = "workspaces-workspace-mount.service"
+        mount = "municode-workspace-mount.service"
         service = self.unit(mount)["Service"]
         self.assertEqual("oneshot", service["Type"])
         self.assertTrue(service["ExecStart"].endswith("/runtime.py mount-for-services"))
         self.assertGreater(int(service["TimeoutStartSec"]), rt.DEVICE_WAIT_SECONDS)
-        for dependent in ("workspaces-t3.service", "workspaces-scratch-mounts.service",
-                          "workspaces-scratch-watch.service"):
+        for dependent in ("municode-t3.service", "municode-scratch-mounts.service",
+                          "municode-scratch-watch.service"):
             with self.subTest(dependent=dependent):
                 unit = self.unit(dependent)["Unit"]
                 self.assertIn(mount, unit["Requires"].split())
@@ -118,7 +118,7 @@ class InstalledMountUnitTests(unittest.TestCase):
     def test_bootstrap_rerun_reuses_existing_mount_and_leaves_owner_marker_alone(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            marker = workspace / ".workspaces-volume.json"
+            marker = workspace / ".municode-volume.json"
             marker.write_text("existing owner")
             retained = workspace / "retained-marker"
             retained.write_text("user data")

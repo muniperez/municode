@@ -42,7 +42,7 @@ public sealed class GatewayControlPlane : IGatewayControlPlane, IDisposable
         if (!options.TryParseHost(domain, out _, out _) || !TryControlPlaneOrigin(out var origin)) return false;
         using var request = new HttpRequestMessage(HttpMethod.Get,
             new Uri(origin, "/internal/workspace-gateway/certificate-authorization?domain=" + Uri.EscapeDataString(domain)));
-        request.Headers.Add("X-Workspaces-Gateway-Credential", options.ServiceCredential);
+        request.Headers.Add("X-Municode-Gateway-Credential", options.ServiceCredential);
         using var response = await client.SendAsync(request, ct);
         return response.StatusCode == System.Net.HttpStatusCode.OK;
     }
@@ -51,7 +51,7 @@ public sealed class GatewayControlPlane : IGatewayControlPlane, IDisposable
     {
         if (!options.AcceptHost(host) || session.Length != 64 || !TryControlPlaneOrigin(out var origin)) return false;
         using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(origin, "/internal/workspace-gateway/activity"));
-        request.Headers.Add("X-Workspaces-Gateway-Credential", options.ServiceCredential);
+        request.Headers.Add("X-Municode-Gateway-Credential", options.ServiceCredential);
         request.Content = JsonContent.Create(new DevelopmentWorkspaceGatewayReceiptRequest(host, session));
         using var response = await client.SendAsync(request, ct);
         return response.StatusCode == System.Net.HttpStatusCode.NoContent;
@@ -61,7 +61,7 @@ public sealed class GatewayControlPlane : IGatewayControlPlane, IDisposable
     {
         if (!TryControlPlaneOrigin(out var origin)) return default;
         using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(origin, "/internal/workspace-gateway/" + operation));
-        request.Headers.Add("X-Workspaces-Gateway-Credential", options.ServiceCredential);
+        request.Headers.Add("X-Municode-Gateway-Credential", options.ServiceCredential);
         request.Content = JsonContent.Create(new DevelopmentWorkspaceGatewayReceiptRequest(host, receipt));
         using var response = await client.SendAsync(request, ct);
         if (response.IsSuccessStatusCode) return await response.Content.ReadFromJsonAsync<T>(ct);

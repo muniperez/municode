@@ -98,7 +98,7 @@ it("shows the private approval only while pending and requires a fresh opt-in af
   button("Start approval again").click();
   await settled();
   expect(state.fetch).toHaveBeenNthCalledWith(5, "/link", expect.objectContaining({
-    method: "POST", headers: { "X-Workspaces-Connect": "1" }, cache: "no-store",
+    method: "POST", headers: { "X-Municode-Connect": "1" }, cache: "no-store",
     credentials: "same-origin", redirect: "error",
   }));
 });

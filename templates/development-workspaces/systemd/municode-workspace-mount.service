@@ -4,6 +4,6 @@ After=local-fs.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 -B /opt/workspaces-workspace/runtime.py mount-for-services
+ExecStart=/usr/bin/python3 -B /opt/municode-workspace/runtime.py mount-for-services
 UMask=0077
 TimeoutStartSec=90

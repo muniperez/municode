@@ -59,7 +59,7 @@ class DiskUsageTests(unittest.TestCase):
         (self.workspace / "repos/escape").symlink_to(self.outside, target_is_directory=True)
         (self.workspace / "repos/big/escape").symlink_to(self.outside, target_is_directory=True)
         os.link(self.workspace / "repos/big/data.bin", self.workspace / "repos/big/data-link.bin")
-        write(self.workspace / ".workspaces-volume.json", 10)
+        write(self.workspace / ".municode-volume.json", 10)
         patcher = patch.object(du, "CODING_UID", os.getuid())
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -99,16 +99,16 @@ class DiskUsageTests(unittest.TestCase):
     def test_scratch_mountpoints_follow_the_scratch_repos_source(self):
         mountinfo = Path(self.temp.name) / "mountinfo"
         cases = {
-            # Scratch on the root disk: bind sources are paths below /var/lib/workspaces-scratch/repos.
+            # Scratch on the root disk: bind sources are paths below /var/lib/municode-scratch/repos.
             "shared": ("1 0 8:1 / / rw - ext4 /dev/sda1 rw\n"
                        "2 1 8:2 / /workspace rw - ext4 /dev/sdb rw\n"
-                       "3 2 8:1 /var/lib/workspaces-scratch/repos/p/target /workspace/repos/p/tar\\040get rw - ext4 /dev/sda1 rw\n"
+                       "3 2 8:1 /var/lib/municode-scratch/repos/p/target /workspace/repos/p/tar\\040get rw - ext4 /dev/sda1 rw\n"
                        "4 2 8:1 /srv/other /workspace/repos/p/other rw - ext4 /dev/sda1 rw\n"
-                       "5 2 8:1 /var/lib/workspaces-scratch/repos-old /workspace/repos/p/old rw - ext4 /dev/sda1 rw\n"),
+                       "5 2 8:1 /var/lib/municode-scratch/repos-old /workspace/repos/p/old rw - ext4 /dev/sda1 rw\n"),
             # Scratch on its own filesystem: bind roots are relative to that filesystem.
             "separate": ("1 0 8:1 / / rw - ext4 /dev/sda1 rw\n"
                          "2 1 8:2 / /workspace rw - ext4 /dev/sdb rw\n"
-                         "3 1 8:3 / /var/lib/workspaces-scratch rw - ext4 /dev/sdc rw\n"
+                         "3 1 8:3 / /var/lib/municode-scratch rw - ext4 /dev/sdc rw\n"
                          "4 2 8:3 /repos/p/target /workspace/repos/p/tar\\040get rw - ext4 /dev/sdc rw\n"
                          "5 2 8:3 /cache /workspace/repos/p/other rw - ext4 /dev/sdc rw\n"),
         }
@@ -412,7 +412,7 @@ class DiskUsageTests(unittest.TestCase):
 class DiskUsageExt4GuestTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        marker = Path("/etc/workspaces-disposable-image-builder")
+        marker = Path("/etc/municode-disposable-image-builder")
         if os.geteuid() != 0 or not marker.is_file() or marker.is_symlink():
             raise RuntimeError("Requires root in a marked disposable image-builder VM")
         info = marker.stat()
@@ -439,7 +439,7 @@ class DiskUsageExt4GuestTests(unittest.TestCase):
                         str(self.workspace)], check=True, capture_output=True)
         self.addCleanup(subprocess.run, ["umount", str(self.workspace)], check=True, capture_output=True)
         self.assertEqual({"lost+found"}, {entry.name for entry in self.workspace.iterdir()})
-        (self.workspace / ".workspaces-volume.json").write_text(json.dumps(dict(
+        (self.workspace / ".municode-volume.json").write_text(json.dumps(dict(
             organizationId="guest", workspaceId="disposable", providerAccountId="guest",
             location="guest", providerVolumeId="disposable-loop")))
 
@@ -512,7 +512,7 @@ class FakeProc:
             "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n"
             "2 1 8:2 / /workspace rw - ext4 /dev/sdb rw\n"
             "3 2 0:5 / /workspace/repos/with\\040space rw - tmpfs tmpfs rw\n"
-            "4 2 8:1 /var/lib/workspaces-scratch/repos/p/target /workspace/repos/p/target rw - ext4 /dev/sda1 rw\n")
+            "4 2 8:1 /var/lib/municode-scratch/repos/p/target /workspace/repos/p/target rw - ext4 /dev/sda1 rw\n")
 
     def boot(self, value):
         (self.root / "sys/kernel/random/boot_id").write_text(value + "\n")

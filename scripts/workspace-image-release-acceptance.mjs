@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 const collection = "/api/development-workspaces";
-const cookieName = "__Host-workspaces-workspace";
+const cookieName = "__Host-municode-workspace";
 const steps = ["create-ready", "t3-write", "stop", "start-t3-verify", "delete"];
 const defaults = { "create-ready": 600_000, "t3-write": 120_000, stop: 600_000,
   "start-t3-verify": 720_000, delete: 900_000, recover: 30_000 };
@@ -163,7 +163,7 @@ async function t3File(api, workspace, apiOrigin, gatewayDomain, contents, writin
   const launch = new URL(url);
   const code = launch.searchParams.get("code");
   requireThat(launch.hostname.endsWith(`.${gatewayDomain}`) && !launch.username && !launch.password &&
-    !launch.hash && launch.pathname === "/__workspaces/launch" &&
+    !launch.hash && launch.pathname === "/__municode/launch" &&
     [...launch.searchParams].length === 1 && /^[a-f0-9]{64}$/.test(code), "INVALID_T3_LAUNCH");
   requireThat(launch.protocol === new URL(apiOrigin).protocol, "INVALID_T3_LAUNCH");
   const redemption = await fetch(launch, { redirect: "manual", signal });

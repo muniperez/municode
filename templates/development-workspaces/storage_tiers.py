@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Storage tiers (#202): prepare the local scratch tier and move caches off the retained volume.
 
-Runs as root from workspaces-t3.service (ExecStartPre=-+...) before T3 starts and never blocks it:
+Runs as root from municode-t3.service (ExecStartPre=-+...) before T3 starts and never blocks it:
 it always exits 0 and logs one bounded JSON line to stderr (the journal).
 
 Root only re-applies the scratch tmpfiles entry, checks the scratch layout and owns the migration
@@ -19,12 +19,12 @@ import subprocess
 import sys
 import time
 
-SCRATCH = "/var/lib/workspaces-scratch"
-ENV_FILE = "/opt/workspaces-workspace/scratch.env"
-TMPFILES = "/etc/tmpfiles.d/workspaces-scratch.conf"
+SCRATCH = "/var/lib/municode-scratch"
+ENV_FILE = "/opt/municode-workspace/scratch.env"
+TMPFILES = "/etc/tmpfiles.d/municode-scratch.conf"
 WORKSPACE = "/workspace"
 HOME = "home"
-MARKER = "/var/lib/workspaces-workspace/storage-tiers-migrated.json"
+MARKER = "/var/lib/municode-workspace/storage-tiers-migrated.json"
 TRASH = ".workspaces-cache-trash"
 CODING_UID = 2000
 CODING_GID = 2000

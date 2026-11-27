@@ -55,7 +55,7 @@ class EnvironmentFileTests(unittest.TestCase):
         self.assertIn("XDG_CACHE_HOME", values)
         self.assertTrue(all(value.startswith(st.SCRATCH + "/") for value in values.values()))
         self.assertFalse({"CARGO_HOME", "GRADLE_USER_HOME", "CARGO_TARGET_DIR", "YARN_CACHE_FOLDER"} & set(values))
-        unit = (HERE / "systemd/workspaces-t3.service").read_text().splitlines()
+        unit = (HERE / "systemd/municode-t3.service").read_text().splitlines()
         self.assertIn("EnvironmentFile=-" + st.ENV_FILE, unit)
         self.assertIn("ReadWritePaths=/workspace -" + st.SCRATCH, unit)
         self.assertEqual((st.ENV_FILE, st.SCRATCH), (rt.SCRATCH_ENV, rt.SCRATCH_ROOT))
@@ -74,10 +74,10 @@ class EnvironmentFileTests(unittest.TestCase):
             st.load_environment(hostile)
 
     def test_unsafe_or_ambiguous_environment_files_are_rejected(self):
-        for text in ("TMPDIR=/var/lib/workspaces-scratch/tmp\nTMPDIR=/var/lib/workspaces-scratch/x\n",
-                     "TMPDIR=/workspace/home/tmp\n", "TMPDIR=/var/lib/workspaces-scratch/../x\n",
-                     "TMPDIR=/var/lib/workspaces-scratch-other/tmp\n", "TMPDIR=relative\n",
-                     "TMPDIR=/var/lib/workspaces-scratch/a b\n", "export TMPDIR=/var/lib/workspaces-scratch/t\n"):
+        for text in ("TMPDIR=/var/lib/municode-scratch/tmp\nTMPDIR=/var/lib/municode-scratch/x\n",
+                     "TMPDIR=/workspace/home/tmp\n", "TMPDIR=/var/lib/municode-scratch/../x\n",
+                     "TMPDIR=/var/lib/municode-scratch-other/tmp\n", "TMPDIR=relative\n",
+                     "TMPDIR=/var/lib/municode-scratch/a b\n", "export TMPDIR=/var/lib/municode-scratch/t\n"):
             with self.subTest(text=text):
                 path = self.root / "case.env"
                 path.write_text(text)
@@ -103,8 +103,8 @@ class EnvironmentFileTests(unittest.TestCase):
         root = self.root / "image-root"
         owners = []
         with patch.object(builder.os, "chown", side_effect=lambda path, uid, gid: owners.append((uid, gid))):
-            builder.install_storage_tiers(HERE / "storage", "/opt/workspaces-workspace", root)
-        for target in (st.ENV_FILE, st.TMPFILES, "/etc/profile.d/workspaces-scratch.sh"):
+            builder.install_storage_tiers(HERE / "storage", "/opt/municode-workspace", root)
+        for target in (st.ENV_FILE, st.TMPFILES, "/etc/profile.d/municode-scratch.sh"):
             installed = root / target.lstrip("/")
             self.assertEqual(0o644, stat.S_IMODE(installed.stat().st_mode))
         self.assertEqual([(0, 0)] * 3, owners)

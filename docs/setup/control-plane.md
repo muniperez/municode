@@ -133,7 +133,7 @@ Runtime projects in this repository can reference `Municode.Common` for
 `IDevelopmentWorkspaceProvider`. Use `WorkspaceOwnership.Manager` in the
 `managed-by` label. API enrollment and gateway authorization use their
 existing generation-bound HTTP contracts. Gateway service endpoints accept the
-`X-Workspaces-Gateway-Credential` header. The API queues lifecycle operations.
+`X-Municode-Gateway-Credential` header. The API queues lifecycle operations.
 
 See [runtime setup](runtime.md) for worker, gateway and prepared-image configuration.
 The worker claims and executes them. SSH keys and gateway service credentials
