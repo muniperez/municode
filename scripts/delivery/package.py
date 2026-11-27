@@ -249,6 +249,7 @@ def package(args: argparse.Namespace, *, source_root: Path = ROOT, local: LocalB
             "dependencies": release["images"],
             "components": inventories,
             "bundle": archive_name,
+            "hostAgent": {"path": "deploy_host.py", "sha256": file_digest(root / "deploy_host.py")},
         }
         if local is not None:
             manifest.update(add_local_images(root, contract, local))

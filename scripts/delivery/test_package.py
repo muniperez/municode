@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: MPL-2.0
+from contextlib import redirect_stdout
+import fcntl
 import hashlib
 import http.client
+import io
 import json
 import os
 from pathlib import Path
@@ -19,10 +22,109 @@ PACKAGE = ROOT / "scripts" / "delivery" / "package.py"
 MIGRATIONS = {"postgres": ["20260101000000_InitialPostgres", "20260102000000_AddPostgres"],
               "sqlite": ["20260101000000_InitialSqlite"]}
 
+sys.path.insert(0, str(ROOT / "packaging" / "bundle"))
+import deploy_host
+sys.path.pop(0)
+
+
+class FakeDeployDocker:
+    def __init__(self, current):
+        self.current = current
+        self.calls = []
+        self.applied = MIGRATIONS["postgres"][:1]
+        self.wrong_working_dir = False
+        self.wrong_installation = False
+        self.wrong_loaded_id = False
+        self.postgres_major = 16
+        self.container_ids = {name: f"{index:064x}" for index, name in enumerate(
+            ("api", "caddy", "kratos", "openbao", "openbao-agent", "postgres", "worker", "workspace-gateway"), 1)}
+
+    def __call__(self, step, *args, **options):
+        self.calls.append(args)
+        if args[:2] == ("docker", "ps"):
+            return "\n".join(self.container_ids.values())
+        if args[:3] == ("docker", "container", "inspect"):
+            containers = []
+            for name, id in self.container_ids.items():
+                labels = {
+                    "com.docker.compose.service": name,
+                    "com.docker.compose.project.working_dir": "/wrong" if self.wrong_working_dir else str(self.current),
+                }
+                if name in ("openbao", "openbao-agent"):
+                    labels["com.municode.installation-id"] = (
+                        "wrong" if self.wrong_installation else "replace-with-stable-installation-id"
+                    )
+                volume = "openbao" if name == "openbao" else "caddy-data" if name == "caddy" else None
+                mounts = [{"Type": "volume", "Name": f"municode_{volume}", "Source": f"/fake/{volume}"}] if volume else []
+                networks = {"municode_private": {"NetworkID": "f" * 64}}
+                containers.append({"Id": id, "Config": {"Labels": labels}, "Mounts": mounts,
+                                   "State": {"Running": True}, "NetworkSettings": {"Networks": networks}})
+            return json.dumps(containers)
+        if args[:3] == ("docker", "image", "pull") or args[:3] == ("docker", "image", "tag"):
+            return ""
+        if args[:4] == ("docker", "image", "load", "--input"):
+            return "Loaded image ID: " + ("sha256:" + "0" * 64 if self.wrong_loaded_id else Path(args[4]).read_text())
+        if args[:5] == ("docker", "image", "inspect", "--format", "{{.Id}}"):
+            return args[-1]
+        if args[:3] == ("docker", "image", "inspect"):
+            return json.dumps([{"Config": {"Env": [f"PG_MAJOR={self.postgres_major}"]}, "Size": 100}
+                               for ref in args[3:]])
+        if args[:2] == ("docker", "compose"):
+            assert args[2:4] == ("--project-name", "municode"), args
+            env = dict(line.split("=", 1) for line in Path(args[7]).read_text().splitlines() if "=" in line)
+            if args[10:] == ("--profile", "*", "config", "--quiet"):
+                return ""
+            if args[10:] in (("config", "--format", "json"), ("--profile", "*", "config", "--format", "json")):
+                mounts = [{"source": env["MUNICODE_POLICY_FILE"], "target": "/etc/municode/municode.json",
+                           "read_only": True}]
+                services = {name: {"image": env["MUNICODE_DOTNET_IMAGE"], "volumes": mounts}
+                            for name in ("api", "api-migrate", "worker")}
+                services["api"]["environment"] = {"Bootstrap__InstallationId": env["MUNICODE_INSTALLATION_ID"],
+                                                   "MUNICODE_RELEASE_TAG": env["MUNICODE_RELEASE_TAG"]}
+                services["api-migrate"]["environment"] = {
+                    "Database__Provider": "Postgres", "Database__PasswordFile": "/run/secrets/app-db-password",
+                    "ConnectionStrings__Municode": "Host=postgres;Port=5432;Database=municode;Username=municode",
+                }
+                services["postgres"] = {"image": env["MUNICODE_POSTGRES_IMAGE"]}
+                for name in ("openbao", "openbao-agent"):
+                    services[name] = {"image": env["MUNICODE_OPENBAO_IMAGE"],
+                                      "labels": {"com.municode.installation-id": env["MUNICODE_INSTALLATION_ID"]}}
+                return json.dumps({"services": services})
+        if args[:2] == ("docker", "run"):
+            assert args[2:7] == ("--rm", "--pull=never", "--read-only", "--network", "f" * 64), args
+            assert args[-4:] == ("/opt/municode/Municode.Api.dll", "migrations", "status", "--json"), args
+            source = next(arg for arg in args if arg.endswith(",dst=/opt/municode,readonly"))
+            release = Path(source.split(",")[1].removeprefix("src=")).parents[1]
+            ids = json.loads((release / "release-manifest.json").read_text())["migrations"]["postgres"]
+            return json.dumps({"historyTableExists": True, "applied": [id for id in ids if id in self.applied],
+                               "pending": [id for id in ids if id not in self.applied],
+                               "unknownApplied": sorted(set(self.applied) - set(ids))})
+        if args[:2] == ("docker", "exec"):
+            if args[2:4] == (self.container_ids["postgres"], "psql"):
+                return "160007|4096"
+            if args[2:4] == (self.container_ids["openbao"], "bao"):
+                return '{"initialized":true,"sealed":false}'
+            if args[2] == self.container_ids["api"] and args[-3:] == ("maintenance", "status", "--json"):
+                return '{"enabled":false,"nonterminalOperations":2}'
+            if args[2:4] == (self.container_ids["caddy"], "wget"):
+                return ""
+        if args[0] == "du":
+            return "\n".join(f"100\t{path}" for path in args[5:])
+        raise AssertionError((step, args, options))
+
+
+def deploy_command(root, fake, *args):
+    output = io.StringIO()
+    with redirect_stdout(output):
+        code = deploy_host.main(["--host-root", str(root), *args], run=fake)
+    return code, json.loads(output.getvalue())
+
 
 class PackageTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
+        artifacts = ROOT / ".local/artifacts"
+        artifacts.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=artifacts)
         self.root = Path(self.temporary.name)
         self.payloads = {}
         for name, binary in (
@@ -99,10 +201,147 @@ class PackageTests(unittest.TestCase):
             self.assertFalse(any(name.endswith(("/workspaces", "/workspaces.cmd")) for name in names
                                  if "/cli/" in name))
             self.assertTrue(any(name.endswith("/install.sh") for name in names))
+            agent = bundle.extractfile("municode-0.0.0-test/deploy_host.py").read()
+            manifest = json.loads((self.output / "release-manifest.json").read_text())
+            self.assertEqual(manifest["hostAgent"], {
+                "path": "deploy_host.py", "sha256": hashlib.sha256(agent).hexdigest(),
+            })
             seed_installer = next(member for member in bundle.getmembers()
                                   if member.name.endswith("/seed-start.sh"))
             self.assertTrue(seed_installer.mode & 0o100)
             self.assertTrue(all(not member.issym() and not member.islnk() for member in bundle.getmembers()))
+
+    def deploy_fixture(self):
+        self.package()
+        archive, = self.output.glob("*.tar.gz")
+        sha = hashlib.sha256(archive.read_bytes()).hexdigest()
+        unpacked = self.root / "unpacked"
+        with tarfile.open(archive) as bundle:
+            bundle.extractall(unpacked, filter="data")
+        host = self.root / "host"
+        subprocess.run([unpacked / "municode-0.0.0-test/install.sh", "--host-root", host,
+                        "--bundle-sha256", sha, "--verified-release-tag", "municode-v0.0.0-test"],
+                       check=True, capture_output=True, text=True)
+        active = host / "opt/municode/releases/municode-v0.0.0-test"
+        command = self.command()
+        command[command.index("--version") + 1] = "0.0.0-next"
+        command[command.index("--output") + 1] = str(self.root / "next")
+        self.package(command)
+        target, = (self.root / "next").glob("*.tar.gz")
+        return host, FakeDeployDocker(active), target
+
+    def stage_command(self, host, fake, archive, op="test-op", sha=None):
+        return deploy_command(host, fake, "stage", "--operation", op, "--bundle", str(archive),
+                              "--bundle-sha256", sha or hashlib.sha256(archive.read_bytes()).hexdigest(),
+                              "--trust", "github-sigstore", "--verified-release-tag", "municode-v0.0.0-next")
+
+    def preflight_command(self, host, fake, staged):
+        op = host / "var/lib/municode/deploys/test-op"
+        plan = op / "plan.json"
+        plan.write_text(json.dumps(staged | {
+            "operationId": op.name, "instanceName": "demo", "hostFingerprint": "SHA256:" + "x" * 43,
+            "installationId": "replace-with-stable-installation-id",
+        }))
+        return deploy_command(host, fake, "preflight", "--json", "--plan", str(plan))
+
+    def test_deploy_stages_verified_archive_without_switching_current(self):
+        host, fake, archive = self.deploy_fixture()
+        code, staged = self.stage_command(host, fake, archive)
+        self.assertEqual(code, 0, staged)
+        release = fake.current.with_name(staged["targetRelease"]["releaseId"])
+        self.assertEqual(release.stat().st_mode & 0o777, 0o555)
+        self.assertEqual((release / "deploy_host.py").stat().st_mode & 0o777, 0o444)
+        self.assertEqual((host / "opt/municode/current").resolve(), fake.current)
+        self.assertFalse((release / ".env").exists())
+        self.assertTrue(any(command[:3] == ("docker", "image", "pull") for command in fake.calls))
+        fake.calls.clear()
+        self.assertEqual(self.stage_command(host, fake, archive), (code, staged))
+        self.assertFalse(any(command[:2] == ("docker", "image") for command in fake.calls))
+        code, result = self.stage_command(host, fake, archive, op="bad-sha", sha="0" * 64)
+        self.assertEqual((code, result["blockers"]), (1, ["Uploaded bundle SHA-256 mismatch."]))
+
+        linked = self.root / "link.tar.gz"
+        with tarfile.open(linked, "w:gz") as bundle:
+            member = tarfile.TarInfo("municode-0.0.0-next/unsafe")
+            member.type = tarfile.SYMTYPE
+            member.linkname = "/etc/passwd"
+            bundle.addfile(member)
+        code, result = self.stage_command(host, fake, linked, op="bad-link")
+        self.assertEqual((code, result["blockers"]), (1, ["Bundle contains an unsafe archive member."]))
+        self.assertFalse((release.parent / ".staging-bad-link").exists())
+
+    def test_deploy_requires_active_record_and_running_ownership(self):
+        host, fake, archive = self.deploy_fixture()
+        code, staged = self.stage_command(host, fake, archive)
+        self.assertEqual(code, 0, staged)
+        active = host / "var/lib/municode/active-release.json"
+        record = active.read_bytes()
+        active.unlink()
+        code, result = self.preflight_command(host, fake, staged)
+        self.assertEqual((code, result["blockers"]), (1, ["Missing or invalid active-release.json."]))
+        active.write_bytes(record)
+        fake.wrong_working_dir = True
+        code, result = self.preflight_command(host, fake, staged)
+        self.assertEqual(code, 1)
+        self.assertIn("working directory", result["blockers"][0])
+        fake.wrong_working_dir = False
+        fake.wrong_installation = True
+        code, result = self.preflight_command(host, fake, staged)
+        self.assertEqual(code, 1)
+        self.assertIn("ownership label", result["blockers"][0])
+        with (host / "var/lib/municode/deploy.lock").open("r") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            code, result = self.preflight_command(host, fake, staged)
+        self.assertEqual(code, 1)
+        self.assertIn("holds the deploy lock", result["blockers"][0])
+
+    def test_preflight_refuses_unknown_operator_keys_and_downgrades(self):
+        host, fake, archive = self.deploy_fixture()
+        code, staged = self.stage_command(host, fake, archive)
+        self.assertEqual(code, 0, staged)
+        operator = host / "etc/municode/config/operator.env"
+        values = operator.read_text()
+        operator.write_text(values + "UNRECOGNIZED=synthetic-secret\n")
+        code, result = self.preflight_command(host, fake, staged)
+        self.assertEqual(code, 1)
+        self.assertEqual(result["envDiff"]["unknownOperatorKeys"], ["UNRECOGNIZED"])
+        self.assertNotIn("synthetic-secret", json.dumps(result))
+        operator.write_text(values)
+        fake.applied.append("20260201000000_NewerThanTarget")
+        fake.postgres_major = 17
+        code, result = self.preflight_command(host, fake, staged)
+        self.assertEqual(code, 1)
+        self.assertEqual(result["migrations"]["unknownApplied"], ["20260201000000_NewerThanTarget"])
+        self.assertIn("Target migrations do not extend the applied PostgreSQL history.", result["blockers"])
+        self.assertIn("PostgreSQL major-version changes are not supported.", result["blockers"])
+
+    def test_preflight_hash_tracks_policy_without_writing_host_files(self):
+        host, fake, archive = self.deploy_fixture()
+        code, staged = self.stage_command(host, fake, archive)
+        self.assertEqual(code, 0, staged)
+        code, initial = self.preflight_command(host, fake, staged)
+        self.assertEqual(code, 0, initial)
+        self.assertEqual(initial["maintenance"], {"enabled": False, "nonterminalOperations": 2})
+        self.assertTrue(initial["openBao"]["requiresUnsealKeyFile"])
+        self.assertEqual(initial["digestInputs"]["pendingMigrations"], MIGRATIONS["postgres"][1:])
+        self.assertEqual(initial["digestInputs"]["effectiveConfigHash"], initial["effectiveConfigHash"])
+        policy = host / "etc/municode/config/municode.json"
+        policy.write_text('{"operator":true}\n')
+        op = host / "var/lib/municode/deploys/test-op"
+
+        def snapshot():
+            return {path: (path.lstat().st_mode, path.lstat().st_mtime_ns) for path in host.rglob("*")
+                    if path != op and not path.is_relative_to(op)}
+
+        before = snapshot()
+        code, changed = self.preflight_command(host, fake, staged)
+        self.assertEqual(code, 0, changed)
+        self.assertNotEqual(initial["effectiveConfigHash"], changed["effectiveConfigHash"])
+        self.assertEqual(before, snapshot())
+        self.assertEqual(sorted(path.name for path in op.iterdir()), ["plan.json", "state.json"])
+        code, repeated = self.preflight_command(host, fake, staged)
+        self.assertEqual(code, 0, repeated)
+        self.assertEqual(repeated["digestInputs"], changed["digestInputs"])
 
     def test_manifest_records_component_digests_and_no_floating_dependencies(self):
         self.package()
@@ -667,6 +906,21 @@ class LocalBuildTests(unittest.TestCase):
             self.assertIn(f"MUNICODE_{name.upper()}_IMAGE=municode-{name}:local-{letter * 64}", rendered)
         self.assertEqual(json.loads((host / "var/lib/municode/active-release.json").read_text())["releaseId"],
                          output.name)
+
+        fake = FakeDeployDocker(installed)
+        stage = ("--bundle", str(archive), "--bundle-sha256", bundle_digest, "--trust", "local-build")
+        code, result = deploy_command(host, fake, "stage", "--operation", "test-local", *stage)
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["targetRelease"]["releaseId"], output.name)
+        self.assertEqual(
+            {call[3:] for call in fake.calls if call[:3] == ("docker", "image", "tag")},
+            {(item["imageId"], item["reference"]) for item in manifest["imageArchives"].values()},
+        )
+        fake.calls.clear()
+        fake.wrong_loaded_id = True
+        code, result = deploy_command(host, fake, "stage", "--operation", "invalid-local", *stage)
+        self.assertEqual((code, result["blockers"]), (1, ["Loaded local image does not match the bundle's image ID."]))
+        self.assertFalse(any(call[:3] == ("docker", "image", "tag") for call in fake.calls))
 
         (release / "images" / "api.tar").write_text("corrupted")
         result = subprocess.run(command, capture_output=True, text=True)
