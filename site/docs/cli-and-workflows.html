@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Municode CLI and workflow reference: authentication, persistent workspace commands, VM resizing, and ephemeral Git-backed VMs.">
+  <title>CLI &amp; Workflows | Municode Docs</title>
+  <link rel="stylesheet" href="../styles/site.css">
+  <script type="module" src="../scripts/site.js"></script>
+</head>
+<body>
+  <a href="#main-heading" class="skip-link visually-hidden">Skip to main content</a>
+  <div id="copy-status" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="site-brand" href="../index.html">
+        <span class="brand-mark" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <rect x="2" y="2.5" width="12" height="2.5" rx="1" fill="currentColor"/>
+            <rect x="2" y="6.75" width="12" height="2.5" rx="1" fill="currentColor" opacity="0.78"/>
+            <rect x="2" y="11" width="12" height="2.5" rx="1" fill="currentColor" opacity="0.5"/>
+          </svg>
+        </span>
+        <span>Municode</span>
+      </a>
+
+      <nav class="site-nav" aria-label="Primary">
+        <button
+          class="menu-button"
+          type="button"
+          popovertarget="site-menu"
+          popovertargetaction="toggle"
+          aria-controls="site-menu"
+        >
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+          <span>Menu</span>
+        </button>
+
+        <ul id="site-menu" class="site-menu" popover="auto">
+          <li><a href="../index.html">Overview</a></li>
+          <li><a href="getting-started.html">Setup</a></li>
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="cli-and-workflows.html" aria-current="page">CLI &amp; Workflows</a></li>
+          <li><a href="https://github.com/muniperez/municode">GitHub</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="container docs-shell">
+      <aside class="docs-sidebar">
+        <nav class="docs-nav" aria-label="Documentation">
+          <p class="docs-nav-heading">Documentation</p>
+          <ul class="docs-nav-list" role="list">
+            <li><a href="getting-started.html">Control-plane setup</a></li>
+            <li><a href="architecture.html">System architecture</a></li>
+            <li><a href="cli-and-workflows.html" aria-current="page">CLI &amp; workflows</a></li>
+          </ul>
+          <p class="docs-nav-heading">On this page</p>
+          <ul class="docs-nav-list" role="list">
+            <li><a href="#cli-auth">CLI setup &amp; login</a></li>
+            <li><a href="#retained-lifecycle">Persistent workspaces</a></li>
+            <li><a href="#ephemeral-git">Ephemeral Git VMs</a></li>
+            <li><a href="#faq">Notes</a></li>
+          </ul>
+        </nav>
+      </aside>
+
+      <article class="docs-content">
+        <header>
+          <h1 id="main-heading" tabindex="-1">CLI and workflows</h1>
+          <p class="hero-lead">
+            Manage workspaces from the web console or the standalone <code>municode</code> CLI (aliased as <code>workspaces</code>). All workspace commands accept <code>--json</code>.
+          </p>
+        </header>
+
+        <!-- SECTION 1: CLI AUTH -->
+        <section id="cli-auth">
+          <h2>1. CLI setup &amp; authentication</h2>
+          <p>
+            Place the CLI binary for your OS on your <code>PATH</code>, configure your installation's HTTPS API URL, and authenticate in your browser:
+          </p>
+
+          <div class="code-frame">
+            <div class="code-topbar">
+              <span id="cli-auth-cmds">Shell</span>
+              <button type="button" class="copy-btn" aria-label="Copy CLI configuration and login commands"><span class="copy-btn-text">Copy</span></button>
+            </div>
+            <pre role="region" aria-labelledby="cli-auth-cmds" tabindex="0"><code><span class="term-prompt">$ </span>municode config set-api-url https://api.example.com
+<span class="term-prompt">$ </span>municode login</code></pre>
+          </div>
+          <p>
+            For scripts, set <code>MUNICODE_API_URL</code> and pass a scoped key via <code>MUNICODE_TOKEN</code> (<code>workspaces:read</code> for status queries; <code>workspaces:write</code> for mutations).
+          </p>
+        </section>
+
+        <!-- SECTION 2: RETAINED WORKSPACES -->
+        <section id="retained-lifecycle">
+          <h2>2. Persistent workspaces</h2>
+          <p>
+            <code>create</code> allocates the workspace record in a stopped state; compute only starts on <code>start</code>. <code>stop</code> deletes the cloud VM and retains the primary volume.
+          </p>
+
+          <div class="code-frame">
+            <div class="code-topbar">
+              <span id="cli-retained-cmds">Shell</span>
+              <button type="button" class="copy-btn" aria-label="Copy workspace lifecycle commands"><span class="copy-btn-text">Copy</span></button>
+            </div>
+            <pre role="region" aria-labelledby="cli-retained-cmds" tabindex="0"><code><span class="term-prompt">$ </span>municode workspaces selections
+<span class="term-prompt">$ </span>municode workspaces create \
+    --name backend-dev \
+    --image &lt;image-id&gt; \
+    --profile Standard \
+    --plan &lt;plan-id&gt; \
+    --volume-gb 60 \
+    --idle-timeout 90
+<span class="term-prompt">$ </span>municode workspaces start &lt;workspace-id&gt;
+<span class="term-prompt">$ </span>municode workspaces open &lt;workspace-id&gt;
+
+<span class="term-out"># Queue a different plan or image for the next start:</span>
+<span class="term-prompt">$ </span>municode workspaces resize-next-start &lt;workspace-id&gt; \
+    --generation 1 --image &lt;image-id&gt; --profile Heavy --plan &lt;larger-plan-id&gt;
+
+<span class="term-out"># Stop compute or permanently delete the workspace and its volume:</span>
+<span class="term-prompt">$ </span>municode workspaces stop &lt;workspace-id&gt;
+<span class="term-prompt">$ </span>municode workspaces delete &lt;workspace-id&gt; --confirm-permanent-deletion</code></pre>
+          </div>
+        </section>
+
+        <!-- SECTION 3: EPHEMERAL GIT VMS -->
+        <section id="ephemeral-git">
+          <h2>3. Ephemeral Git-backed VMs</h2>
+          <p>
+            Ephemeral VMs attach no persistent volume. They clone an authorized repository and commit onto a per-generation branch and enter <code>awaiting_git_save</code> on stop if unpushed commits remain.
+          </p>
+
+          <div class="code-frame">
+            <div class="code-topbar">
+              <span id="cli-ephemeral-cmds">Shell</span>
+              <button type="button" class="copy-btn" aria-label="Copy ephemeral VM launch command"><span class="copy-btn-text">Copy</span></button>
+            </div>
+            <pre role="region" aria-labelledby="cli-ephemeral-cmds" tabindex="0"><code><span class="term-prompt">$ </span>municode workspaces launch &lt;workspace-id&gt; \
+    --image &lt;image-id&gt; \
+    --profile Standard \
+    --plan &lt;plan-id&gt; \
+    --repository https://github.com/org/repo.git \
+    --base-ref refs/heads/main \
+    --base-commit &lt;commit-sha&gt; \
+    --push-authorized \
+    --acknowledge-ignored-data-loss</code></pre>
+          </div>
+        </section>
+
+        <!-- SECTION 4: NOTES -->
+        <section id="faq" class="accordion" aria-labelledby="faq-heading">
+          <h2 id="faq-heading">4. Operational notes</h2>
+
+          <details>
+            <summary>Customizing OS images, SDKs, and coding agents</summary>
+            <div class="accordion-body">
+              <p>
+                Organizations register the VM images they want to admit, choosing the operating system, language toolchains, and coding agents. Moving a persistent workspace to a newer image via <code>resize-next-start</code> keeps the existing volume attached on the next boot.
+              </p>
+            </div>
+          </details>
+
+          <details>
+            <summary>Application preview URLs</summary>
+            <div class="accordion-body">
+              <p>
+                Named loopback preview ports configured on the worker can be launched from the console or API. Each preview service runs on its own subdomain separate from the workspace IDE.
+              </p>
+            </div>
+          </details>
+
+          <details>
+            <summary>Idle timeouts</summary>
+            <div class="accordion-body">
+              <p>
+                After the configured window without active input or task leases, the worker stops the VM and retains the persistent volume. Configure per-workspace timeouts with <code>municode workspaces idle-timeout</code> or disable idle stop with <code>--keep-running</code>.
+              </p>
+            </div>
+          </details>
+
+          <p class="mt-lg">
+            See <a href="https://github.com/muniperez/municode/blob/main/docs/user.md"><code>docs/user.md</code></a> in the repository for additional details.
+          </p>
+        </section>
+      </article>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <strong>Municode</strong>
+        <span>&middot;</span>
+        <span>AGPL-3.0-only &amp; MPL-2.0</span>
+      </div>
+      <ul class="footer-links" role="list">
+        <li><a href="../index.html">Overview</a></li>
+        <li><a href="getting-started.html">Setup</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="cli-and-workflows.html">CLI &amp; Workflows</a></li>
+        <li><a href="https://github.com/muniperez/municode">GitHub</a></li>
+      </ul>
+    </div>
+  </footer>
+</body>
+</html>

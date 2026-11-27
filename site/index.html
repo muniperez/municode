@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Municode is an open-source control plane and runtime for cloud development workspaces.">
+  <title>Municode | Cloud Development Workspaces</title>
+  <link rel="stylesheet" href="styles/site.css">
+  <script type="module" src="scripts/site.js"></script>
+</head>
+<body>
+  <a href="#main-heading" class="skip-link visually-hidden">Skip to main content</a>
+  <div id="copy-status" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="site-brand" href="index.html">
+        <span class="brand-mark" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <rect x="2" y="2.5" width="12" height="2.5" rx="1" fill="currentColor"/>
+            <rect x="2" y="6.75" width="12" height="2.5" rx="1" fill="currentColor" opacity="0.78"/>
+            <rect x="2" y="11" width="12" height="2.5" rx="1" fill="currentColor" opacity="0.5"/>
+          </svg>
+        </span>
+        <span>Municode</span>
+      </a>
+
+      <nav class="site-nav" aria-label="Primary">
+        <button
+          class="menu-button"
+          type="button"
+          popovertarget="site-menu"
+          popovertargetaction="toggle"
+          aria-controls="site-menu"
+        >
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+          <span>Menu</span>
+        </button>
+
+        <ul id="site-menu" class="site-menu" popover="auto">
+          <li><a href="#what-is-municode">What is Municode</a></li>
+          <li><a href="#how-it-works">How it works</a></li>
+          <li><a href="#get-started">Get started</a></li>
+          <li><a href="docs/getting-started.html">Documentation</a></li>
+          <li><a href="https://github.com/muniperez/municode">GitHub</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <!-- HERO -->
+    <section class="hero">
+      <div class="container">
+        <div class="hero-stack">
+          <h1 id="main-heading" class="hero-title" tabindex="-1">Self-hosted cloud development workspaces</h1>
+
+          <p class="hero-sub">
+            Municode is an open-source control plane and runtime that provisions development VMs in your cloud account.
+            Register VM images with the operating system, SDKs, and coding agents your team uses, and connect through the web console or CLI.
+          </p>
+
+          <div class="hero-cta-group">
+            <a class="btn btn-primary" href="#get-started">Get started</a>
+            <a class="btn btn-ghost" href="docs/getting-started.html">Documentation</a>
+          </div>
+        </div>
+
+        <!-- SIMPLE OVERVIEW DIAGRAM -->
+        <div class="showcase-stage">
+          <figure class="diagram-figure">
+            <div class="diagram-canvas">
+              <svg viewBox="0 0 980 228" role="img" aria-labelledby="diag-overview-title">
+                <title id="diag-overview-title">Overview showing a developer connecting from a browser or CLI over HTTPS to the Municode Control Plane, which provisions VMs via the Cloud API and forwards workspace traffic over a private SSH tunnel.</title>
+                <defs>
+                  <marker id="arr-base" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                    <path d="M1 1.5L8.5 5L1 8.5Z" class="svg-arrow"/>
+                  </marker>
+                  <marker id="arr-accent" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                    <path d="M1 1.5L8.5 5L1 8.5Z" class="svg-arrow-accent"/>
+                  </marker>
+                </defs>
+
+                <!-- Developer -->
+                <rect x="16" y="16" width="236" height="196" rx="8" class="svg-panel"/>
+                <text x="32" y="40" class="svg-group-label">Client</text>
+
+                <rect x="32" y="56" width="204" height="62" rx="6" class="svg-node"/>
+                <text x="48" y="81" class="svg-title">Browser</text>
+                <text x="48" y="102" class="svg-subtitle">Console, IDE &amp; app previews</text>
+
+                <rect x="32" y="132" width="204" height="62" rx="6" class="svg-node"/>
+                <text x="48" y="157" class="svg-title">CLI</text>
+                <text x="48" y="178" class="svg-subtitle">Lifecycle &amp; automation</text>
+
+                <!-- HTTPS -->
+                <line x1="236" y1="114" x2="350" y2="114" class="svg-edge-accent" marker-end="url(#arr-accent)"/>
+                <text x="293" y="104" text-anchor="middle" class="svg-mono">HTTPS</text>
+
+                <!-- Control Plane -->
+                <rect x="352" y="16" width="276" height="196" rx="8" class="svg-panel"/>
+                <text x="368" y="40" class="svg-group-label">Control plane</text>
+
+                <rect x="368" y="56" width="244" height="62" rx="6" class="svg-node-emphasis"/>
+                <text x="384" y="81" class="svg-title">Auth &amp; Gateway</text>
+                <text x="384" y="102" class="svg-subtitle">Session validation &amp; proxy</text>
+
+                <rect x="368" y="132" width="244" height="62" rx="6" class="svg-node"/>
+                <text x="384" y="157" class="svg-title">API &amp; Worker</text>
+                <text x="384" y="178" class="svg-subtitle">VM &amp; volume reconciliation</text>
+
+                <!-- Tunnel & Cloud API -->
+                <line x1="612" y1="87" x2="726" y2="87" class="svg-edge-accent" marker-end="url(#arr-accent)"/>
+                <text x="669" y="77" text-anchor="middle" class="svg-mono">SSH tunnel</text>
+
+                <line x1="612" y1="163" x2="726" y2="163" class="svg-edge svg-edge-dashed" marker-end="url(#arr-base)"/>
+                <text x="669" y="153" text-anchor="middle" class="svg-mono">Provider API</text>
+
+                <!-- Cloud VM -->
+                <rect x="728" y="16" width="236" height="196" rx="8" class="svg-panel"/>
+                <text x="744" y="40" class="svg-group-label">Cloud account</text>
+
+                <rect x="744" y="56" width="204" height="62" rx="6" class="svg-node"/>
+                <text x="760" y="81" class="svg-title">Workspace VM</text>
+                <text x="760" y="102" class="svg-subtitle">Selected OS &amp; image</text>
+
+                <rect x="744" y="132" width="204" height="62" rx="6" class="svg-node-emphasis"/>
+                <text x="760" y="157" class="svg-title">Persistent volume</text>
+                <text x="760" y="178" class="svg-subtitle">Project &amp; user state</text>
+              </svg>
+            </div>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <!-- WHAT IS MUNICODE -->
+    <section id="what-is-municode" class="band">
+      <div class="container">
+        <div class="section-head">
+          <h2>What is Municode</h2>
+          <p>
+            A standalone system for running remote coding environments without relying on a hosted workspace SaaS. All control-plane components—API, worker, gateway, web console, identity, database, and secret storage—run on infrastructure you operate.
+          </p>
+        </div>
+
+        <div class="capability-strip">
+          <article class="capability-cell">
+            <h3 class="capability-title">Control plane</h3>
+            <p class="capability-desc">Manages organizations, user authentication, encrypted provider credentials, machine plans, and workspace state.</p>
+          </article>
+
+          <article class="capability-cell">
+            <h3 class="capability-title">Custom VM images</h3>
+            <p class="capability-desc">Admins admit the VM images and machine sizes developers can select, with whatever OS and tooling a team needs.</p>
+          </article>
+
+          <article class="capability-cell">
+            <h3 class="capability-title">Persistent &amp; ephemeral VMs</h3>
+            <p class="capability-desc">Primary workspaces attach a persistent volume across boots; ephemeral VMs clone a target Git repository and commit onto a clean branch.</p>
+          </article>
+
+          <article class="capability-cell">
+            <h3 class="capability-title">Web console &amp; CLI</h3>
+            <p class="capability-desc">Launch browser IDE and preview sessions from the dashboard, or script workspace operations with <code>municode</code>.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- HOW IT WORKS -->
+    <section id="how-it-works" class="band">
+      <div class="container">
+        <div class="split-feature">
+          <figure class="diagram-figure">
+            <div class="diagram-canvas">
+              <svg viewBox="0 0 600 400" role="img" aria-labelledby="diag-lifecycle-title">
+                <title id="diag-lifecycle-title">Diagram showing session routing on top (Browser to Gateway and Worker to Workspace VM) and compute lifecycle on bottom (Running VM stops to delete compute while the Persistent Volume reattaches on the next start).</title>
+                <defs>
+                  <marker id="arr2-base" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                    <path d="M1 1.5L8.5 5L1 8.5Z" class="svg-arrow"/>
+                  </marker>
+                  <marker id="arr2-accent" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                    <path d="M1 1.5L8.5 5L1 8.5Z" class="svg-arrow-accent"/>
+                  </marker>
+                </defs>
+
+                <!-- Session Routing -->
+                <rect x="12" y="12" width="576" height="158" rx="8" class="svg-panel"/>
+                <text x="28" y="36" class="svg-group-label">Session routing</text>
+
+                <rect x="28" y="52" width="160" height="98" rx="6" class="svg-node"/>
+                <text x="42" y="78" class="svg-title">Browser</text>
+                <text x="42" y="100" class="svg-subtitle">Redeems one-time</text>
+                <text x="42" y="118" class="svg-subtitle">launch code</text>
+
+                <line x1="188" y1="101" x2="218" y2="101" class="svg-edge-accent" marker-end="url(#arr2-accent)"/>
+
+                <rect x="220" y="52" width="160" height="98" rx="6" class="svg-node-emphasis"/>
+                <text x="234" y="78" class="svg-title">Gateway &amp; Worker</text>
+                <text x="234" y="100" class="svg-subtitle">Authorizes cookie &amp;</text>
+                <text x="234" y="118" class="svg-subtitle">forwards over SSH</text>
+
+                <line x1="380" y1="101" x2="410" y2="101" class="svg-edge-accent" marker-end="url(#arr2-accent)"/>
+
+                <rect x="412" y="52" width="160" height="98" rx="6" class="svg-node"/>
+                <text x="426" y="78" class="svg-title">Workspace VM</text>
+                <text x="426" y="100" class="svg-subtitle">Loopback IDE &amp;</text>
+                <text x="426" y="118" class="svg-subtitle">preview services</text>
+
+                <!-- Compute & Volume Lifecycle -->
+                <rect x="12" y="188" width="576" height="200" rx="8" class="svg-panel"/>
+                <text x="28" y="212" class="svg-group-label">VM lifecycle</text>
+
+                <rect x="28" y="228" width="160" height="74" rx="6" class="svg-node"/>
+                <text x="42" y="254" class="svg-title">Running VM</text>
+                <text x="42" y="275" class="svg-subtitle">Generation N</text>
+
+                <line x1="188" y1="265" x2="218" y2="265" class="svg-edge" marker-end="url(#arr2-base)"/>
+
+                <rect x="220" y="228" width="160" height="74" rx="6" class="svg-node"/>
+                <text x="234" y="254" class="svg-title">Stopped</text>
+                <text x="234" y="275" class="svg-subtitle">VM deleted</text>
+
+                <line x1="380" y1="265" x2="410" y2="265" class="svg-edge" marker-end="url(#arr2-base)"/>
+
+                <rect x="412" y="228" width="160" height="74" rx="6" class="svg-node"/>
+                <text x="426" y="254" class="svg-title">Resumed VM</text>
+                <text x="426" y="275" class="svg-subtitle">Generation N + 1</text>
+
+                <rect x="28" y="324" width="544" height="44" rx="6" class="svg-node-emphasis"/>
+                <text x="44" y="351" class="svg-title">Persistent volume &mdash; retained while stopped and remounted on start</text>
+
+                <line x1="108" y1="302" x2="108" y2="324" class="svg-edge"/>
+                <line x1="492" y1="324" x2="492" y2="302" class="svg-edge" marker-end="url(#arr2-base)"/>
+              </svg>
+            </div>
+          </figure>
+
+          <div>
+            <h2>How it works</h2>
+            <p>
+              The API records desired state, the worker reconciles VMs and volumes in your cloud account, and the gateway proxies authenticated traffic to running workspaces.
+            </p>
+
+            <ul class="plain-list">
+              <li><strong>Authenticated launch:</strong> Opening an IDE or preview service mints a single-use launch URL on a dedicated subdomain, exchanged by the gateway for a host-only session cookie.</li>
+              <li><strong>Private SSH forwarding:</strong> The worker connects to each VM with a per-boot pinned host key and forwards traffic to loopback services inside the guest.</li>
+              <li><strong>Stop and resume:</strong> Stopping a workspace deletes the cloud VM (manually or after an idle timeout) and retains the volume; starting provisions a new VM generation—optionally with a different machine size or image—and remounts the volume.</li>
+              <li><strong>Scratch vs. persistent storage:</strong> Build outputs and package caches stay on the VM's local disk rather than the persistent volume.</li>
+            </ul>
+
+            <a class="text-action" href="docs/architecture.html">Detailed architecture and sequence diagrams &rarr;</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- HOW TO GET STARTED -->
+    <section id="get-started" class="band">
+      <div class="container">
+        <div class="section-head-center">
+          <h2>Get started</h2>
+          <p>
+            Bootstrap a control plane, connect to an existing installation, or build from source.
+          </p>
+        </div>
+
+        <div class="tabs">
+          <div class="tablist-wrap">
+            <div class="tablist" focusgroup="tablist nomemory" aria-label="Getting started paths">
+              <button type="button" id="tab-operator" aria-selected="true" focusgroupstart>Deploy control plane</button>
+              <button type="button" id="tab-developer" aria-selected="false">Use a workspace</button>
+              <button type="button" id="tab-source" aria-selected="false">Build from source</button>
+            </div>
+          </div>
+
+          <div class="tabpanel-stack">
+            <!-- TAB 1: DEPLOY -->
+            <div role="tabpanel" aria-labelledby="tab-operator">
+              <div class="tabpanel-card split-terminal">
+                <div class="code-frame">
+                  <div class="code-topbar">
+                    <span id="cmd-seed-plan">Shell</span>
+                    <button type="button" class="copy-btn" aria-label="Copy control-plane seed commands"><span class="copy-btn-text">Copy</span></button>
+                  </div>
+                  <pre role="region" aria-labelledby="cmd-seed-plan" tabindex="0"><code><span class="term-prompt">$ </span>workspaces seed plan \
+    --provider &lt;provider&gt; --region &lt;region&gt; --size &lt;size&gt; \
+    --dashboard-hostname console.example.com \
+    --api-hostname api.example.com \
+    --gateway-domain workspaces.example.com \
+    --release workspaces-vX.Y.Z \
+    --credential-file /protected/provider.token
+
+<span class="term-prompt">$ </span>workspaces seed apply &lt;operation&gt; \
+    --credential-file /protected/provider.token --approve &lt;digest&gt;
+
+<span class="term-prompt">$ </span>workspaces seed resume &lt;operation&gt; \
+    --credential-file /protected/provider.token \
+    --confirm-console-fingerprint SHA256:...</code></pre>
+                </div>
+
+                <div class="tile">
+                  <ol class="plain-steps">
+                    <li><code>seed plan</code> verifies the signed release archive and prints the provider's recurring cost quote before creating resources.</li>
+                    <li><code>seed apply</code> provisions the control-plane host once you pass the plan's approval digest.</li>
+                    <li><code>seed resume</code> pins the host's console SSH fingerprint, waits for DNS, starts the stack over HTTPS, and saves the one-time <code>/setup</code> token locally.</li>
+                  </ol>
+
+                  <div class="tile-footer">
+                    <a class="btn btn-primary btn-sm" href="docs/getting-started.html">Control-plane setup guide</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- TAB 2: DEVELOPER -->
+            <div role="tabpanel" aria-labelledby="tab-developer" hidden="until-found">
+              <div class="tabpanel-card split-terminal">
+                <div class="code-frame">
+                  <div class="code-topbar">
+                    <span id="cmd-dev-flow">Shell</span>
+                    <button type="button" class="copy-btn" aria-label="Copy developer workspace commands"><span class="copy-btn-text">Copy</span></button>
+                  </div>
+                  <pre role="region" aria-labelledby="cmd-dev-flow" tabindex="0"><code><span class="term-prompt">$ </span>municode config set-api-url https://api.example.com
+<span class="term-prompt">$ </span>municode login
+<span class="term-prompt">$ </span>municode workspaces selections
+
+<span class="term-prompt">$ </span>municode workspaces create --name dev \
+    --image &lt;image-id&gt; --profile Standard --plan &lt;plan-id&gt; --volume-gb 50
+
+<span class="term-prompt">$ </span>municode workspaces start &lt;workspace-id&gt;
+<span class="term-prompt">$ </span>municode workspaces open &lt;workspace-id&gt;
+<span class="term-prompt">$ </span>municode workspaces stop &lt;workspace-id&gt;</code></pre>
+                </div>
+
+                <div class="tile">
+                  <ol class="plain-steps">
+                    <li>Point the CLI at your installation's API origin and run <code>municode login</code> to approve access in your browser.</li>
+                    <li>Check admitted images and plans with <code>selections</code>, create a workspace, and run <code>start</code> to provision the VM.</li>
+                    <li>Use <code>open</code> to launch the browser session and <code>stop</code> to shut down the VM when done.</li>
+                  </ol>
+
+                  <div class="tile-footer">
+                    <a class="btn btn-primary btn-sm" href="docs/cli-and-workflows.html">CLI and workflows guide</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- TAB 3: SOURCE -->
+            <div role="tabpanel" aria-labelledby="tab-source" hidden="until-found">
+              <div class="tabpanel-card split-terminal">
+                <div class="code-frame">
+                  <div class="code-topbar">
+                    <span id="cmd-src-flow">Shell</span>
+                    <button type="button" class="copy-btn" aria-label="Copy source build and run commands"><span class="copy-btn-text">Copy</span></button>
+                  </div>
+                  <pre role="region" aria-labelledby="cmd-src-flow" tabindex="0"><code><span class="term-prompt">$ </span>git clone https://github.com/muniperez/municode.git &amp;&amp; cd municode
+<span class="term-prompt">$ </span>dotnet build Workspaces.slnx -c Release
+<span class="term-prompt">$ </span>dotnet test Workspaces.slnx -c Release --no-build
+
+<span class="term-prompt">$ </span>dotnet run --project src/Workspaces.Api -c Release --no-build -- migrate
+<span class="term-prompt">$ </span>dotnet run --project src/Workspaces.Api -c Release --no-build -- --urls http://127.0.0.1:5080</code></pre>
+                </div>
+
+                <div class="tile">
+                  <ol class="plain-steps">
+                    <li>Build <code>Workspaces.slnx</code> and run the synthetic test suites locally with the .NET 10 SDK and Python 3.11+.</li>
+                    <li>Run local SQLite migrations and start <code>Workspaces.Api</code> on <code>127.0.0.1:5080</code>.</li>
+                    <li>Check <code>/health</code> locally, or inspect the service boundaries and runtime contracts in the architecture docs.</li>
+                  </ol>
+
+                  <div class="tile-footer">
+                    <a class="btn btn-primary btn-sm" href="docs/architecture.html">Architecture documentation</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Documentation links -->
+        <div class="grid-3 mt-lg">
+          <article class="tile tile-interactive">
+            <h3>Control-plane setup</h3>
+            <p>Journaled <code>workspaces seed</code> workflow, DNS records, manual Docker Compose installation, and image admission.</p>
+            <div class="tile-footer">
+              <a class="text-action" href="docs/getting-started.html">Read setup guide &rarr;</a>
+            </div>
+          </article>
+
+          <article class="tile tile-interactive">
+            <h3>System architecture</h3>
+            <p>Component boundaries, internal network topology, VM enrollment and launch sequences, and storage modes.</p>
+            <div class="tile-footer">
+              <a class="text-action" href="docs/architecture.html">Read architecture docs &rarr;</a>
+            </div>
+          </article>
+
+          <article class="tile tile-interactive">
+            <h3>CLI and workflows</h3>
+            <p>Authentication, persistent workspace commands, resizing on next start, and ephemeral Git-backed VMs.</p>
+            <div class="tile-footer">
+              <a class="text-action" href="docs/cli-and-workflows.html">Read CLI reference &rarr;</a>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <strong>Municode</strong>
+        <span>&middot;</span>
+        <span>AGPL-3.0-only &amp; MPL-2.0</span>
+      </div>
+      <ul class="footer-links" role="list">
+        <li><a href="docs/getting-started.html">Setup</a></li>
+        <li><a href="docs/architecture.html">Architecture</a></li>
+        <li><a href="docs/cli-and-workflows.html">CLI &amp; Workflows</a></li>
+        <li><a href="https://github.com/muniperez/municode">GitHub</a></li>
+        <li><a href="https://github.com/muniperez/municode/releases">Releases</a></li>
+        <li><a href="https://github.com/muniperez/municode/blob/main/docs/licensing.md">Licensing</a></li>
+      </ul>
+    </div>
+  </footer>
+</body>
+</html>
