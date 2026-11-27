@@ -169,52 +169,67 @@ Download the exact `municode-vX.Y.Z` assets. Independently verify the
 `checksums.txt` entries and the source revision shown by the release, then
 extract the archive. Never install from a mutable `latest` URL.
 
-```sh
-sha256sum --check --strict checksums.txt
-tar -xzf municode-X.Y.Z-linux-any.tar.gz
-cd municode-X.Y.Z
-./install.sh --install-root /opt/municode/workspaces \
-  --secrets-dir /etc/municode/secrets
+Before installing, create `/etc/municode/config/operator.env` as root. Use your
+public names and one stable installation ID:
+
+```dotenv
+MUNICODE_INSTALLATION_ID=replace-with-stable-installation-id
+CONSOLE_HOSTNAME=console.example.test
+CONSOLE_URL=https://console.example.test
+API_HOSTNAME=api.example.test
+API_URL=https://api.example.test
+MUNICODE_GATEWAY_DOMAIN=workspaces.example.test
 ```
 
-The installer refuses existing destinations, rejects symlink payloads, verifies
-component digests and generates protected database, gateway and Kratos secrets,
-an OpenBao service certificate and a dedicated worker SSH key. Protect and back
-up `/etc/municode/secrets`; do not put it in the installation tree.
-Tagged releases also carry `checksums.txt.sigstore.json`; seed requires its exact
-Municode workflow identity before any provider mutation.
-The installer records the manifest's release tag and source revision in `.env`
-and records `local-build` trust by default. Seed supplies
-`--verified-release-tag` only after verifying the tag's Sigstore provenance.
+```sh
+sha256sum --check --strict checksums.txt
+bundle_sha256="$(sha256sum municode-X.Y.Z-linux-any.tar.gz | cut -d ' ' -f 1)"
+tar -xzf municode-X.Y.Z-linux-any.tar.gz
+cd municode-X.Y.Z
+sudo ./install.sh --bundle-sha256 "$bundle_sha256"
+```
+
+The installer rejects symlink payloads, verifies component digests and generates
+protected database, gateway and Kratos secrets, an OpenBao service certificate
+and a dedicated worker SSH key. Protect and back up `/etc/municode/secrets`;
+do not put it in the release tree. Reinstalling the exact active bundle is a
+no-op; use `municode deploy` to change releases.
+
+The read-only tree is `/opt/municode/releases/<release-id>`, with
+`/opt/municode/current` pointing to it. `/var/lib/municode/active-release.json`
+records its identity. Manual installs default to `local-build` trust; pass
+`--verified-release-tag municode-vX.Y.Z` only if you verified the checksum
+inventory's Sigstore signature and exact Municode release workflow identity.
+Seed always verifies that identity before any provider mutation.
 
 ## Configure and initialize
 
-Edit `/opt/municode/workspaces/.env`. Replace all `example.test` names and the
-installation ID, and retain image references from the exact release metadata. If a
-reverse proxy or firewall imposes another private address, retain the API,
-gateway and worker consistency described in [runtime setup](setup/runtime.md).
+The installer renders the release's read-only `.env` from the exact release
+values, generated installer values, and `operator.env`. Do not edit `.env`.
+Stage operator environment changes in `operator.env` for the next deploy. If a
+reverse proxy or firewall imposes another private address, retain the API, gateway
+and worker consistency described in [runtime setup](setup/runtime.md).
 
 Workspace policy lives at `/etc/municode/config/municode.json`, outside the
-release tree. The installer copies the bundled template there only if no
-policy file exists. To use a different absolute path, pass `--policy-file`
-to the installer; Compose reads the resulting `MUNICODE_POLICY_FILE` and
-requires the file to exist.
+release tree. If no policy exists, the installer copies the bundled template,
+or copies the input file supplied with `--policy-file`, into that location.
 
 Passkey sign-in is enabled by default. Kratos uses `CONSOLE_HOSTNAME` as the
 WebAuthn relying-party ID and `CONSOLE_URL` as its only allowed origin, so
 `CONSOLE_HOSTNAME` must be the bare host name of the HTTPS `CONSOLE_URL`.
 Passkeys are bound to that host name: changing the dashboard domain later
 invalidates every enrolled passkey, and users must sign in with their password
-and enroll again. Set `MUNICODE_PASSKEYS_ENABLED=false` in `.env` to turn
+and enroll again. Set `MUNICODE_PASSKEYS_ENABLED=false` in `operator.env` to turn
 passkeys off for both Kratos and the dashboard; password sign-in remains
 available either way.
 
+Use `/usr/local/sbin/municode-compose` as root for manual Compose operations.
+It resolves the active release and uses the fixed Compose project `municode`.
 Start only PostgreSQL and OpenBao first:
 
 ```sh
-cd /opt/municode/workspaces
-docker compose up -d postgres
-docker compose up -d openbao
+municode-compose up -d postgres
+municode-compose up -d openbao
 ```
 
 Initialize and unseal OpenBao with your approved offline ceremony. This manual
@@ -225,7 +240,7 @@ mount and AppRole:
 
 ```sh
 OPENBAO_ROOT_TOKEN_FILE=/protected/root-token \
-  docker compose --profile maintenance run --rm openbao-configure
+  municode-compose --profile maintenance run --rm openbao-configure
 ```
 
 The root token can then be removed. Restart OpenBao after a host reboot, supply
@@ -238,8 +253,8 @@ Compose volume.
 Run the database jobs and start the remaining services:
 
 ```sh
-docker compose up database-initialize kratos-migrate api-migrate
-docker compose up -d
+municode-compose up database-initialize kratos-migrate api-migrate
+municode-compose up -d
 curl --fail https://api.example.test/health
 ```
 
@@ -250,7 +265,7 @@ the Compose service invocation:
 
 ```sh
 printf '%s\n' '{"installationId":"replace-with-installation-id","operationId":"first-operator"}' |
-  docker compose --profile maintenance run --rm --no-TTY api-bootstrap \
+  municode-compose --profile maintenance run --rm --no-TTY api-bootstrap \
     prepare --stdin --output-file /run/municode-bootstrap/setup-token
 ```
 
@@ -298,7 +313,7 @@ Municode.Api maintenance enter
 Municode.Api maintenance status --json
 ```
 
-For the Compose bundle, use `docker compose run --rm --no-deps api-migrate`,
+For the Compose bundle, use `municode-compose run --rm --no-deps api-migrate`,
 passing the DLL path from that service's `command` followed by the maintenance arguments.
 
 Keep the worker running until `enabled` is `true` and `nonterminalOperations`

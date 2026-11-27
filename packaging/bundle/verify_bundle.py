@@ -59,8 +59,9 @@ def verify_deploy_contract(root, manifest):
         fail("Manifest environment contract differs from env-contract.json.")
 
 
-def main():
-    root = Path(__file__).resolve().parent
+def main(root=None):
+    if root is None:
+        root = Path(__file__).resolve().parent
     for entry in root.rglob("*"):
         if entry.is_symlink():
             fail(f"Symlinks are forbidden in a release: {entry}")

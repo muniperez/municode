@@ -255,7 +255,7 @@
         <section id="manual-host">
           <h2>2. Manual installation with Docker Compose</h2>
           <p>
-            On an existing server with Docker Engine and Compose v2, verify the release checksums and run <code>install.sh</code>:
+            On an existing server with Docker Engine and Compose v2, first set the public hostnames and installation ID in <code>/etc/municode/config/operator.env</code> as shown in the operator guide. Then run:
           </p>
 
           <div class="code-frame">
@@ -264,13 +264,13 @@
               <button type="button" class="copy-btn" aria-label="Copy manual host installation commands"><span class="copy-btn-text">Copy</span></button>
             </div>
             <pre role="region" aria-labelledby="manual-install-cmds" tabindex="0"><code><span class="term-prompt">$ </span>sha256sum --check --strict checksums.txt
+<span class="term-prompt">$ </span>bundle_sha256="$(sha256sum municode-X.Y.Z-linux-any.tar.gz | cut -d ' ' -f 1)"
 <span class="term-prompt">$ </span>tar -xzf municode-X.Y.Z-linux-any.tar.gz &amp;&amp; cd municode-X.Y.Z
-<span class="term-prompt">$ </span>./install.sh --install-root /opt/municode/workspaces \
-    --secrets-dir /etc/municode/secrets
-<span class="term-prompt">$ </span>cd /opt/municode/workspaces &amp;&amp; docker compose up -d postgres openbao
+<span class="term-prompt">$ </span>sudo ./install.sh --bundle-sha256 "$bundle_sha256"
+<span class="term-prompt">$ </span>sudo municode-compose up -d postgres openbao
 <span class="term-prompt">$ </span>OPENBAO_ROOT_TOKEN_FILE=/protected/root-token \
-    docker compose --profile maintenance run --rm openbao-configure
-<span class="term-prompt">$ </span>docker compose up database-initialize kratos-migrate api-migrate &amp;&amp; docker compose up -d</code></pre>
+    sudo --preserve-env=OPENBAO_ROOT_TOKEN_FILE municode-compose --profile maintenance run --rm openbao-configure
+<span class="term-prompt">$ </span>sudo municode-compose up database-initialize kratos-migrate api-migrate &amp;&amp; sudo municode-compose up -d</code></pre>
           </div>
           <p>
             See <a href="https://github.com/muniperez/municode/blob/main/docs/operator.md"><code>docs/operator.md</code></a> for secret backup custody, first-owner bootstrap token generation, and upgrade steps.

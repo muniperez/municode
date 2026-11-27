@@ -92,14 +92,14 @@ jobs:
             help seed | grep -F 'municode seed plan'
           mkdir -p .local/artifacts/install
           .local/artifacts/package/municode-0.0.0-ci/install.sh \
-            --install-root "$PWD/.local/artifacts/install/release" \
-            --secrets-dir "$PWD/.local/artifacts/install/secrets" \
-            --policy-file "$PWD/.local/artifacts/install/config/municode.json"
+            --host-root "$PWD/.local/artifacts/install" \
+            --bundle-sha256 "$(sha256sum .local/artifacts/package/municode-0.0.0-ci-linux-x64.tar.gz | cut -d ' ' -f 1)"
           jq -e '.product == "municode"' .local/artifacts/package/release-manifest.json
           dashboard_probe="$PWD/scripts/delivery/probe_dashboard.py"
-          cd .local/artifacts/install/release
+          release="$(readlink -e .local/artifacts/install/opt/municode/current)"
+          overlay="$PWD/.local/artifacts/install/dashboard-probe.yml"
           project="runtime-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          cat > dashboard-probe.yml <<'YAML'
+          cat > "$overlay" <<'YAML'
           services:
             caddy:
               environment:
@@ -113,8 +113,8 @@ jobs:
                 - private
           YAML
           compose() {
-            docker compose --project-name "$project" --env-file .env \
-              -f compose.yml -f dashboard-probe.yml "$@"
+            docker compose --project-name "$project" --project-directory "$release" \
+              --env-file "$release/.env" -f "$release/compose.yml" -f "$overlay" "$@"
           }
           trap 'compose down --volumes --remove-orphans' EXIT
           for service in api-migrate api worker workspace-gateway; do

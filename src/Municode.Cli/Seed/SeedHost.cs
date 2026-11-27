@@ -171,8 +171,7 @@ install -d -m 0700 __REMOTE__
             + " && python3 -B \"$bundle_root/verify_bundle.py\""
             + " && \"$bundle_root/seed-start.sh\" " + config
             + " --release-root \"$bundle_root\""
-            + " --install-root /opt/municode/workspaces"
-            + " --secrets-dir /etc/municode/secrets"
+            + " --bundle-sha256 " + Quote(state.Plan.Release.BundleSha256)
             + " --setup-token-output " + Quote(remote + "/setup-token");
         await RequireSshAsync(state, directory, command, cancellationToken);
         await DownloadAsync(state, directory, remote + "/setup-token", setupToken, cancellationToken);

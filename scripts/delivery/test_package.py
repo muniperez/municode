@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: MPL-2.0
+import hashlib
 import http.client
 import json
 import os
@@ -423,33 +424,53 @@ class PackageTests(unittest.TestCase):
         with tarfile.open(archive, "r:gz") as bundle:
             bundle.extractall(extracted, filter="data")
         release_root = next(extracted.iterdir())
-        install_root = self.root / "installed"
-        secrets = self.root / "secrets"
-        policy = self.root / "config" / "municode.json"
+        host = self.root / "host"
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        release_id = f"local-{'a' * 12}-{digest[:12]}"
+        install_root = host / "opt/municode/releases" / release_id
+        current = host / "opt/municode/current"
+        state = host / "var/lib/municode"
+        secrets = host / "etc/municode/secrets"
+        policy = host / "etc/municode/config/municode.json"
+        operator = policy.with_name("operator.env")
+        operator.parent.mkdir(parents=True)
+        operator.write_text("MUNICODE_INSTALLATION_ID=synthetic-installation\n"
+                            "CONSOLE_HOSTNAME=console.example.com\n")
+        command = [str(release_root / "install.sh"), "--host-root", str(host),
+                   "--bundle-sha256", digest]
         subprocess.run(
-            [
-                str(release_root / "install.sh"),
-                "--install-root",
-                str(install_root),
-                "--secrets-dir",
-                str(secrets),
-                "--policy-file",
-                str(policy),
-            ],
+            command,
             check=True,
             capture_output=True,
             text=True,
         )
+        self.assertTrue(current.is_symlink())
+        self.assertEqual(current.readlink(), Path("releases") / release_id)
+        self.assertTrue(os.access(host / "usr/local/sbin/municode-compose", os.X_OK))
+        self.assertTrue((state / "deploy.lock").is_file())
+        self.assertTrue((state / "deploys").is_dir())
+        self.assertTrue((state / "backups").is_dir())
+        active = state / "active-release.json"
+        record = json.loads(active.read_text())
+        self.assertEqual(record, {
+            "releaseId": release_id, "tag": "municode-v0.0.0-test", "sourceRevision": "a" * 40,
+            "bundleSha256": digest, "trust": "local-build",
+            "activatedAt": record["activatedAt"], "previous": None,
+        })
+        self.assertTrue(all(not path.stat().st_mode & 0o222
+                            for path in (install_root, *install_root.rglob("*"))))
         self.assertTrue((install_root / "runtime" / "api" / "Municode.Api.dll").is_file())
         self.assertTrue((secrets / "workspace-gateway-credential").is_file())
         self.assertTrue((secrets / "ssh" / "worker-key").is_file())
         self.assertTrue((secrets / "openbao-approle" / "role-id").is_file())
         self.assertEqual(secrets.stat().st_mode & 0o777, 0o700)
-        self.assertEqual((install_root / ".env").stat().st_mode & 0o777, 0o600)
+        self.assertEqual((install_root / ".env").stat().st_mode & 0o777, 0o400)
         env = (install_root / ".env").read_text()
         self.assertNotIn("synthetic-contract", env)
         self.assertEqual(env.count("MUNICODE_SECRETS_DIR="), 1)
         self.assertIn(f"MUNICODE_POLICY_FILE={policy}", env.splitlines())
+        self.assertIn("MUNICODE_INSTALLATION_ID=synthetic-installation", env.splitlines())
+        self.assertIn("CONSOLE_HOSTNAME=console.example.com", env.splitlines())
         self.assertIn("MUNICODE_RELEASE_TAG=municode-v0.0.0-test", env.splitlines())
         self.assertIn(f"MUNICODE_RELEASE_SOURCE_REVISION={'a' * 40}", env.splitlines())
         self.assertIn("MUNICODE_RELEASE_TRUST=local-build", env.splitlines())
@@ -468,15 +489,15 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(kratos_env.stat().st_mode & 0o7777, 0o600)
 
         policy.write_text('{"operator":true}\n')
-        second_install = self.root / "second-install"
-        subprocess.run(
-            [str(release_root / "install.sh"), "--install-root", str(second_install),
-             "--secrets-dir", str(self.root / "second-secrets"), "--policy-file", str(policy),
-             "--verified-release-tag", "municode-v0.0.0-test"],
-            check=True, capture_output=True, text=True,
-        )
+        operator.write_text("CONSOLE_HOSTNAME=edited.example.com\n")
+        protected = (active, kratos_env, install_root / ".env", policy, operator)
+        original = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in protected}
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        rejected = subprocess.run(command[:-1] + ["f" * 64], capture_output=True, text=True)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("cannot upgrade or repair", rejected.stderr)
+        self.assertEqual({path: (path.read_bytes(), path.stat().st_mtime_ns) for path in protected}, original)
         self.assertEqual(policy.read_text(), '{"operator":true}\n')
-        self.assertIn("MUNICODE_RELEASE_TRUST=github-sigstore", (second_install / ".env").read_text().splitlines())
 
         with (release_root / ".env.example").open("a") as template:
             template.write("UNKNOWN_KEY=not-in-contract\n")
