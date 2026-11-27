@@ -342,7 +342,18 @@ with a fake `docker` like `scripts/delivery/test_seed_start.py`. Its commands:
   so a crash between a side effect and its outcome record is treated
   pessimistically.
 - `rollback --plan plan.json [--restore-database]`: see below.
-- `status`: prints the state file and the unit state.
+- `status --operation <op>`: returns `state` and `unit` (`activeState`,
+  `subState`) without taking the deploy lock.
+
+`run` accepts the SHA-256 of canonical preflight `digestInputs` as `--approve`
+or the plan's `approvalDigest`. `--drain-timeout` is in seconds.
+The CLI starts `run` and `rollback` with `systemd-run --collect --pipe` and
+adds `--unseal-key-stdin` only if it can send a newline-terminated key.
+Both commands return `state`, plus `blockers` on failure (exit 1).
+After an interrupted pre-open apply, `run` rolls back and reports the outcome;
+plan a new operation to try again. After `trafficMayHaveOpened`, `run` can
+retry unfinished steps without restoring. `openAt` in the journal is the exact
+timestamp required for a post-open rollback.
 
 Logs go to `deploys/<op>/log` and contain only step names, exit codes and fixed
 messages. Container output is never copied (gateway logs can contain bearer
