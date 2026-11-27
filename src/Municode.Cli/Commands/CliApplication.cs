@@ -209,7 +209,8 @@ public sealed partial class CliApplication
                 _console.WriteLine("Usage: municode token set <token>");
                 return CliExitCodes.Success;
             case "workspaces":
-            case var workspace when workspace.StartsWith("workspaces ", StringComparison.Ordinal):
+            case var workspace when workspace.StartsWith("workspaces ", StringComparison.Ordinal)
+                && workspace != "workspaces seed" && !workspace.StartsWith("workspaces seed ", StringComparison.Ordinal):
                 PrintWorkspaceHelp();
                 return CliExitCodes.Success;
             case "seed":
