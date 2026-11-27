@@ -35,7 +35,7 @@ class PageInspector(HTMLParser):
         if tag == "h1":
             self.h1_count += 1
         elif tag == "meta" and attr_map.get("name") == "color-scheme":
-            if attr_map.get("content") == "light dark":
+            if attr_map.get("content") in ("dark", "light dark"):
                 self.has_color_scheme_meta = True
         elif tag == "a" and attr_map.get("href"):
             self.links.append((attr_map["href"] or "", line))

@@ -1,5 +1,5 @@
-// Progressive enhancement for responsive popover nav, two-state color-scheme toggle,
-// accessible tabs (with hidden="until-found" + beforematch sync), and code copy buttons.
+// Progressive enhancement for responsive popover nav, accessible tabs
+// (with hidden="until-found" + beforematch sync), and clean command copy buttons.
 
 if (typeof HTMLElement !== "undefined" && !Object.hasOwn(HTMLElement.prototype, "popover")) {
   import("https://unpkg.com/@oddbird/popover-polyfill@0.6.1/dist/popover.min.js").catch(() => {});
@@ -58,51 +58,6 @@ function initNavbar() {
   syncLayout();
 }
 
-function initThemeToggle() {
-  const meta = document.querySelector('meta[name="color-scheme"]');
-  const toggle = document.querySelector(".theme-toggle");
-  if (!meta || !toggle) return;
-
-  const getStored = () => {
-    try {
-      const val = localStorage.getItem("color-scheme");
-      return val === "light" || val === "dark" ? val : null;
-    } catch {
-      return null;
-    }
-  };
-
-  toggle.addEventListener("click", () => {
-    const systemDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const systemScheme = systemDark ? "dark" : "light";
-    const stored = getStored();
-    const currentlyRendered = stored ?? systemScheme;
-    const target = currentlyRendered === "dark" ? "light" : "dark";
-
-    if (target === systemScheme) {
-      try {
-        localStorage.removeItem("color-scheme");
-      } catch {
-        // Storage unavailable
-      }
-      meta.content = "light dark";
-    } else {
-      try {
-        localStorage.setItem("color-scheme", target);
-      } catch {
-        // Storage unavailable
-      }
-      meta.content = target;
-    }
-  });
-
-  window.addEventListener("storage", (event) => {
-    if (event.key !== "color-scheme") return;
-    const val = event.newValue;
-    meta.content = val === "light" || val === "dark" ? val : "light dark";
-  });
-}
-
 function initTabs() {
   for (const container of document.querySelectorAll(".tabs")) {
     const tablist = container.querySelector('[focusgroup~="tablist"], [role="tablist"]');
@@ -147,7 +102,6 @@ function initTabs() {
       }
     };
 
-    // Sync initial state without changing focus
     const initial = tabs.find((tab) => tab.getAttribute("aria-selected") === "true") ?? tabs[0];
     selectTab(initial, false);
 
@@ -160,7 +114,6 @@ function initTabs() {
       });
     }
 
-    // Keyboard arrow support when native focusgroup is unavailable and polyfill hasn't loaded
     tablist.addEventListener("keydown", (event) => {
       if (Object.hasOwn(HTMLElement.prototype, "focusGroup")) return;
       const currentIndex = tabs.indexOf(document.activeElement);
@@ -183,25 +136,23 @@ function initTabs() {
         if (tabs[index]) selectTab(tabs[index], false);
       });
     });
-
-    // Fallback scrollability affordance when scroll-driven animations are unsupported
-    if (typeof CSS !== "undefined" && !CSS.supports("animation-timeline", "scroll()") && typeof IntersectionObserver !== "undefined") {
-      const first = tabs[0];
-      const last = tabs[tabs.length - 1];
-      if (first && last) {
-        const io = new IntersectionObserver(
-          (entries) => {
-            for (const { target, intersectionRatio } of entries) {
-              tablist.classList.toggle(target === first ? "more-start" : "more-end", intersectionRatio < 1);
-            }
-          },
-          { root: tablist, threshold: 1, rootMargin: "1px" }
-        );
-        io.observe(first);
-        io.observe(last);
-      }
-    }
   }
+}
+
+function extractCommands(codeElement) {
+  const explicit = codeElement.dataset.copy;
+  if (explicit) return explicit.trim();
+
+  const clone = codeElement.cloneNode(true);
+  for (const ignored of clone.querySelectorAll(".term-prompt, .term-out, .term-ok")) {
+    ignored.remove();
+  }
+  return clone.textContent
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0)
+    .join("\n")
+    .trim();
 }
 
 function initCopyButtons() {
@@ -214,12 +165,12 @@ function initCopyButtons() {
       if (!code || !navigator.clipboard) return;
 
       try {
-        await navigator.clipboard.writeText(code.textContent.trim());
+        await navigator.clipboard.writeText(extractCommands(code));
         const label = button.querySelector(".copy-btn-text");
         const previous = label ? label.textContent : "";
         button.dataset.copied = "true";
         if (label) label.textContent = "Copied";
-        if (liveRegion) liveRegion.textContent = "Copied command to clipboard.";
+        if (liveRegion) liveRegion.textContent = "Copied commands to clipboard.";
 
         window.setTimeout(() => {
           button.dataset.copied = "false";
@@ -233,6 +184,5 @@ function initCopyButtons() {
 }
 
 initNavbar();
-initThemeToggle();
 initTabs();
 initCopyButtons();

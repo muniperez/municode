@@ -3,16 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="color-scheme" content="light dark">
-  <script>
-    try {
-      const s = localStorage.getItem("color-scheme");
-      if (s === "light" || s === "dark") {
-        document.querySelector('meta[name="color-scheme"]').content = s;
-      }
-    } catch {}
-  </script>
-  <meta name="description" content="Developer guide for Municode: CLI authentication, persistent workspace lifecycle, resizing VMs, ephemeral Git sandboxes, and coding agents.">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Municode CLI and workflow reference: authentication, persistent workspace commands, VM resizing, and ephemeral Git-backed VMs.">
   <title>CLI &amp; Workflows | Municode Docs</title>
   <link rel="stylesheet" href="../styles/site.css">
   <script type="module" src="../scripts/site.js"></script>
@@ -25,54 +17,37 @@
     <div class="header-inner">
       <a class="site-brand" href="../index.html">
         <span class="brand-mark" aria-hidden="true">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
             <rect x="2" y="2.5" width="12" height="2.5" rx="1" fill="currentColor"/>
-            <rect x="2" y="6.75" width="12" height="2.5" rx="1" fill="currentColor" opacity="0.8"/>
-            <rect x="2" y="11" width="12" height="2.5" rx="1" fill="currentColor" opacity="0.55"/>
+            <rect x="2" y="6.75" width="12" height="2.5" rx="1" fill="currentColor" opacity="0.78"/>
+            <rect x="2" y="11" width="12" height="2.5" rx="1" fill="currentColor" opacity="0.5"/>
           </svg>
         </span>
         <span>Municode</span>
-        <span class="brand-tag">Docs</span>
       </a>
 
-      <div class="header-actions">
-        <nav class="site-nav" aria-label="Primary">
-          <button
-            class="menu-button"
-            type="button"
-            popovertarget="site-menu"
-            popovertargetaction="toggle"
-            aria-controls="site-menu"
-          >
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-            </svg>
-            <span>Menu</span>
-          </button>
-
-          <ul id="site-menu" class="site-menu" popover="auto">
-            <li><a href="../index.html">Overview</a></li>
-            <li><a href="getting-started.html">Setup</a></li>
-            <li><a href="architecture.html">Architecture</a></li>
-            <li><a href="cli-and-workflows.html" aria-current="page">CLI &amp; Guides</a></li>
-            <li><a href="https://github.com/muniperez/municode">GitHub</a></li>
-          </ul>
-        </nav>
-
-        <button type="button" class="theme-toggle" aria-label="Switch color theme">
-          <span class="theme-option-dark" aria-hidden="true">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-            </svg>
-          </span>
-          <span class="theme-option-light" aria-hidden="true">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="4.5" stroke="currentColor" stroke-width="1.8"/>
-              <path d="M12 2v2.5M12 19.5V22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M2 12h2.5M19.5 12H22M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-            </svg>
-          </span>
+      <nav class="site-nav" aria-label="Primary">
+        <button
+          class="menu-button"
+          type="button"
+          popovertarget="site-menu"
+          popovertargetaction="toggle"
+          aria-controls="site-menu"
+        >
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+          <span>Menu</span>
         </button>
-      </div>
+
+        <ul id="site-menu" class="site-menu" popover="auto">
+          <li><a href="../index.html">Overview</a></li>
+          <li><a href="getting-started.html">Setup</a></li>
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="cli-and-workflows.html" aria-current="page">CLI &amp; Workflows</a></li>
+          <li><a href="https://github.com/muniperez/municode">GitHub</a></li>
+        </ul>
+      </nav>
     </div>
   </header>
 
@@ -82,26 +57,25 @@
         <nav class="docs-nav" aria-label="Documentation">
           <p class="docs-nav-heading">Documentation</p>
           <ul class="docs-nav-list" role="list">
-            <li><a href="getting-started.html">Setup Guide</a></li>
-            <li><a href="architecture.html">System Architecture</a></li>
-            <li><a href="cli-and-workflows.html" aria-current="page">CLI &amp; Workflows</a></li>
+            <li><a href="getting-started.html">Control-plane setup</a></li>
+            <li><a href="architecture.html">System architecture</a></li>
+            <li><a href="cli-and-workflows.html" aria-current="page">CLI &amp; workflows</a></li>
           </ul>
-          <p class="docs-nav-heading">On This Page</p>
+          <p class="docs-nav-heading">On this page</p>
           <ul class="docs-nav-list" role="list">
-            <li><a href="#cli-auth">1. CLI Setup &amp; Login</a></li>
-            <li><a href="#retained-lifecycle">2. Workspace Lifecycle</a></li>
-            <li><a href="#ephemeral-git">3. Ephemeral Git VMs</a></li>
-            <li><a href="#faq">4. Common Questions</a></li>
+            <li><a href="#cli-auth">CLI setup &amp; login</a></li>
+            <li><a href="#retained-lifecycle">Persistent workspaces</a></li>
+            <li><a href="#ephemeral-git">Ephemeral Git VMs</a></li>
+            <li><a href="#faq">Notes</a></li>
           </ul>
         </nav>
       </aside>
 
       <article class="docs-content">
         <header>
-          <span class="eyebrow">Developer Guide</span>
-          <h1 id="main-heading" tabindex="-1">CLI &amp; Developer Workflows</h1>
+          <h1 id="main-heading" tabindex="-1">CLI and workflows</h1>
           <p class="hero-lead">
-            Manage cloud workspaces from the web console or the standalone <code>municode</code> CLI (also aliased as <code>workspaces</code>). Every workspace command supports <code>--json</code> for scripting.
+            Manage workspaces from the web console or the standalone <code>municode</code> CLI (aliased as <code>workspaces</code>). All workspace commands accept <code>--json</code>.
           </p>
         </header>
 
@@ -109,58 +83,52 @@
         <section id="cli-auth">
           <h2>1. CLI setup &amp; authentication</h2>
           <p>
-            Install the self-contained binary for your workstation OS onto your <code>PATH</code>, set your team's HTTPS API URL, and log in through your browser:
+            Place the CLI binary for your OS on your <code>PATH</code>, configure your installation's HTTPS API URL, and authenticate in your browser:
           </p>
 
           <div class="code-frame">
             <div class="code-topbar">
-              <span id="cli-auth-cmds">shell</span>
+              <span id="cli-auth-cmds">Shell</span>
               <button type="button" class="copy-btn" aria-label="Copy CLI configuration and login commands"><span class="copy-btn-text">Copy</span></button>
             </div>
-            <pre role="region" aria-labelledby="cli-auth-cmds" tabindex="0"><code>municode config set-api-url https://api.example.com
-municode login</code></pre>
+            <pre role="region" aria-labelledby="cli-auth-cmds" tabindex="0"><code><span class="term-prompt">$ </span>municode config set-api-url https://api.example.com
+<span class="term-prompt">$ </span>municode login</code></pre>
           </div>
           <p>
-            For headless scripts, supply <code>MUNICODE_API_URL</code> and a scoped API key via <code>MUNICODE_TOKEN</code> (using <code>workspaces:read</code> for inspection and <code>workspaces:write</code> only when starting, stopping, or mutating workspaces).
+            For scripts, set <code>MUNICODE_API_URL</code> and pass a scoped key via <code>MUNICODE_TOKEN</code> (<code>workspaces:read</code> for status queries; <code>workspaces:write</code> for mutations).
           </p>
         </section>
 
         <!-- SECTION 2: RETAINED WORKSPACES -->
         <section id="retained-lifecycle">
-          <h2>2. Persistent workspace lifecycle</h2>
+          <h2>2. Persistent workspaces</h2>
           <p>
-            <code>create</code> registers a workspace in a stopped state—compute only starts when you run <code>start</code>. Stopping a workspace destroys the VM so compute billing stops while keeping your persistent volume intact.
+            <code>create</code> allocates the workspace record in a stopped state; compute only starts on <code>start</code>. <code>stop</code> deletes the cloud VM and retains the primary volume.
           </p>
 
           <div class="code-frame">
             <div class="code-topbar">
-              <span id="cli-retained-cmds">shell</span>
+              <span id="cli-retained-cmds">Shell</span>
               <button type="button" class="copy-btn" aria-label="Copy workspace lifecycle commands"><span class="copy-btn-text">Copy</span></button>
             </div>
-            <pre role="region" aria-labelledby="cli-retained-cmds" tabindex="0"><code># List available VM images, profiles, and plans in your organization
-municode workspaces selections
+            <pre role="region" aria-labelledby="cli-retained-cmds" tabindex="0"><code><span class="term-prompt">$ </span>municode workspaces selections
+<span class="term-prompt">$ </span>municode workspaces create \
+    --name backend-dev \
+    --image &lt;image-id&gt; \
+    --profile Standard \
+    --plan &lt;plan-id&gt; \
+    --volume-gb 60 \
+    --idle-timeout 90
+<span class="term-prompt">$ </span>municode workspaces start &lt;workspace-id&gt;
+<span class="term-prompt">$ </span>municode workspaces open &lt;workspace-id&gt;
 
-# Create a workspace with a 60 GB persistent volume and 90-minute idle auto-stop
-municode workspaces create \
-  --name backend-dev \
-  --image &lt;image-id&gt; \
-  --profile Standard \
-  --plan &lt;plan-id&gt; \
-  --volume-gb 60 \
-  --idle-timeout 90
+<span class="term-out"># Queue a different plan or image for the next start:</span>
+<span class="term-prompt">$ </span>municode workspaces resize-next-start &lt;workspace-id&gt; \
+    --generation 1 --image &lt;image-id&gt; --profile Heavy --plan &lt;larger-plan-id&gt;
 
-# Start the VM, check status, and open the workspace in your browser
-municode workspaces start &lt;workspace-id&gt;
-municode workspaces status &lt;workspace-id&gt;
-municode workspaces open &lt;workspace-id&gt;
-
-# Queue a larger VM plan or updated image for the next start
-municode workspaces resize-next-start &lt;workspace-id&gt; \
-  --generation 1 --image &lt;image-id&gt; --profile Heavy --plan &lt;larger-plan-id&gt;
-
-# Stop compute (retains your volume) or permanently delete the workspace
-municode workspaces stop &lt;workspace-id&gt;
-municode workspaces delete &lt;workspace-id&gt; --confirm-permanent-deletion</code></pre>
+<span class="term-out"># Stop compute or permanently delete the workspace and its volume:</span>
+<span class="term-prompt">$ </span>municode workspaces stop &lt;workspace-id&gt;
+<span class="term-prompt">$ </span>municode workspaces delete &lt;workspace-id&gt; --confirm-permanent-deletion</code></pre>
           </div>
         </section>
 
@@ -168,59 +136,59 @@ municode workspaces delete &lt;workspace-id&gt; --confirm-permanent-deletion</co
         <section id="ephemeral-git">
           <h2>3. Ephemeral Git-backed VMs</h2>
           <p>
-            When you want an isolated machine for a branch, experiment, or parallel coding-agent run, launch an ephemeral VM. It attaches no persistent volume, clones your target repository and commit onto a fresh work branch, and blocks shutdown in <code>awaiting_git_save</code> if unpushed commits would be lost.
+            Ephemeral VMs attach no persistent volume. They clone an authorized repository and commit onto a per-generation branch and enter <code>awaiting_git_save</code> on stop if unpushed commits remain.
           </p>
 
           <div class="code-frame">
             <div class="code-topbar">
-              <span id="cli-ephemeral-cmds">shell</span>
+              <span id="cli-ephemeral-cmds">Shell</span>
               <button type="button" class="copy-btn" aria-label="Copy ephemeral VM launch command"><span class="copy-btn-text">Copy</span></button>
             </div>
-            <pre role="region" aria-labelledby="cli-ephemeral-cmds" tabindex="0"><code>municode workspaces launch &lt;workspace-id&gt; \
-  --image &lt;image-id&gt; \
-  --profile Standard \
-  --plan &lt;plan-id&gt; \
-  --repository https://github.com/org/repo.git \
-  --base-ref refs/heads/main \
-  --base-commit &lt;commit-sha&gt; \
-  --push-authorized \
-  --acknowledge-ignored-data-loss</code></pre>
+            <pre role="region" aria-labelledby="cli-ephemeral-cmds" tabindex="0"><code><span class="term-prompt">$ </span>municode workspaces launch &lt;workspace-id&gt; \
+    --image &lt;image-id&gt; \
+    --profile Standard \
+    --plan &lt;plan-id&gt; \
+    --repository https://github.com/org/repo.git \
+    --base-ref refs/heads/main \
+    --base-commit &lt;commit-sha&gt; \
+    --push-authorized \
+    --acknowledge-ignored-data-loss</code></pre>
           </div>
         </section>
 
-        <!-- SECTION 4: FAQ -->
+        <!-- SECTION 4: NOTES -->
         <section id="faq" class="accordion" aria-labelledby="faq-heading">
-          <h2 id="faq-heading">4. Common questions</h2>
+          <h2 id="faq-heading">4. Operational notes</h2>
 
           <details>
-            <summary>Can we customize the OS, SDKs, and coding agents in our workspaces?</summary>
+            <summary>Customizing OS images, SDKs, and coding agents</summary>
             <div class="accordion-body">
               <p>
-                Yes. Your organization registers the VM images it wants to run—choosing the operating system, language toolchains, and coding agents (such as Codex, Claude Code, GitHub Copilot CLI, Antigravity, or Muse Code). Updating to a new image preserves your persistent workspace volume across starts.
+                Organizations register the VM images they want to admit, choosing the operating system, language toolchains, and coding agents. Moving a persistent workspace to a newer image via <code>resize-next-start</code> keeps the existing volume attached on the next boot.
               </p>
             </div>
           </details>
 
           <details>
-            <summary>How do live web previews work for apps running inside a VM?</summary>
+            <summary>Application preview URLs</summary>
             <div class="accordion-body">
               <p>
-                Named preview ports configured on your installation can be launched directly from the console or API. Each preview receives its own authenticated subdomain separate from the workspace IDE so cookies, storage, and WebSockets never collide.
+                Named loopback preview ports configured on the worker can be launched from the console or API. Each preview service runs on its own subdomain separate from the workspace IDE.
               </p>
             </div>
           </details>
 
           <details>
-            <summary>What happens when a workspace hits its idle timeout?</summary>
+            <summary>Idle timeouts</summary>
             <div class="accordion-body">
               <p>
-                After the configured period without active input or task leases, Municode cleanly stops the VM and releases cloud compute while keeping your persistent volume intact. You can adjust the timeout per workspace with <code>municode workspaces idle-timeout</code> or pass <code>--keep-running</code> when needed.
+                After the configured window without active input or task leases, the worker stops the VM and retains the persistent volume. Configure per-workspace timeouts with <code>municode workspaces idle-timeout</code> or disable idle stop with <code>--keep-running</code>.
               </p>
             </div>
           </details>
 
           <p class="mt-lg">
-            For additional details, see <a href="https://github.com/muniperez/municode/blob/main/docs/user.md"><code>docs/user.md</code></a> in the repository.
+            See <a href="https://github.com/muniperez/municode/blob/main/docs/user.md"><code>docs/user.md</code></a> in the repository for additional details.
           </p>
         </section>
       </article>
@@ -229,14 +197,16 @@ municode workspaces delete &lt;workspace-id&gt; --confirm-permanent-deletion</co
 
   <footer class="site-footer">
     <div class="footer-inner">
-      <div>
-        <strong>Municode</strong> &mdash; Self-hosted cloud coding workspaces.
+      <div class="footer-brand">
+        <strong>Municode</strong>
+        <span>&middot;</span>
+        <span>AGPL-3.0-only &amp; MPL-2.0</span>
       </div>
       <ul class="footer-links" role="list">
         <li><a href="../index.html">Overview</a></li>
         <li><a href="getting-started.html">Setup</a></li>
         <li><a href="architecture.html">Architecture</a></li>
-        <li><a href="cli-and-workflows.html">CLI &amp; Guides</a></li>
+        <li><a href="cli-and-workflows.html">CLI &amp; Workflows</a></li>
         <li><a href="https://github.com/muniperez/municode">GitHub</a></li>
       </ul>
     </div>
