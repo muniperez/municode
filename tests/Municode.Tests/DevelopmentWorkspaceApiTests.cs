@@ -54,6 +54,38 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HealthVersionReturnsConfiguredReleaseIdentityAnonymously()
+    {
+        var configuration = factory.Services.GetRequiredService<IConfiguration>();
+        configuration["MUNICODE_RELEASE_TAG"] = "municode-v1.2.3";
+        configuration["MUNICODE_RELEASE_SOURCE_REVISION"] = "abc123";
+        configuration["MUNICODE_RELEASE_TRUST"] = "signed";
+
+        using var response = await factory.CreateClient().GetAsync("/health/version");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("municode-v1.2.3", json.RootElement.GetProperty("tag").GetString());
+        Assert.Equal("abc123", json.RootElement.GetProperty("sourceRevision").GetString());
+        Assert.Equal("signed", json.RootElement.GetProperty("trust").GetString());
+    }
+
+    [Fact]
+    public async Task HealthVersionUsesUnknownForUnsetReleaseIdentity()
+    {
+        var configuration = factory.Services.GetRequiredService<IConfiguration>();
+        configuration["MUNICODE_RELEASE_TAG"] = null;
+        configuration["MUNICODE_RELEASE_SOURCE_REVISION"] = null;
+        configuration["MUNICODE_RELEASE_TRUST"] = null;
+
+        using var response = await factory.CreateClient().GetAsync("/health/version");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("unknown", json.RootElement.GetProperty("tag").GetString());
+        Assert.Equal("unknown", json.RootElement.GetProperty("sourceRevision").GetString());
+        Assert.Equal("unknown", json.RootElement.GetProperty("trust").GetString());
+    }
+
+    [Fact]
     public async Task MaintenanceRejectsNewOperationsAndLeavesReadsAndOtherWritesAvailable()
     {
         using var owner = Client(token);
