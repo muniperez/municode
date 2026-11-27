@@ -35,6 +35,7 @@ def verify_env_contract(root, contract):
                 or entry.get("owner") not in ("release", "installer", "operator")
                 or ("default" in entry and (entry["owner"] != "operator" or entry["default"] != template[key]))):
             fail(f"Invalid environment contract entry: {key}")
+    return template
 
 
 def verify_deploy_contract(root, manifest):
@@ -54,9 +55,40 @@ def verify_deploy_contract(root, manifest):
                 or ids != sorted(set(ids))):
             fail(f"Invalid ordered migration inventory: {provider}")
     contract = json.loads((root / "env-contract.json").read_text())
-    verify_env_contract(root, contract)
+    template = verify_env_contract(root, contract)
     if manifest.get("envContract") != contract:
         fail("Manifest environment contract differs from env-contract.json.")
+    if {"imageArchives", "imagePlatform", "sourceDirty"} & manifest.keys():
+        verify_local_images(root, manifest, template, contract)
+
+
+def verify_local_images(root, manifest, template, contract):
+    if type(manifest.get("sourceDirty")) is not bool:
+        fail("Missing local source checkout status.")
+    if manifest.get("imagePlatform") not in ("linux/amd64", "linux/arm64"):
+        fail("Invalid local image platform.")
+    images = manifest.get("imageArchives")
+    if not isinstance(images, dict) or images.keys() != {"api", "worker", "gateway"}:
+        fail("Incomplete local image archive inventory.")
+    image_directory = root / "images"
+    if {entry.name for entry in image_directory.iterdir()} != {f"{name}.tar" for name in images}:
+        fail("Local image archive directory differs from its manifest.")
+    env = {"MUNICODE_RUNTIME_PULL_POLICY": "never"}
+    for name, image in images.items():
+        relative = f"images/{name}.tar"
+        image_id = image["imageId"]
+        if image["path"] != relative or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+            fail(f"Invalid local image metadata: {name}")
+        reference = f"municode-{name}:local-{image_id.removeprefix('sha256:')}"
+        if image["reference"] != reference:
+            fail(f"Invalid local image reference: {name}")
+        path = root / relative
+        if not stat.S_ISREG(path.stat().st_mode) or digest(path) != image["sha256"]:
+            fail(f"Local image archive digest mismatch: {name}")
+        env[f"MUNICODE_{name.upper()}_IMAGE"] = reference
+    for key, value in env.items():
+        if template.get(key) != value or contract.get(key) != {"owner": "release"}:
+            fail(f"Invalid local image environment setting: {key}")
 
 
 def main():

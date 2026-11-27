@@ -95,6 +95,10 @@ The merged CLI and dashboard projects are built and included by delivery CI.
 Their package paths and release commands are fixed in `packaging/targets.json`;
 release tags fail closed when either artifact cannot be built.
 
+For an unsigned local deploy bundle, run `scripts/delivery/build-release.sh --ref HEAD`.
+See the [delivery guide](scripts/delivery/README.md) for prerequisites, output,
+and bundled image handling.
+
 ## Start with a fresh database
 
 ```sh
