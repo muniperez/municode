@@ -45,6 +45,37 @@ image and plan in the dashboard before creating the first coding VM.
 For control-plane registration, use `municode instance add`, `list`, `show`,
 or `remove`. See [the operator command reference](operator.md#register-a-control-plane).
 
+Use `municode deploy plan` to stage a release and check whether it can be
+deployed to a registered control plane. It uses pinned SSH and root or
+passwordless `sudo`. It can stage images and files, but does not switch
+services, run migrations, or change operator configuration.
+
+| Command | Effect |
+| --- | --- |
+| `municode deploy plan --instance <name> --release <tag>` | Verifies the exact signed Municode release, stages it, and prints the preflight and approval digest. |
+| `municode deploy plan --instance <name> --release latest [--prerelease]` | Resolves the most recently published eligible release to an exact signed tag. Drafts are excluded; opt in to prereleases with `--prerelease`. |
+| `municode deploy plan --instance <name> --bundle-dir <dir> --trust local-build` | Verifies and stages a clean, unsigned local-build bundle. Trust is recorded as `local-build`. |
+| `municode deploy status <operation>` | Reads the local journal and shows the registered host's active release, public `/health/version` when available, and the selected host operation's phase. |
+| `municode deploy status --instance <name>` | Shows the same active and public release information plus the newest host operation by state-file modification time, without requiring a local journal. |
+
+Deploy requires an exact protocol match rather than matching CLI and release
+source revisions. If the protocol differs, use the CLI from the target
+release's `cli/<rid>/` directory. A blocked preflight exits nonzero and does
+not produce an approval digest. The digest covers the pinned host and
+installation, release identities, environment diff, migrations, image set and
+effective configuration; it is not permission to deploy a different plan.
+
+Both commands accept `--json`. Plan outputs a versioned object with
+`schemaVersion`, `operation` (including `plan`, `phase`, `publishedAt`, and
+`approvalDigest`), `activeRelease`, `preflight`, and `blockers`. Blocked
+preflights can omit checks that could not run, and `approvalDigest` is `null`.
+Status outputs `schemaVersion`, `instanceName`, `activeRelease`, `publicVersion`,
+`publicVersionStatus`, `operation`, and `hostOperation`; absent records are
+`null`. `hostOperation` contains `operationId`, `phase`, and `source`. It is read
+without mutation from the host's operation state file (`source: "state-file"`)
+until the host agent exposes a status command. Validation or transport errors
+before a result is available are reported on stderr.
+
 Use the API URL and a short-lived or scoped key issued by your installation.
 Use `workspaces:read` for inspection and `workspaces:write` only for mutations.
 Do not enter provider credentials on the command line where process inspection

@@ -138,6 +138,17 @@ internal sealed class InstanceRegistry(string configHome, ISeedProcess process)
         return entry;
     }
 
+    internal async Task<SeedProcessResult> RunPinnedAsync(
+        InstanceEntry expected, string command, CancellationToken ct, Stream? input = null)
+    {
+        using var registryLock = Lock();
+        var entry = Load(expected.Name);
+        SeedGuard.Require(entry.Ssh == expected.Ssh && entry.Host.InstallationId == expected.Host.InstallationId,
+            "The registered instance changed during the deploy command.");
+        return await _ssh.RunPinnedAsync(entry.Ssh, Path.Combine(EntryPath(entry.Name), "known_hosts"),
+            command, ct, input);
+    }
+
     private async Task<InstanceEntry> RegisterAsync(string name, InstanceConnection connection,
         string pending, CancellationToken ct, string? expectedInstallationId = null)
     {

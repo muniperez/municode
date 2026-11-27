@@ -19,6 +19,13 @@ public sealed partial class CliApplication
     private readonly MunicodeApiClient _apiClient;
     private readonly SeedRuntime _seed;
     private readonly InstanceRegistry _instances;
+    private readonly HttpClient _deployHttp;
+    private readonly SeedRelease _deployVerifier;
+    private static readonly HttpClient DefaultDeployHttp = new(new HttpClientHandler
+    {
+        AllowAutoRedirect = false,
+        UseCookies = false
+    }) { Timeout = TimeSpan.FromSeconds(15), MaxResponseContentBufferSize = 8 * 1024 * 1024 };
 
     public CliApplication(
         IConsole console,
@@ -35,7 +42,9 @@ public sealed partial class CliApplication
         TokenStore tokenStore,
         MunicodeApiClient apiClient,
         SeedRuntime seed,
-        ISeedProcess? instanceSsh = null)
+        ISeedProcess? instanceSsh = null,
+        HttpClient? deployHttp = null,
+        SeedRelease? deployVerifier = null)
     {
         _console = console;
         _environment = environment;
@@ -43,6 +52,8 @@ public sealed partial class CliApplication
         _apiClient = apiClient;
         _seed = seed;
         _instances = new InstanceRegistry(environment.ConfigHome, instanceSsh ?? SeedProcess.Default);
+        _deployHttp = deployHttp ?? DefaultDeployHttp;
+        _deployVerifier = deployVerifier ?? new SeedRelease();
     }
 
     public async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
@@ -71,6 +82,7 @@ public sealed partial class CliApplication
             {
                 "seed" => await RunSeedAsync(args.Skip(1).ToArray(), cancellationToken),
                 "instance" => await RunInstanceAsync(args.Skip(1).ToArray(), cancellationToken),
+                "deploy" => await RunDeployAsync(args.Skip(1).ToArray(), cancellationToken),
                 "config" => RunConfig(args.Skip(1).ToArray()),
                 "token" => await RunTokenAsync(args.Skip(1).ToArray(), cancellationToken),
                 "login" => await RunLoginAsync(args.Skip(1).ToArray(), cancellationToken),
@@ -180,6 +192,7 @@ public sealed partial class CliApplication
         _console.WriteLine("  workspaces  Create, inspect, start, stop, and delete workspaces");
         _console.WriteLine("  seed        Plan, apply, and safely resume control-plane provisioning");
         _console.WriteLine("  instance    Manage locally registered control planes over pinned SSH");
+        _console.WriteLine("  deploy      Stage and inspect control-plane releases");
         _console.WriteLine("  login       Log in through the browser or with an API token");
         _console.WriteLine("  token       Store an API authentication token");
         _console.WriteLine("  config      Show or update the Municode API URL");
@@ -218,6 +231,9 @@ public sealed partial class CliApplication
                 return CliExitCodes.Success;
             case "instance" or "instance add" or "instance list" or "instance show" or "instance remove":
                 PrintInstanceHelp();
+                return CliExitCodes.Success;
+            case "deploy" or "deploy plan" or "deploy status":
+                PrintDeployHelp();
                 return CliExitCodes.Success;
             case "version":
                 PrintVersion();

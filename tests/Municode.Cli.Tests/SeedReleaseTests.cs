@@ -5,6 +5,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Municode.Cli.Commands;
 using Municode.Cli.Seed;
 
@@ -27,7 +28,7 @@ public sealed class SeedReleaseTests
             process.CertificateIdentity);
     }
 
-    private sealed class CosignProcess : ISeedProcess
+    internal sealed class CosignProcess : ISeedProcess
     {
         internal string? CertificateIdentity { get; private set; }
 
@@ -119,17 +120,22 @@ public sealed class SeedReleaseTests
             () => SeedRelease.VerifyFiles("municode-v1.2.3", fixture.Root));
     }
 
-    private sealed class ReleaseFixture : IDisposable
+    internal sealed class ReleaseFixture : IDisposable
     {
         public ReleaseFixture(
             bool tamperComponent = false,
             bool includeDirectories = true,
             string? extraMember = null,
             TarEntryType extraType = TarEntryType.Directory,
-            bool omitApi = false)
+            bool omitApi = false,
+            int? deployProtocol = null,
+            string version = "1.2.3",
+            bool? sourceDirty = null,
+            bool tamperImage = false)
         {
             Root = SeedTestDirectory.Create("release");
-            Build(tamperComponent, includeDirectories, extraMember, extraType, omitApi);
+            Build(tamperComponent, includeDirectories, extraMember, extraType, omitApi, deployProtocol,
+                version, sourceDirty, tamperImage);
         }
 
         public string Root { get; }
@@ -139,9 +145,12 @@ public sealed class SeedReleaseTests
             bool includeDirectories,
             string? extraMember,
             TarEntryType extraType,
-            bool omitApi)
+            bool omitApi,
+            int? deployProtocol,
+            string version,
+            bool? sourceDirty,
+            bool tamperImage)
         {
-            var version = "1.2.3";
             var archiveRoot = "municode-" + version;
             var componentBytes = new Dictionary<string, byte[]>
             {
@@ -172,20 +181,20 @@ public sealed class SeedReleaseTests
                     return new
                     {
                         files,
-                        sha256 = Hash(Encoding.UTF8.GetBytes(string.Join("\n",
-                            files.Select(file => file.sha256 + "  " + file.path))))
+                        sha256 = Hash(Encoding.UTF8.GetBytes(string.Concat(
+                            files.Select(file => $"{file.sha256}  {file.path}\n"))))
                     };
                 });
             components = components.ToDictionary(item => item.Key, item => item.Value,
                 StringComparer.Ordinal);
-            var manifest = JsonSerializer.SerializeToUtf8Bytes(new
+            var manifestObject = JsonSerializer.SerializeToNode(new
             {
                 schemaVersion = 1,
                 product = "municode",
                 version,
                 rid = "linux-any",
                 sourceRepository = "https://github.com/muniperez/municode",
-                sourceRevision = Revision(),
+                sourceRevision = deployProtocol is null ? Revision() : new string('d', 40),
                 targets = new { },
                 dependencies = new
                 {
@@ -193,7 +202,27 @@ public sealed class SeedReleaseTests
                 },
                 components,
                 bundle = $"municode-{version}-linux-any.tar.gz"
-            }, new JsonSerializerOptions { WriteIndented = true });
+            })!.AsObject();
+            var agent = "# synthetic deploy agent"u8.ToArray();
+            if (deployProtocol is not null)
+            {
+                manifestObject["deployProtocol"] = deployProtocol.Value;
+                manifestObject["hostAgent"] = JsonSerializer.SerializeToNode(new { path = "deploy_host.py", sha256 = Hash(agent) });
+            }
+            if (sourceDirty is not null)
+            {
+                manifestObject["sourceDirty"] = sourceDirty.Value;
+                manifestObject["imagePlatform"] = "linux/amd64";
+                manifestObject["imageArchives"] = JsonSerializer.SerializeToNode(new[] { "api", "worker", "gateway" }
+                    .ToDictionary(name => name, name => new
+                    {
+                        path = $"images/{name}.tar",
+                        sha256 = Hash(Encoding.UTF8.GetBytes(name)),
+                        imageId = "sha256:" + new string('1', 64),
+                        reference = $"municode-{name}:local-" + new string('1', 64)
+                    }));
+            }
+            var manifest = JsonSerializer.SerializeToUtf8Bytes(manifestObject);
             var manifestPath = Path.Combine(Root, "release-manifest.json");
             File.WriteAllBytes(manifestPath, manifest);
             Protect(manifestPath);
@@ -214,6 +243,11 @@ public sealed class SeedReleaseTests
                             archiveRoot + (path.Length == 0 ? "" : "/" + path) + "/"));
                 }
                 Write(tar, archiveRoot, manifest, "release-manifest.json");
+                if (deployProtocol is not null) Write(tar, archiveRoot, agent, "deploy_host.py");
+                if (sourceDirty is not null)
+                    foreach (var name in new[] { "api", "worker", "gateway" })
+                        Write(tar, archiveRoot, Encoding.UTF8.GetBytes(tamperImage && name == "api" ? "tampered" : name),
+                            $"images/{name}.tar");
                 foreach (var (path, bytes) in componentBytes)
                 {
                     if (omitApi && path.StartsWith("api/", StringComparison.Ordinal)) continue;
