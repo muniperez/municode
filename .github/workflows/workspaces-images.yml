@@ -4,10 +4,10 @@ on:
   pull_request:
     paths:
       - .github/workflows/workspaces-images.yml
-      - src/Workspaces.Api/**
-      - src/Workspaces.Worker/**
-      - src/Workspaces.Gateway/**
-      - src/Workspaces.Common/**
+      - src/Municode.Api/**
+      - src/Municode.Worker/**
+      - src/Municode.Gateway/**
+      - src/Municode.Common/**
   push:
     tags:
       - workspaces-v*
@@ -40,13 +40,13 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME#workspaces-v}"
           docker buildx build --platform linux/amd64,linux/arm64 --push \
-            --file src/Workspaces.Api/Dockerfile \
+            --file src/Municode.Api/Dockerfile \
             --tag "ghcr.io/muniperez/municode-api:$version" .
           docker buildx build --platform linux/amd64,linux/arm64 --push \
-            --file src/Workspaces.Worker/Dockerfile \
+            --file src/Municode.Worker/Dockerfile \
             --tag "ghcr.io/muniperez/municode-workspaces-worker:$version" .
           docker buildx build --platform linux/amd64,linux/arm64 --push \
-            --file src/Workspaces.Gateway/Dockerfile \
+            --file src/Municode.Gateway/Dockerfile \
             --tag "ghcr.io/muniperez/municode-workspaces-gateway:$version" .
 
   contracts:
@@ -55,6 +55,6 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: |
-          test -f src/Workspaces.Api/Dockerfile
-          test -f src/Workspaces.Worker/Dockerfile
-          test -f src/Workspaces.Gateway/Dockerfile
+          test -f src/Municode.Api/Dockerfile
+          test -f src/Municode.Worker/Dockerfile
+          test -f src/Municode.Gateway/Dockerfile

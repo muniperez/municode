@@ -33,9 +33,9 @@ jobs:
           python3 -B -m unittest discover -s scripts/delivery -p 'test_*.py' -v
       - name: Build and test the runtime
         run: |
-          dotnet clean Workspaces.slnx -c Release
-          dotnet build Workspaces.slnx -c Release
-          dotnet test Workspaces.slnx -c Release --no-build \
+          dotnet clean Municode.slnx -c Release
+          dotnet build Municode.slnx -c Release
+          dotnet test Municode.slnx -c Release --no-build \
             --results-directory .local/artifacts/test-results
       - name: Verify guest runtime tests
         run: |
@@ -68,17 +68,17 @@ jobs:
           set -eu
           root=.local/artifacts/package-smoke
           mkdir -p "$root/api" "$root/worker" "$root/gateway" "$root/dashboard" "$root/cli"
-          dotnet publish src/Workspaces.Api -c Release --no-build \
+          dotnet publish src/Municode.Api -c Release --no-build \
             -o "$root/api"
-          dotnet publish src/Workspaces.Worker -c Release --no-build \
+          dotnet publish src/Municode.Worker -c Release --no-build \
             -o "$root/worker"
-          dotnet publish src/Workspaces.Gateway -c Release --no-build \
+          dotnet publish src/Municode.Gateway -c Release --no-build \
             -o "$root/gateway"
           npm ci --prefix modules/dashboard
           npm test --prefix modules/dashboard -- --run
           npm run build --prefix modules/dashboard
           cp -R .local/artifacts/dashboard-dist/. "$root/dashboard/"
-          dotnet publish src/Workspaces.Cli/Workspaces.Cli.csproj -c Release \
+          dotnet publish src/Municode.Cli/Municode.Cli.csproj -c Release \
             --runtime linux-x64 --self-contained true \
             -o "$root/cli/linux-x64"
           python3 -B scripts/delivery/package.py \
@@ -148,6 +148,6 @@ jobs:
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Build current runtime image targets
         run: |
-          docker build --file src/Workspaces.Api/Dockerfile --tag municode-api:ci .
-          docker build --file src/Workspaces.Worker/Dockerfile --tag municode-workspaces-worker:ci .
-          docker build --file src/Workspaces.Gateway/Dockerfile --tag municode-workspaces-gateway:ci .
+          docker build --file src/Municode.Api/Dockerfile --tag municode-api:ci .
+          docker build --file src/Municode.Worker/Dockerfile --tag municode-workspaces-worker:ci .
+          docker build --file src/Municode.Gateway/Dockerfile --tag municode-workspaces-gateway:ci .

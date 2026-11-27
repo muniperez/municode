@@ -32,7 +32,7 @@ sign-in and exactly matching origins in `Console:BaseUrl`,
 umask 077
 mkdir -p .local/artifacts/setup
 printf '%s\n' '{"installationId":"workspace-example","operationId":"first-operator"}' |
-  dotnet run --project src/Workspaces.Api -c Release --no-build -- \
+  dotnet run --project src/Municode.Api -c Release --no-build -- \
     bootstrap prepare --stdin --output-file "$PWD/.local/artifacts/setup/setup-token"
 ```
 
@@ -128,7 +128,7 @@ mutations use `X-Workspaces-CSRF`. Scoped API keys use `workspaces:read` and
 scopes. CLI device login exchanges an approved session once and persists only
 the generated API key's hash.
 
-Runtime projects in this repository can reference `Workspaces.Common` for
+Runtime projects in this repository can reference `Municode.Common` for
 `WorkspaceDbContext`, workspace services, DTOs, gateway options and
 `IDevelopmentWorkspaceProvider`. Use `WorkspaceOwnership.Manager` in the
 `managed-by` label. API enrollment and gateway authorization use their

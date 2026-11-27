@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Municode.Api</AssemblyName>
+    <RootNamespace>Municode.Api</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.5" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.5" />
+    <PackageReference Include="Microsoft.OpenApi" Version="2.7.5" />
+    <ProjectReference Include="../Municode.Common/Municode.Common.csproj" />
+    <InternalsVisibleTo Include="Municode.Tests" />
+  </ItemGroup>
+</Project>

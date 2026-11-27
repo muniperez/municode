@@ -50,9 +50,9 @@ Use the .NET 10 SDK and Python 3.11+ from the repository root. All generated
 output is ignored under `.local/artifacts/`.
 
 ```sh
-dotnet clean Workspaces.slnx -c Release
-dotnet build Workspaces.slnx -c Release
-dotnet test Workspaces.slnx -c Release --no-build --results-directory .local/artifacts/test-results
+dotnet clean Municode.slnx -c Release
+dotnet build Municode.slnx -c Release
+dotnet test Municode.slnx -c Release --no-build --results-directory .local/artifacts/test-results
 templates/development-workspaces/test.sh
 python3 -B templates/development-workspaces/image/test-t3-candidate.py
 node --test scripts/workspace-image-release-acceptance.test.mjs # Node.js 22 LTS
@@ -71,9 +71,9 @@ self-contained CLI targets through [package targets](packaging/targets.json).
 The package handoff smoke test builds and verifies all five actual payloads.
 
 ```sh
-dotnet publish src/Workspaces.Api -c Release -o .local/artifacts/publish/api
-dotnet publish src/Workspaces.Worker -c Release -o .local/artifacts/publish/worker
-dotnet publish src/Workspaces.Gateway -c Release -o .local/artifacts/publish/gateway
+dotnet publish src/Municode.Api -c Release -o .local/artifacts/publish/api
+dotnet publish src/Municode.Worker -c Release -o .local/artifacts/publish/worker
+dotnet publish src/Municode.Gateway -c Release -o .local/artifacts/publish/gateway
 # Supply the merged dashboard build and self-contained CLI RID outputs.
 python3 -B scripts/delivery/package.py \
   --version 0.0.0-local --source "$(git rev-parse HEAD)" --rid linux-any \
@@ -98,8 +98,8 @@ for Windows.
 ## Start with a fresh database
 
 ```sh
-dotnet run --project src/Workspaces.Api -c Release --no-build -- migrate
-dotnet run --project src/Workspaces.Api -c Release --no-build -- --urls http://127.0.0.1:5080
+dotnet run --project src/Municode.Api -c Release --no-build -- migrate
+dotnet run --project src/Municode.Api -c Release --no-build -- --urls http://127.0.0.1:5080
 ```
 
 The default database is `.local/artifacts/data/workspaces.db`. Check `/health`

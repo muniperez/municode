@@ -307,7 +307,7 @@ OpenBao values, bootstrap material or worker private keys into support output.
 
 The package target contract is `packaging/targets.json`. Release CI builds the
 merged self-contained CLI outputs from
-`src/Workspaces.Cli/Workspaces.Cli.csproj` and the merged dashboard static output
+`src/Municode.Cli/Municode.Cli.csproj` and the merged dashboard static output
 from `modules/dashboard`, which Vite writes to
 `.local/artifacts/dashboard-dist`. No packaging code implements client behavior.
 A tagged release fails closed when either client artifact is missing.

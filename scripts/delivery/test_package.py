@@ -23,9 +23,9 @@ class PackageTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.payloads = {}
         for name, binary in (
-            ("api", "Workspaces.Api.dll"),
-            ("worker", "Workspaces.Worker.dll"),
-            ("gateway", "Workspaces.Gateway.dll"),
+            ("api", "Municode.Api.dll"),
+            ("worker", "Municode.Worker.dll"),
+            ("gateway", "Municode.Gateway.dll"),
             ("dashboard", "index.html"),
             ("cli", "municode"),
         ):
@@ -76,9 +76,9 @@ class PackageTests(unittest.TestCase):
         archive = next(self.output.glob("*.tar.gz"))
         with tarfile.open(archive, "r:gz") as bundle:
             names = {member.name for member in bundle.getmembers()}
-            self.assertTrue(any(name.endswith("/runtime/api/Workspaces.Api.dll") for name in names))
-            self.assertTrue(any(name.endswith("/runtime/worker/Workspaces.Worker.dll") for name in names))
-            self.assertTrue(any(name.endswith("/runtime/gateway/Workspaces.Gateway.dll") for name in names))
+            self.assertTrue(any(name.endswith("/runtime/api/Municode.Api.dll") for name in names))
+            self.assertTrue(any(name.endswith("/runtime/worker/Municode.Worker.dll") for name in names))
+            self.assertTrue(any(name.endswith("/runtime/gateway/Municode.Gateway.dll") for name in names))
             self.assertTrue(any(name.endswith("/dashboard/index.html") for name in names))
             self.assertTrue(any(name.endswith("/cli/linux-x64/municode") for name in names))
             self.assertTrue(any(name.endswith("/cli/linux-x64/workspaces") for name in names))
@@ -397,7 +397,7 @@ class PackageTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        self.assertTrue((install_root / "runtime" / "api" / "Workspaces.Api.dll").is_file())
+        self.assertTrue((install_root / "runtime" / "api" / "Municode.Api.dll").is_file())
         self.assertTrue((secrets / "workspace-gateway-credential").is_file())
         self.assertTrue((secrets / "ssh" / "worker-key").is_file())
         self.assertTrue((secrets / "openbao-approle" / "role-id").is_file())

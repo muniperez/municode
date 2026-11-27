@@ -102,7 +102,7 @@ try {
     res.writeHead(401).end();
   }));
 
-  gateway = spawn("dotnet", [join(root, ".local/artifacts/bin/Workspaces.Gateway/debug/Workspaces.Gateway.dll")], {
+  gateway = spawn("dotnet", [join(root, ".local/artifacts/bin/Municode.Gateway/debug/Municode.Gateway.dll")], {
     cwd: artifacts,
     env: {
       PATH: process.env.PATH,

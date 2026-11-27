@@ -62,9 +62,9 @@ validate_install() {
     root=$1
     [ -f "$root/.env" ] &&
     [ -f "$root/release-manifest.json" ] &&
-    [ -f "$root/runtime/api/Workspaces.Api.dll" ] &&
-    [ -f "$root/runtime/worker/Workspaces.Worker.dll" ] &&
-    [ -f "$root/runtime/gateway/Workspaces.Gateway.dll" ] &&
+    [ -f "$root/runtime/api/Municode.Api.dll" ] &&
+    [ -f "$root/runtime/worker/Municode.Worker.dll" ] &&
+    [ -f "$root/runtime/gateway/Municode.Gateway.dll" ] &&
     [ -f "$root/dashboard/index.html" ] &&
     python3 -B "$root/verify_bundle.py"
 }
