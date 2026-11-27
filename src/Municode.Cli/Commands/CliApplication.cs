@@ -192,7 +192,7 @@ public sealed partial class CliApplication
         _console.WriteLine("  workspaces  Create, inspect, start, stop, and delete workspaces");
         _console.WriteLine("  seed        Plan, apply, and safely resume control-plane provisioning");
         _console.WriteLine("  instance    Manage locally registered control planes over pinned SSH");
-        _console.WriteLine("  deploy      Stage and inspect control-plane releases");
+        _console.WriteLine("  deploy      Plan, apply, inspect, resume or roll back control-plane releases");
         _console.WriteLine("  login       Log in through the browser or with an API token");
         _console.WriteLine("  token       Store an API authentication token");
         _console.WriteLine("  config      Show or update the Municode API URL");
@@ -232,7 +232,7 @@ public sealed partial class CliApplication
             case "instance" or "instance add" or "instance list" or "instance show" or "instance remove":
                 PrintInstanceHelp();
                 return CliExitCodes.Success;
-            case "deploy" or "deploy plan" or "deploy status":
+            case "deploy" or "deploy plan" or "deploy apply" or "deploy status" or "deploy resume" or "deploy rollback":
                 PrintDeployHelp();
                 return CliExitCodes.Success;
             case "version":

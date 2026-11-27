@@ -55,8 +55,11 @@ services, run migrations, or change operator configuration.
 | `municode deploy plan --instance <name> --release <tag>` | Verifies the exact signed Municode release, stages it, and prints the preflight and approval digest. |
 | `municode deploy plan --instance <name> --release latest [--prerelease]` | Resolves the most recently published eligible release to an exact signed tag. Drafts are excluded; opt in to prereleases with `--prerelease`. |
 | `municode deploy plan --instance <name> --bundle-dir <dir> --trust local-build` | Verifies and stages a clean, unsigned local-build bundle. Trust is recorded as `local-build`. |
+| `municode deploy apply <operation> --approve <digest> [--unseal-key-file <path>] [--drain-timeout <seconds>] [--offhost-backup <dir>]` | Rechecks approval on the host, follows the deploy unit, and verifies the public API and dashboard after commit. |
 | `municode deploy status <operation>` | Reads the local journal and shows the registered host's active release, public `/health/version` when available, and the selected host operation's phase. |
 | `municode deploy status --instance <name>` | Shows the same active and public release information plus the newest host operation by state-file modification time, without requiring a local journal. |
+| `municode deploy resume <operation> [--unseal-key-file <path>]` | Follows the running unit or continues the interrupted apply or rollback. |
+| `municode deploy rollback <operation> [--restore-database --accept-data-loss-since <timestamp>] [--accept-provider-reconciliation] [--unseal-key-file <path>]` | Restarts the previous release; a post-open restore requires explicit loss acknowledgements. |
 
 Deploy requires an exact protocol match rather than matching CLI and release
 source revisions. If the protocol differs, use the CLI from the target
@@ -65,16 +68,50 @@ not produce an approval digest. The digest covers the pinned host and
 installation, release identities, environment diff, migrations, image set and
 effective configuration; it is not permission to deploy a different plan.
 
-Both commands accept `--json`. Plan outputs a versioned object with
+The host runs apply and rollback in a systemd unit that survives SSH loss.
+Resume follows that unit if it is still running. After an interrupted apply,
+the host rolls back if drain began but traffic could not have opened; create a
+new plan to retry. Once traffic may have opened, resume retries forward.
+Apply waits up to 900 seconds by default for in-flight workspace operations to
+drain; `--drain-timeout` overrides that limit. Existing workspace VMs keep running
+while control-plane services are switched.
+
+If OpenBao has no host unseal key, supply `--unseal-key-file` using an owner-only
+file. The CLI streams a single key over pinned SSH stdin, never through an
+argument or the journal. Resupply the file if resuming requires restarting a
+unit that needs the key. `--offhost-backup` copies the matched snapshot, which
+includes secrets, to `<dir>/<operation>` with owner-only permissions and
+verifies each file against the backup manifest before publishing the directory.
+
+Rolling forward is recommended after traffic may have opened. A destructive
+rollback restores the matched snapshot, losing changes since it was taken.
+Pass `--restore-database --accept-data-loss-since <timestamp>` with the exact
+`openAt` from status. If the worker may have resumed, also pass
+`--accept-provider-reconciliation` and reconcile the provider resources listed
+in the host backup's `post-open-operations.json`. A failed public check does
+not trigger automatic rollback.
+
+All deploy commands accept `--json`. Plan outputs a versioned object with
 `schemaVersion`, `operation` (including `plan`, `phase`, `publishedAt`, and
 `approvalDigest`), `activeRelease`, `preflight`, and `blockers`. Blocked
 preflights can omit checks that could not run, and `approvalDigest` is `null`.
 Status outputs `schemaVersion`, `instanceName`, `activeRelease`, `publicVersion`,
 `publicVersionStatus`, `operation`, and `hostOperation`; absent records are
-`null`. `hostOperation` contains `operationId`, `phase`, and `source`. It is read
-without mutation from the host's operation state file (`source: "state-file"`)
-until the host agent exposes a status command. Validation or transport errors
-before a result is available are reported on stderr.
+`null`. `hostOperation` contains `operationId`, `phase`, `source: "host-agent"`,
+`pendingStep`, `unit` (`activeState` and `subState`), `trafficMayHaveOpened`,
+`openAt`, `workerResumed`, and `backupCreated`.
+
+Apply, resume and rollback report `schemaVersion`, `operation`, `hostOperation`,
+`blockers`, `liveApprovalDigest`, `publicChecks` (entries with `endpoint` and
+`passed`), and `offhostBackup` (the verified local path or `null`).
+`operation` includes `execution` and `pendingStep` in addition to the plan
+fields. `hostOperation` or its `unit` can be `null` when not returned by the
+agent. `liveApprovalDigest` is non-null only if the host recomputed a different
+digest; review a new plan rather than approving that value blindly.
+Public checks run for committed applies, including after resume, and cover
+`/health`, `/health/ready`, `/health/version`, `/api/account/capabilities`, and
+the dashboard's `/runtime-config.json`. Blockers exit nonzero. Validation or
+transport errors before a result is available are reported on stderr.
 
 Use the API URL and a short-lived or scoped key issued by your installation.
 Use `workspaces:read` for inspection and `workspaces:write` only for mutations.

@@ -19,6 +19,10 @@ internal interface ISeedProcess
     Task<SeedProcessResult> RunStreamAsync(
         string fileName, IReadOnlyList<string> arguments, Stream input, CancellationToken cancellationToken) =>
         throw new NotSupportedException("This process runner does not support streamed input.");
+
+    Task<SeedProcessResult> RunDownloadAsync(
+        string fileName, IReadOnlyList<string> arguments, Stream output, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This process runner does not support streamed output.");
 }
 
 internal sealed class SeedProcess : ISeedProcess
@@ -39,8 +43,13 @@ internal sealed class SeedProcess : ISeedProcess
         string fileName, IReadOnlyList<string> arguments, Stream input, CancellationToken cancellationToken) =>
         RunCoreAsync(fileName, arguments, input, cancellationToken);
 
+    public Task<SeedProcessResult> RunDownloadAsync(
+        string fileName, IReadOnlyList<string> arguments, Stream output, CancellationToken cancellationToken) =>
+        RunCoreAsync(fileName, arguments, null, cancellationToken, output);
+
     private static async Task<SeedProcessResult> RunCoreAsync(
-        string fileName, IReadOnlyList<string> arguments, Stream? input, CancellationToken cancellationToken)
+        string fileName, IReadOnlyList<string> arguments, Stream? input, CancellationToken cancellationToken,
+        Stream? destination = null)
     {
         var start = new ProcessStartInfo(fileName)
         {
@@ -63,7 +72,7 @@ internal sealed class SeedProcess : ISeedProcess
                 throw new CliCommandException(CliExitCodes.ValidationError,
                     $"Required seed tool is unavailable: {fileName}.");
         }
-        var standardOutput = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var standardOutput = destination is null ? process.StandardOutput.ReadToEndAsync(cancellationToken) : null;
         var standardError = process.StandardError.ReadToEndAsync(cancellationToken);
         try
         {
@@ -72,13 +81,15 @@ internal sealed class SeedProcess : ISeedProcess
                 await input.CopyToAsync(process.StandardInput.BaseStream, cancellationToken);
                 process.StandardInput.Close();
             }
+            if (destination is not null)
+                await process.StandardOutput.BaseStream.CopyToAsync(destination, cancellationToken);
             await process.WaitForExitAsync(cancellationToken);
         }
         finally
         {
             if (!process.HasExited) process.Kill(entireProcessTree: true);
         }
-        var output = await standardOutput;
+        var output = standardOutput is null ? "" : await standardOutput;
         var errorText = await standardError;
         return new(process.ExitCode, (output + errorText).Length <= 4 * 1024 * 1024
             ? output

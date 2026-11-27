@@ -13,6 +13,12 @@ public sealed partial class CliApplication
     private const string DeployPlanUsage = "municode deploy plan --instance <name> "
         + "(--release <tag> | --release latest [--prerelease] | --bundle-dir <dir> --trust local-build) [--json]";
     private const string DeployStatusUsage = "municode deploy status (<operation> | --instance <name>) [--json]";
+    private const string DeployApplyUsage = "municode deploy apply <operation> --approve <digest> "
+        + "[--unseal-key-file <path>] [--drain-timeout <seconds>] [--offhost-backup <dir>] [--json]";
+    private const string DeployResumeUsage = "municode deploy resume <operation> [--unseal-key-file <path>] [--json]";
+    private const string DeployRollbackUsage = "municode deploy rollback <operation> "
+        + "[--restore-database --accept-data-loss-since <timestamp>] [--accept-provider-reconciliation] "
+        + "[--unseal-key-file <path>] [--json]";
 
     private sealed record PublicDeployVersion(string Tag, string SourceRevision, string Trust);
 
@@ -20,30 +26,41 @@ public sealed partial class CliApplication
     {
         _console.WriteLine("Usage:");
         _console.WriteLine($"  {DeployPlanUsage}");
+        _console.WriteLine($"  {DeployApplyUsage}");
         _console.WriteLine($"  {DeployStatusUsage}");
+        _console.WriteLine($"  {DeployResumeUsage}");
+        _console.WriteLine($"  {DeployRollbackUsage}");
         _console.WriteLine("Plan verifies, stages and preflights a release without switching services.");
         _console.WriteLine("Status reads the active release, public version and selected or latest host operation.");
+        _console.WriteLine("Resume follows the host unit or continues recovery after an interruption.");
+        _console.WriteLine("For destructive rollback, copy the exact openAt timestamp from deploy status.");
     }
 
     private async Task<int> RunDeployAsync(string[] args, CancellationToken ct)
     {
         var action = args.FirstOrDefault();
-        SeedGuard.Require(action is "plan" or "status", "Usage: municode deploy <plan|status> [options].");
+        SeedGuard.Require(action is "plan" or "apply" or "status" or "resume" or "rollback",
+            "Usage: municode deploy <plan|apply|status|resume|rollback> [options].");
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         string? operation = null;
         for (var index = 1; index < args.Length; index++)
         {
             var option = args[index];
-            if (action == "status" && !option.StartsWith('-') && operation is null)
+            if (action != "plan" && !option.StartsWith('-') && operation is null)
             {
                 operation = option;
                 continue;
             }
-            if (option == "--json" || (action == "plan" && option == "--prerelease"))
+            if (option == "--json" || (action == "plan" && option == "--prerelease")
+                || (action == "rollback" && option is "--restore-database" or "--accept-provider-reconciliation"))
                 SeedGuard.Require(options.TryAdd(option, ""), $"Duplicate deploy option {option}.");
             else
             {
-                SeedGuard.Require(option == "--instance" || (action == "plan" && option is "--release" or "--bundle-dir" or "--trust"),
+                SeedGuard.Require((action is "plan" or "status" && option == "--instance")
+                    || (action == "plan" && option is "--release" or "--bundle-dir" or "--trust")
+                    || (action is "apply" or "resume" or "rollback" && option == "--unseal-key-file")
+                    || (action == "apply" && option is "--approve" or "--drain-timeout" or "--offhost-backup")
+                    || (action == "rollback" && option == "--accept-data-loss-since"),
                     "Unknown deploy option. See 'municode help deploy'.");
                 SeedGuard.Require(index + 1 < args.Length && !string.IsNullOrWhiteSpace(args[index + 1])
                     && !args[index + 1].StartsWith("--", StringComparison.Ordinal), $"{option} requires a value.");
@@ -60,6 +77,12 @@ public sealed partial class CliApplication
                 SeedGuard.Require((operation is null) != (instance is null), $"Usage: {DeployStatusUsage}");
                 return await DeployStatusAsync(instance, operation, json, ct);
             }
+            if (action is "apply" or "resume" or "rollback")
+            {
+                var usage = action == "apply" ? DeployApplyUsage : action == "resume" ? DeployResumeUsage : DeployRollbackUsage;
+                SeedGuard.Require(operation is not null, $"Usage: {usage}");
+                return await DeployExecuteAsync(action, operation!, options, json, ct);
+            }
             var tag = options.GetValueOrDefault("--release");
             var bundle = options.GetValueOrDefault("--bundle-dir");
             var trust = options.GetValueOrDefault("--trust");
@@ -73,7 +96,7 @@ public sealed partial class CliApplication
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            _console.WriteError("Deploy interrupted. Any staged release and operation journal are retained.");
+            _console.WriteError("Deploy interrupted locally. A started host unit can keep running; use deploy resume with the operation ID.");
             return CliExitCodes.ValidationError;
         }
         catch (Exception error) when (error is JsonException or KeyNotFoundException or FormatException
@@ -145,25 +168,23 @@ public sealed partial class CliApplication
             _console.WriteLine($"Target:  {release.Identity.ReleaseId} ({release.Identity.SourceRevision}, {release.Identity.Trust})");
             PrintPreflight(preflight);
             foreach (var blocker in blockers) _console.WriteError($"Blocker: {blocker}");
-            if (digest is not null) _console.WriteLine($"Approval digest: {digest}");
+            if (digest is not null)
+            {
+                _console.WriteLine($"Approval digest: {digest}");
+                _console.WriteLine($"Run: municode deploy apply {op} --approve {digest}");
+            }
         }
         return digest is null ? CliExitCodes.ValidationError : CliExitCodes.Success;
     }
 
     private async Task<int> DeployStatusAsync(string? name, string? operation, bool json, CancellationToken ct)
     {
-        DeployOperation? local = null;
-        if (operation is not null)
-        {
-            using var journal = new DeployJournal(_environment.ConfigHome, operation);
-            local = journal.Load();
-            name = local.Plan.InstanceName;
-        }
-        var instance = await _instances.ShowAsync(name!, ct);
-        SeedGuard.Require(local is null || (local.Plan.InstallationId == instance.Host.InstallationId
-            && local.Plan.HostFingerprint == instance.Ssh.HostFingerprint),
-            "The registered instance no longer matches this deploy operation.");
-        var host = await new DeployTransport(_instances, instance).StatusAsync(operation, ct);
+        var local = operation is null ? null : DeployJournal.Read(_environment.ConfigHome, operation);
+        name = local?.Plan.InstanceName ?? name;
+        var instance = await _instances.ShowAsync(name!, ct, local?.Plan.HostFingerprint, local?.Plan.InstallationId);
+        var transport = new DeployTransport(_instances, instance);
+        var host = operation is null ? await transport.LatestAsync(ct)
+            : await transport.StatusAsync(operation, ct, local!.Plan.TargetRelease);
         var (version, versionStatus) = await ReadPublicDeployVersionAsync(instance.Host.ApiHostname, ct);
         if (json)
             _console.WriteLine(JsonSerializer.Serialize(new
@@ -179,7 +200,10 @@ public sealed partial class CliApplication
                 : $"Public /health/version: {version.Tag} ({version.SourceRevision}, {version.Trust})");
             if (local is not null) _console.WriteLine($"Local operation {local.Plan.OperationId}: {local.Phase}");
             _console.WriteLine(host is null ? "No host operation state found."
-                : $"Host operation {host.OperationId}: {host.Phase} ({host.Source})");
+                : $"Host operation {host.OperationId}: {host.Phase} ({host.Unit?.ActiveState}/{host.Unit?.SubState})");
+            if (host?.PendingStep is { } step) _console.WriteLine($"Pending step: {step}");
+            if (host?.OpenAt is { } openAt) _console.WriteLine($"Traffic may have opened at: {openAt}");
+            if (host?.WorkerResumed == true) _console.WriteLine("Worker may have resumed; rollback requires provider reconciliation.");
         }
         return CliExitCodes.Success;
     }

@@ -3,13 +3,18 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Municode.Cli.Commands;
+using Municode.Cli.Instances;
 using Municode.Cli.Seed;
 
 namespace Municode.Cli.Deploy;
 
 internal sealed record DeployOperation(
     int Schema, DeployPlan Plan, string Phase, DateTimeOffset? PublishedAt = null,
-    string? ApprovalDigest = null);
+    string? ApprovalDigest = null, DeployExecution? Execution = null, string? PendingStep = null);
+
+internal sealed record DeployExecution(
+    string Action, int? DrainTimeout = null, string? OffhostBackup = null, bool UsesUnsealKey = false,
+    bool RestoreDatabase = false, string? AcceptDataLossSince = null, bool AcceptProviderReconciliation = false);
 
 internal sealed class DeployJournal : IDisposable
 {
@@ -17,9 +22,7 @@ internal sealed class DeployJournal : IDisposable
 
     public DeployJournal(string home, string id, bool create = false)
     {
-        SeedGuard.Require(Regex.IsMatch(id, @"\A[a-f0-9]{32}\z"),
-            "Deploy operation IDs are exactly 32 lowercase hexadecimal characters.");
-        DirectoryPath = Path.Combine(home, "deploy", id);
+        DirectoryPath = OperationDirectory(home, id);
         if (create) SeedFiles.CreateDirectory(DirectoryPath);
         else SeedGuard.Require(Directory.Exists(DirectoryPath), "No local journal exists for that deploy operation.");
         SeedFiles.Check(DirectoryPath, true);
@@ -40,12 +43,29 @@ internal sealed class DeployJournal : IDisposable
     public string DirectoryPath { get; }
     private string StatePath => Path.Combine(DirectoryPath, "operation.json");
 
-    public DeployOperation Load()
+    public static DeployOperation Read(string home, string id) => ReadDirectory(OperationDirectory(home, id));
+
+    public DeployOperation Load() => ReadDirectory(DirectoryPath);
+
+    private static string OperationDirectory(string home, string id)
     {
-        SeedGuard.Require(File.Exists(StatePath), "The deploy operation has no verified release journal.");
-        SeedFiles.Check(StatePath);
-        var state = JsonSerializer.Deserialize<DeployOperation>(File.ReadAllText(StatePath), SeedJournal.Json);
-        SeedGuard.Require(state is { Schema: 1, Plan: not null } && state.Plan.OperationId == Path.GetFileName(DirectoryPath),
+        SeedGuard.Require(Regex.IsMatch(id, @"\A[a-f0-9]{32}\z"),
+            "Deploy operation IDs are exactly 32 lowercase hexadecimal characters.");
+        return Path.Combine(home, "deploy", id);
+    }
+
+    private static DeployOperation ReadDirectory(string directory)
+    {
+        SeedGuard.Require(Directory.Exists(directory), "No local journal exists for that deploy operation.");
+        SeedFiles.Check(directory, true);
+        var path = Path.Combine(directory, "operation.json");
+        SeedGuard.Require(File.Exists(path), "The deploy operation has no verified release journal.");
+        SeedFiles.Check(path);
+        var state = JsonSerializer.Deserialize<DeployOperation>(File.ReadAllText(path), SeedJournal.Json);
+        SeedGuard.Require(state is { Schema: 1, Plan.TargetRelease: not null }
+            && state.Plan.OperationId == Path.GetFileName(directory)
+            && InstancePin.IsFingerprint(state.Plan.HostFingerprint)
+            && !string.IsNullOrEmpty(state.Plan.InstallationId),
             "The deploy journal has an invalid operation identity.");
         return state!;
     }

@@ -136,7 +136,8 @@ internal sealed class InstanceSsh(ISeedProcess process)
         RunPinnedAsync(entry, knownHosts, command, ct, null);
 
     internal Task<SeedProcessResult> RunPinnedAsync(
-        InstanceConnection entry, string knownHosts, string command, CancellationToken ct, Stream? input)
+        InstanceConnection entry, string knownHosts, string command, CancellationToken ct, Stream? input,
+        Stream? output = null)
     {
         SeedFiles.Check(knownHosts);
         SeedGuard.Require(InstancePin.Parse(File.ReadAllText(knownHosts), InstancePin.Alias).Fingerprint
@@ -150,6 +151,7 @@ internal sealed class InstanceSsh(ISeedProcess process)
         if (entry.IdentityFile is not null) args.AddRange(["-i", entry.IdentityFile]);
         args.AddRange(DestinationArguments(entry.Destination));
         args.Add(command);
+        if (output is not null) return process.RunDownloadAsync("ssh", args, output, ct);
         return input is null ? process.RunAsync("ssh", args, null, ct)
             : process.RunStreamAsync("ssh", args, input, ct);
     }
@@ -164,6 +166,7 @@ internal sealed class InstanceSsh(ISeedProcess process)
         [
             "-o", streamInput ? "StdinNull=no" : "StdinNull=yes",
             "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
+            "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
             "-o", "StrictHostKeyChecking=" + checking, "-o", "HostKeyAlias=" + InstancePin.Alias,
             "-o", $"UserKnownHostsFile=\"{path}\"", "-o", "GlobalKnownHostsFile=none",
             "-o", "KnownHostsCommand=none", "-o", "VerifyHostKeyDNS=no", "-o", "CheckHostIP=no",
