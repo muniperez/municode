@@ -163,6 +163,7 @@ public sealed class SeedHostTests
             command.Contains("sha256sum --check --strict", StringComparison.Ordinal));
         Assert.Contains("extracted.pending", extraction);
         Assert.Contains("/.verified", extraction);
+        Assert.Contains("--bundle-sha256 '" + state.Plan.Release.BundleSha256 + "'", extraction);
         Assert.DoesNotContain("if [ -d ", extraction);
 
         using var malformed = new HostFixture();

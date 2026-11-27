@@ -1,5 +1,14 @@
 # Configure the Municode API
 
+On a packaged control plane installed by seed or `install.sh`,
+`/opt/municode/current` points into `/opt/municode/releases/`. Operator
+environment and workspace policy live in
+`/etc/municode/config/{operator.env,municode.json}`, secrets in
+`/etc/municode/secrets/`, and active release metadata in
+`/var/lib/municode/active-release.json`. Use `/usr/local/sbin/municode-compose`
+for host operations. See the [operator guide](../operator.md) for packaged
+installation steps.
+
 Start with [the example](municode.example.json). Set
 `DevelopmentWorkspaces__ConfigurationFile` to its absolute path to load a local
 copy. Environment variables take precedence. Use an HTTPS endpoint for browser
