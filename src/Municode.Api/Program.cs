@@ -9,6 +9,11 @@ if (args.Length > 0 && args[0] == "bootstrap")
     return await BootstrapCommand.RunAsync(args[1..]);
 }
 
+if (args.Length > 0 && args[0] == "migrations")
+{
+    return await MigrationInspectionCommand.RunAsync(args[1..], Console.Out, Console.Error);
+}
+
 var migrate = args.Length > 0 && args[0] == "migrate";
 var maintenance = args.Length > 0 && args[0] == "maintenance";
 var builder = WebApplication.CreateBuilder(maintenance ? [] : migrate ? args[1..] : args);

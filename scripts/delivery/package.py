@@ -13,6 +13,8 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
+import subprocess
+import sys
 import tarfile
 import tempfile
 
@@ -181,7 +183,7 @@ def package(args: argparse.Namespace) -> Path:
         "Release output already exists; select an empty ignored artifacts directory.",
     )
 
-    with tempfile.TemporaryDirectory(prefix="municode-package-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="municode-package-", dir=args.output) as temporary:
         root = Path(temporary) / f"municode-{args.version}"
         copy_tree(BUNDLE, root)
         (root / "docs").mkdir()
@@ -194,8 +196,16 @@ def package(args: argparse.Namespace) -> Path:
             copy_tree(source, destination)
             inventories[name] = component_inventory(destination)
 
+        api = root / components["api"][0]
+        migrations = subprocess.run(
+            ["dotnet", str((api / REQUIRED_BACKEND_FILES["api"]).resolve()), "migrations", "list", "--json"],
+            cwd=api, check=True, stdout=subprocess.PIPE, text=True,
+        )
         manifest = {
             "schemaVersion": 1,
+            "deployProtocol": 1,
+            "migrations": json.loads(migrations.stdout),
+            "envContract": json.loads((root / "env-contract.json").read_text()),
             "product": "municode",
             "version": args.version,
             "rid": args.rid,
@@ -209,6 +219,7 @@ def package(args: argparse.Namespace) -> Path:
         (root / "release-manifest.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n"
         )
+        subprocess.run([sys.executable, "-B", str(root / "verify_bundle.py")], check=True)
         deterministic_archive(root, archive)
 
     (manifest_path).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
@@ -240,7 +251,7 @@ def main() -> int:
     try:
         require(bool(args.version) and bool(args.source), "Version and source revision are required.")
         archive = package(args)
-    except (OSError, PackageError, json.JSONDecodeError, tarfile.TarError) as error:
+    except (OSError, PackageError, json.JSONDecodeError, subprocess.CalledProcessError, tarfile.TarError) as error:
         print(f"Packaging failed: {error}", file=os.sys.stderr)
         return 1
     print(archive)

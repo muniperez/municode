@@ -87,6 +87,9 @@ python3 -B scripts/delivery/package.py \
 The archive contains the Compose/Caddy bundle, API/worker/gateway payloads,
 dashboard, CLI, installer, operator/user guides and a component inventory. Exact
 release checksums are written under `.local/artifacts/release`.
+Packaging runs `dotnet Municode.Api.dll migrations list --json` from the API
+payload to record both providers' migration IDs without connecting to a database.
+The manifest also records the deploy protocol and `.env` ownership contract.
 
 The merged CLI and dashboard projects are built and included by delivery CI.
 Their package paths and release commands are fixed in `packaging/targets.json`;
@@ -98,6 +101,10 @@ release tags fail closed when either artifact cannot be built.
 dotnet run --project src/Municode.Api -c Release --no-build -- migrate
 dotnet run --project src/Municode.Api -c Release --no-build -- --urls http://127.0.0.1:5080
 ```
+
+For read-only inspection of an existing database, run
+`dotnet run --project src/Municode.Api -c Release --no-build -- migrations status --json`.
+The result has `historyTableExists`, `applied`, `pending`, and `unknownApplied`.
 
 The default database is `.local/artifacts/data/municode.db`. Check `/health`
 on the local listener. Workspace admission and gateway launch are disabled by

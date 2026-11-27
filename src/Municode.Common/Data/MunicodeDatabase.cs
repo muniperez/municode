@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -9,10 +10,10 @@ public static class MunicodeDatabase
 {
     public const string MigrationsHistoryTable = "__MunicodeMigrationsHistory";
 
-    public static IServiceCollection AddMunicodeDatabase(this IServiceCollection services) =>
-        services.AddScoped<WorkspaceDbContext>(provider => Create(provider.GetRequiredService<IConfiguration>()));
+    public static IServiceCollection AddMunicodeDatabase(this IServiceCollection services, bool readOnlySqlite = false) =>
+        services.AddScoped<WorkspaceDbContext>(provider => Create(provider.GetRequiredService<IConfiguration>(), readOnlySqlite));
 
-    private static WorkspaceDbContext Create(IConfiguration configuration)
+    private static WorkspaceDbContext Create(IConfiguration configuration, bool readOnlySqlite)
     {
         var provider = configuration["Database:Provider"] ?? "Sqlite";
         var connectionString = configuration.GetConnectionString("Municode");
@@ -22,9 +23,13 @@ public static class MunicodeDatabase
             if (string.IsNullOrWhiteSpace(connectionString))
             {
                 var localPath = Path.Combine(FindWorkingRoot(), ".local", "artifacts", "data", "municode.db");
-                Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
-                connectionString = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = localPath }.ToString();
+                if (!readOnlySqlite)
+                    Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
+                connectionString = new SqliteConnectionStringBuilder { DataSource = localPath }.ToString();
             }
+
+            if (readOnlySqlite)
+                connectionString = new SqliteConnectionStringBuilder(connectionString) { Mode = SqliteOpenMode.ReadOnly }.ToString();
 
             var options = new DbContextOptionsBuilder<WorkspaceSqliteDbContext>();
             ConfigureSqlite(options, connectionString);

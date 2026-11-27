@@ -5,6 +5,7 @@
 import hashlib
 import json
 from pathlib import Path
+import re
 import stat
 import sys
 
@@ -18,6 +19,46 @@ def digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def verify_env_contract(root, contract):
+    template = {}
+    for line in (root / ".env.example").read_text().splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if not separator or not re.fullmatch(r"[A-Z][A-Z0-9_]*", key) or key in template:
+            fail(f"Invalid or duplicate environment assignment: {key}")
+        template[key] = value
+    if not isinstance(contract, dict) or contract.keys() != template.keys():
+        fail("Environment contract keys do not match .env.example.")
+    for key, entry in contract.items():
+        if (not isinstance(entry, dict) or entry.keys() - {"owner", "default"}
+                or entry.get("owner") not in ("release", "installer", "operator")
+                or ("default" in entry and (entry["owner"] != "operator" or entry["default"] != template[key]))):
+            fail(f"Invalid environment contract entry: {key}")
+
+
+def verify_deploy_contract(root, manifest):
+    if type(manifest.get("deployProtocol")) is not int or manifest["deployProtocol"] != 1:
+        fail("Unsupported deploy protocol.")
+    if not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+                        r"(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?", manifest["version"]):
+        fail("Invalid release version.")
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", manifest["sourceRevision"]):
+        fail("Invalid release source revision.")
+    migrations = manifest["migrations"]
+    if not isinstance(migrations, dict) or migrations.keys() != {"postgres", "sqlite"}:
+        fail("Expected Postgres and SQLite migration inventories.")
+    for provider, ids in migrations.items():
+        if (not isinstance(ids, list) or not ids
+                or any(not isinstance(id, str) or not re.fullmatch(r"[0-9]{14}_[A-Za-z0-9_]+", id) for id in ids)
+                or ids != sorted(set(ids))):
+            fail(f"Invalid ordered migration inventory: {provider}")
+    contract = json.loads((root / "env-contract.json").read_text())
+    verify_env_contract(root, contract)
+    if manifest.get("envContract") != contract:
+        fail("Manifest environment contract differs from env-contract.json.")
+
+
 def main():
     root = Path(__file__).resolve().parent
     for entry in root.rglob("*"):
@@ -26,6 +67,7 @@ def main():
     manifest = json.loads((root / "release-manifest.json").read_text())
     if manifest.get("schemaVersion") != 1 or manifest.get("product") != "municode":
         fail("Unexpected release manifest.")
+    verify_deploy_contract(root, manifest)
     roots = {
         "api": root / "runtime" / "api",
         "worker": root / "runtime" / "worker",

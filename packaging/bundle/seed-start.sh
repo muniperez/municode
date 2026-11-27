@@ -6,7 +6,7 @@ umask 077
 usage() {
     echo "Usage: seed-start.sh --release-tag TAG --release-root PATH --installation-id ID" >&2
     echo "  --dashboard-hostname HOST --api-hostname HOST --gateway-domain DOMAIN" >&2
-    echo "  --install-root PATH --secrets-dir PATH --setup-token-output PATH" >&2
+    echo "  --install-root PATH --secrets-dir PATH --setup-token-output PATH [--policy-file PATH]" >&2
     exit 2
 }
 
@@ -18,6 +18,7 @@ api_hostname=
 gateway_domain=
 install_root=
 secrets_dir=
+policy_file=/etc/municode/config/municode.json
 setup_token_output=
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -29,6 +30,7 @@ while [ "$#" -gt 0 ]; do
         --gateway-domain) [ "$#" -ge 2 ] || usage; gateway_domain=$2; shift 2 ;;
         --install-root) [ "$#" -ge 2 ] || usage; install_root=$2; shift 2 ;;
         --secrets-dir) [ "$#" -ge 2 ] || usage; secrets_dir=$2; shift 2 ;;
+        --policy-file) [ "$#" -ge 2 ] || usage; policy_file=$2; shift 2 ;;
         --setup-token-output) [ "$#" -ge 2 ] || usage; setup_token_output=$2; shift 2 ;;
         *) usage ;;
     esac
@@ -37,8 +39,8 @@ done
 [ -n "$dashboard_hostname" ] && [ -n "$api_hostname" ] && [ -n "$gateway_domain" ] &&
 [ -n "$install_root" ] && [ -n "$secrets_dir" ] && [ -n "$setup_token_output" ] || usage
 
-case "$release_root:$install_root:$secrets_dir:$setup_token_output" in
-    /*:*:*:/*) ;;
+case "$release_root:$install_root:$secrets_dir:$setup_token_output:$policy_file" in
+    /*:/*:/*:/*:/*) ;;
     *) echo "Seed installation paths must be absolute." >&2; exit 1 ;;
 esac
 [ -d "$release_root" ] && [ -f "$release_root/install.sh" ] || {
@@ -163,7 +165,8 @@ if [ ! -f "$marker" ] && [ -z "$ownership" ]; then
 fi
 
 if [ ! -f "$marker" ] && [ "$ownership" = "$expected staging" ]; then
-    "$release_root/install.sh" --install-root "$install_stage" --secrets-dir "$secrets_stage"
+    "$release_root/install.sh" --install-root "$install_stage" --secrets-dir "$secrets_stage" \
+        --policy-file "$policy_file" --verified-release-tag "$release_tag"
     validate_install "$install_stage" && validate_secrets "$secrets_stage" || {
         echo "The exact staged release or secrets are incomplete; owned staging is retained for a safe retry." >&2
         exit 1
@@ -181,6 +184,10 @@ if [ ! -f "$marker" ] && [ "$ownership" = "$expected staging" ]; then
     write_owner complete
 fi
 
+[ -f "$policy_file" ] || {
+    echo "The installed Municode policy file is missing." >&2
+    exit 1
+}
 python3 -B - "$install_root/.env" "$secrets_dir" \
     "$installation_id" "$dashboard_hostname" "$api_hostname" "$gateway_domain" <<'PY'
 from pathlib import Path
