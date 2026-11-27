@@ -273,6 +273,9 @@ services:
       Kratos__PasskeyEnabled: ${MUNICODE_PASSKEYS_ENABLED:-true}
       GitHub__ApiUrl: ${API_URL:?set API_URL}
       Bootstrap__InstallationId: ${MUNICODE_INSTALLATION_ID:?set MUNICODE_INSTALLATION_ID}
+      MUNICODE_RELEASE_TAG: ${MUNICODE_RELEASE_TAG:-unknown}
+      MUNICODE_RELEASE_SOURCE_REVISION: ${MUNICODE_RELEASE_SOURCE_REVISION:-unknown}
+      MUNICODE_RELEASE_TRUST: ${MUNICODE_RELEASE_TRUST:-unknown}
     secrets:
       - app-db-password
       - workspace-gateway-credential

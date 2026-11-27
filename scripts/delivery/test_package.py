@@ -140,6 +140,13 @@ class PackageTests(unittest.TestCase):
                         "openbao:", "kratos:", "dashboard"):
             self.assertIn(service, compose + caddy)
 
+    def test_api_receives_release_identity_environment(self):
+        compose = (ROOT / "packaging" / "bundle" / "compose.yml").read_text()
+        api = compose.split("\n  api:\n", 1)[1].split("\n  worker:\n", 1)[0]
+        for key in ("MUNICODE_RELEASE_TAG", "MUNICODE_RELEASE_SOURCE_REVISION", "MUNICODE_RELEASE_TRUST"):
+            with self.subTest(key=key):
+                self.assertIn(f"      {key}: ${{{key}:-unknown}}\n", api)
+
     def test_packaged_caddy_pins_gateway_routes_to_dedicated_proxy_network(self):
         self.package()
         archive = next(self.output.glob("*.tar.gz"))
