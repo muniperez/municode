@@ -542,7 +542,7 @@ class Report:
             "sourceControlUserSignInQualified": False,
             "nativeRuntimeScope": "isolated-loop-ext4-root-hooks-and-stop; NOT unused-terminal-opt-in/provider/browser",
             "probes": [], "cleanup": "not-started",
-            "externalBlockers": ["REAL_WORKSPACES_GATEWAY_USEFUL_ACTIVITY_AND_ADMISSION_DRAIN_NOT_EXERCISED",
+            "externalBlockers": ["REAL_MUNICODE_GATEWAY_USEFUL_ACTIVITY_AND_ADMISSION_DRAIN_NOT_EXERCISED",
                                  "UNUSED_TERMINAL_ROOT_OPT_IN_FLOW_REQUIRES_REAL_GATEWAY_QUALIFICATION",
                                  "SOURCE_CONTROL_USER_SIGN_IN_AND_REPOSITORY_ACCESS_NOT_EXERCISED",
                                  "PROVIDER_VOLUME_CYCLES_AND_ENCRYPTED_OFFHOST_RESTORE_SEPARATE_E2E",

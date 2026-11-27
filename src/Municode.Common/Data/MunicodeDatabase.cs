@@ -5,23 +5,23 @@ using Npgsql;
 
 namespace Municode.Common.Data;
 
-public static class WorkspacesDatabase
+public static class MunicodeDatabase
 {
-    public const string MigrationsHistoryTable = "__WorkspacesMigrationsHistory";
+    public const string MigrationsHistoryTable = "__MunicodeMigrationsHistory";
 
-    public static IServiceCollection AddWorkspacesDatabase(this IServiceCollection services) =>
+    public static IServiceCollection AddMunicodeDatabase(this IServiceCollection services) =>
         services.AddScoped<WorkspaceDbContext>(provider => Create(provider.GetRequiredService<IConfiguration>()));
 
     private static WorkspaceDbContext Create(IConfiguration configuration)
     {
         var provider = configuration["Database:Provider"] ?? "Sqlite";
-        var connectionString = configuration.GetConnectionString("Workspaces");
+        var connectionString = configuration.GetConnectionString("Municode");
 
         if (provider.Equals("Sqlite", StringComparison.OrdinalIgnoreCase))
         {
             if (string.IsNullOrWhiteSpace(connectionString))
             {
-                var localPath = Path.Combine(FindWorkingRoot(), ".local", "artifacts", "data", "workspaces.db");
+                var localPath = Path.Combine(FindWorkingRoot(), ".local", "artifacts", "data", "municode.db");
                 Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
                 connectionString = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = localPath }.ToString();
             }
@@ -33,13 +33,13 @@ public static class WorkspacesDatabase
         if (provider.Equals("Postgres", StringComparison.OrdinalIgnoreCase))
         {
             if (string.IsNullOrWhiteSpace(connectionString))
-                throw new InvalidOperationException("Configure ConnectionStrings:Workspaces for PostgreSQL.");
+                throw new InvalidOperationException("Configure ConnectionStrings:Municode for PostgreSQL.");
 
             if (configuration["Database:PasswordFile"] is { Length: > 0 } path)
             {
                 var password = File.ReadAllText(path).TrimEnd('\r', '\n');
                 if (password.Length == 0)
-                    throw new InvalidOperationException("The Workspaces database password file is empty.");
+                    throw new InvalidOperationException("The Municode database password file is empty.");
                 connectionString = new NpgsqlConnectionStringBuilder(connectionString) { Password = password }.ConnectionString;
             }
 

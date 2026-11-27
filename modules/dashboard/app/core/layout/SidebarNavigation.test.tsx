@@ -39,7 +39,7 @@ describe("SidebarNavigation", () => {
       </AuthContext.Provider>,
     );
 
-    expect(screen.getByRole("button", { name: /Municode Workspaces.*MuniVentures/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Municode.*MuniVentures/i })).toBeInTheDocument();
     expect(screen.getByText("Platform")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Workspaces" })).toHaveAttribute("aria-current", "page");
     const settings = screen.getByRole("button", { name: "Settings" });

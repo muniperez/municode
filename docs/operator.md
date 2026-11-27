@@ -1,14 +1,14 @@
-# Operate Municode Workspaces
+# Operate Municode
 
-Municode Workspaces is a standalone control plane for coding workspaces. Its API,
+Municode is a standalone control plane for coding workspaces. Its API,
 worker, gateway, dashboard, PostgreSQL, identity, secret storage and TLS proxy have
 independent state and credentials. The operator does not need an application-hosting
 installation, account, CLI or reachable service.
 
 ## Seed a fresh control plane
 
-The preferred first installation path is `workspaces seed`. Use the exact CLI
-from an immutable `workspaces-vX.Y.Z` release, Cosign 2.6.5, OpenSSH, a protected
+The preferred first installation path is `municode seed`. Use the exact CLI
+from an immutable `municode-vX.Y.Z` release, Cosign 2.6.5, OpenSSH, a protected
 provider-token file, and public DNS names you control. Seed supports Hetzner,
 DigitalOcean and Vultr. The token file must be owner-only and contain only the
 single API token:
@@ -16,25 +16,25 @@ single API token:
 ```sh
 install -m 600 /dev/null /protected/provider.token
 # Populate the protected file without putting its value in shell history.
-workspaces seed plan \
+municode seed plan \
   --provider hetzner --region <location> --size <server-type> \
   --dashboard-hostname console.example.com \
   --api-hostname api.example.com \
   --gateway-domain workspaces.example.net \
-  --release workspaces-vX.Y.Z \
+  --release municode-vX.Y.Z \
   --credential-file /protected/provider.token
 ```
 
-Plan verifies the Municode Workspaces GitHub Actions Sigstore identity, exact
+Plan verifies the Municode GitHub Actions Sigstore identity, exact
 release manifest, checksum inventory, archive component hashes and immutable
 dependency image digests. It quotes the provider's current recurring cost and
 records a new local operation under the Municode config directory. It does not
 create a provider resource. Review the currency, hourly/monthly terms, taxes,
-traffic and optional-service exclusions. `workspaces` reports an approval digest;
+traffic and optional-service exclusions. `municode` reports an approval digest;
 there is no `latest`, token-on-command-line or implicit-cost approval.
 
 ```sh
-workspaces seed apply <operation> \
+municode seed apply <operation> \
   --credential-file /protected/provider.token --approve <approval-digest>
 ```
 
@@ -43,7 +43,7 @@ the interruption-safe journal before the one create call, and adopts no resource
 without the operation's provider ownership marker. A timeout or process kill
 does not trigger a second create: `seed resume` inventories the account, requires
 exactly one matching control-plane VPS and continues from the durable journal.
-`workspaces seed status <operation>` is local state only and never proves live
+`municode seed status <operation>` is local state only and never proves live
 provider health. Created resources remain billable.
 
 After public IPv4 assignment, apply or resume intentionally pauses for independent
@@ -81,7 +81,7 @@ Read the exact `SHA256:...` field from the `(ED25519)` output, not the key comme
 or entire output line. On the operator workstation, pass that value to resume:
 
 ```sh
-workspaces seed resume <operation> \
+municode seed resume <operation> \
   --credential-file /protected/provider.token \
   --confirm-console-fingerprint SHA256:...
 ```
@@ -116,14 +116,11 @@ before admitting the image for users. The seed token remains on the
 operator workstation and is not copied to OpenBao or the provider API store by
 seed. No coding VM is created by this flow.
 
-`municode seed` and `municode workspaces seed` are compatibility aliases. The
-release package's `workspaces` wrapper is the canonical spelling.
-
 OpenBao is initialized with one protected recovery record at
-`/etc/municode/workspaces/secrets/openbao-seed-init.json`. Move an independent
+`/etc/municode/secrets/openbao-seed-init.json`. Move an independent
 copy of that recovery material and the other installation secrets to approved
 offline custody before production use. On host restart, follow the ordinary
-unseal procedure; seed never copies unseal material into the Workspaces
+unseal procedure; seed never copies unseal material into the Municode
 application or provider account.
 
 An interrupted OpenBao initialization is not automatically recoverable. Resume
@@ -160,7 +157,7 @@ Choose three controlled DNS names and create records that point to the host:
 
 | Record | Purpose |
 | --- | --- |
-| `api.example.test` | Workspaces API |
+| `api.example.test` | Municode API |
 | `console.example.test` | dashboard |
 | `*.workspaces.example.test` | generation-bound T3 and preview origins |
 
@@ -168,24 +165,24 @@ The wildcard must have no competing certificate or reverse proxy. Open ports 80
 and 443. Keep OpenBao, PostgreSQL, Kratos, the API's internal gateway routes and
 the relay range private to Compose networks.
 
-Download the exact `workspaces-vX.Y.Z` assets. Independently verify the
+Download the exact `municode-vX.Y.Z` assets. Independently verify the
 `checksums.txt` entries and the source revision shown by the release, then
 extract the archive. Never install from a mutable `latest` URL.
 
 ```sh
 sha256sum --check --strict checksums.txt
-tar -xzf municode-workspaces-X.Y.Z-linux-any.tar.gz
-cd municode-workspaces-X.Y.Z
+tar -xzf municode-X.Y.Z-linux-any.tar.gz
+cd municode-X.Y.Z
 ./install.sh --install-root /opt/municode/workspaces \
-  --secrets-dir /etc/municode/workspaces/secrets
+  --secrets-dir /etc/municode/secrets
 ```
 
 The installer refuses existing destinations, rejects symlink payloads, verifies
 component digests and generates protected database, gateway and Kratos secrets,
 an OpenBao service certificate and a dedicated worker SSH key. Protect and back
-up `/etc/municode/workspaces/secrets`; do not put it in the installation tree.
+up `/etc/municode/secrets`; do not put it in the installation tree.
 Tagged releases also carry `checksums.txt.sigstore.json`; seed requires its exact
-Municode Workspaces workflow identity before any provider mutation.
+Municode workflow identity before any provider mutation.
 
 ## Configure and initialize
 
@@ -199,7 +196,7 @@ WebAuthn relying-party ID and `CONSOLE_URL` as its only allowed origin, so
 `CONSOLE_HOSTNAME` must be the bare host name of the HTTPS `CONSOLE_URL`.
 Passkeys are bound to that host name: changing the dashboard domain later
 invalidates every enrolled passkey, and users must sign in with their password
-and enroll again. Set `WORKSPACES_PASSKEYS_ENABLED=false` in `.env` to turn
+and enroll again. Set `MUNICODE_PASSKEYS_ENABLED=false` in `.env` to turn
 passkeys off for both Kratos and the dashboard; password sign-in remains
 available either way.
 
@@ -214,7 +211,7 @@ docker compose up -d openbao
 Initialize and unseal OpenBao with your approved offline ceremony. This manual
 installation path does not write OpenBao's unseal material or root token into the
 installation (unlike the protected recovery record created by seed). From a
-protected temporary root-token file, configure the Workspaces
+protected temporary root-token file, configure the Municode
 mount and AppRole:
 
 ```sh
@@ -245,7 +242,7 @@ the Compose service invocation:
 ```sh
 printf '%s\n' '{"installationId":"replace-with-installation-id","operationId":"first-operator"}' |
   docker compose --profile maintenance run --rm --no-TTY api-bootstrap \
-    prepare --stdin --output-file /run/workspaces-bootstrap/setup-token
+    prepare --stdin --output-file /run/municode-bootstrap/setup-token
 ```
 
 Complete setup over the public API from the console origin. Remove setup input,
@@ -298,7 +295,7 @@ The keys are `Enabled`, `Host`, `Port` (587), `FromAddress`, `FromName`
 The worker always requires STARTTLS; implicit TLS on port 465 is not supported.
 Keep the SMTP password in OpenBao, never in configuration. Store it as the
 `value` field of a KV secret, for example
-`bao kv put -mount=workspaces env/<prefix>/operator/budget-smtp value=...`. Then
+`bao kv put -mount=municode env/<prefix>/operator/budget-smtp value=...`. Then
 set `PasswordSecretPath` to `env/<prefix>/operator/budget-smtp`. The bundled
 service policy grants read-only access to `env/+/operator/+`. Omit `Username` for unauthenticated
 relays. If email is disabled or incomplete, the worker queues no email and

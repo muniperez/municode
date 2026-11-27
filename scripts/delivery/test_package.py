@@ -81,7 +81,8 @@ class PackageTests(unittest.TestCase):
             self.assertTrue(any(name.endswith("/runtime/gateway/Municode.Gateway.dll") for name in names))
             self.assertTrue(any(name.endswith("/dashboard/index.html") for name in names))
             self.assertTrue(any(name.endswith("/cli/linux-x64/municode") for name in names))
-            self.assertTrue(any(name.endswith("/cli/linux-x64/workspaces") for name in names))
+            self.assertFalse(any(name.endswith(("/workspaces", "/workspaces.cmd")) for name in names
+                                 if "/cli/" in name))
             self.assertTrue(any(name.endswith("/install.sh") for name in names))
             seed_installer = next(member for member in bundle.getmembers()
                                   if member.name.endswith("/seed-start.sh"))
@@ -119,7 +120,7 @@ class PackageTests(unittest.TestCase):
         subprocess.run(self.command(), check=True, capture_output=True, text=True)
         archive = next(self.output.glob("*.tar.gz"))
         with tarfile.open(archive, "r:gz") as bundle:
-            prefix = "municode-workspaces-0.0.0-test/"
+            prefix = "municode-0.0.0-test/"
             caddy = bundle.extractfile(prefix + "Caddyfile").read().decode()
             compose = bundle.extractfile(prefix + "compose.yml").read().decode()
 
@@ -195,9 +196,9 @@ class PackageTests(unittest.TestCase):
         def render(**overrides):
             environment = {
                 key: value for key, value in os.environ.items()
-                if not key.startswith(("CONSOLE_", "WORKSPACES_"))
+                if not key.startswith(("CONSOLE_", "MUNICODE_"))
             }
-            environment.update(WORKSPACES_SECRETS_DIR=str(secrets),
+            environment.update(MUNICODE_SECRETS_DIR=str(secrets),
                                CONSOLE_HOSTNAME="dashboard.customer.test",
                                CONSOLE_URL="https://dashboard.customer.test", **overrides)
             rendered = subprocess.run(
@@ -216,7 +217,7 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(api["Kratos__DashboardOrigin"], "https://dashboard.customer.test")
         self.assertEqual(api["Kratos__PasskeyEnabled"], "true")
 
-        kratos, api = render(WORKSPACES_PASSKEYS_ENABLED="false")
+        kratos, api = render(MUNICODE_PASSKEYS_ENABLED="false")
         self.assertEqual(kratos["SELFSERVICE_METHODS_PASSKEY_ENABLED"], "false")
         self.assertEqual(api["Kratos__PasskeyEnabled"], "false")
 
@@ -227,8 +228,8 @@ class PackageTests(unittest.TestCase):
         self.assertEqual({line.split("  ", 1)[1] for line in lines},
                          {"release-manifest.json", next(self.output.glob("*.tar.gz")).name})
 
-    @unittest.skipUnless(os.environ.get("WORKSPACES_TEST_CADDY") == "1",
-                         "Set WORKSPACES_TEST_CADDY=1 to run the isolated Caddy runtime test")
+    @unittest.skipUnless(os.environ.get("MUNICODE_TEST_CADDY") == "1",
+                         "Set MUNICODE_TEST_CADDY=1 to run the isolated Caddy runtime test")
     def test_packaged_dashboard_revalidates_across_two_releases(self):
         image = json.loads((ROOT / "packaging" / "release.json").read_text())["images"]["caddy"]
         served = self.root / "served"
@@ -253,26 +254,26 @@ class PackageTests(unittest.TestCase):
             output = self.root / f"output{number}"
             command[command.index("--output") + 1] = str(output)
             subprocess.run(command, check=True, capture_output=True, text=True)
-            with tarfile.open(output / f"municode-workspaces-0.0.0-test{number}-linux-x64.tar.gz") as bundle:
+            with tarfile.open(output / f"municode-0.0.0-test{number}-linux-x64.tar.gz") as bundle:
                 bundle.extractall(self.root / f"release{number}", filter="data")
-            release = self.root / f"release{number}" / f"municode-workspaces-0.0.0-test{number}"
+            release = self.root / f"release{number}" / f"municode-0.0.0-test{number}"
             subprocess.run([sys.executable, "-B", str(release / "verify_bundle.py")],
                            check=True, capture_output=True, text=True)
             self.assertEqual((release / "dashboard" / "index.html").read_bytes(), shell)
-        first = self.root / "release1" / "municode-workspaces-0.0.0-test1"
-        second = self.root / "release2" / "municode-workspaces-0.0.0-test2"
+        first = self.root / "release1" / "municode-0.0.0-test1"
+        second = self.root / "release2" / "municode-0.0.0-test2"
         shutil.copytree(first / "dashboard", served, dirs_exist_ok=True)
         container = subprocess.run(
             ["docker", "run", "--detach", "--pull=never",
              "--read-only", "--tmpfs", "/data", "--tmpfs", "/config",
              "--publish", "127.0.0.1::80",
              "--mount", f"type=bind,src={first / 'Caddyfile'},dst=/etc/caddy/Caddyfile,readonly",
-             "--mount", f"type=bind,src={served},dst=/srv/workspaces-dashboard,readonly",
+             "--mount", f"type=bind,src={served},dst=/srv/municode-dashboard,readonly",
              "--env", "CONSOLE_HOSTNAME=http://localhost",
              "--env", "API_HOSTNAME=http://api.localhost",
              "--env", "API_URL=https://api.localhost",
-             "--env", "WORKSPACES_SOURCE_URL=https://github.com/muniperez/municode",
-             "--env", "WORKSPACES_GATEWAY_DOMAIN=workspaces.localhost", image],
+             "--env", "MUNICODE_SOURCE_URL=https://github.com/muniperez/municode",
+             "--env", "MUNICODE_GATEWAY_DOMAIN=workspaces.localhost", image],
             check=True, capture_output=True, text=True,
         ).stdout.strip()
         self.addCleanup(subprocess.run, ["docker", "rm", "--force", "--volumes", container],
@@ -405,7 +406,7 @@ class PackageTests(unittest.TestCase):
         self.assertEqual((install_root / ".env").stat().st_mode & 0o777, 0o600)
         env = (install_root / ".env").read_text()
         self.assertNotIn("synthetic-contract", env)
-        self.assertEqual(env.count("WORKSPACES_SECRETS_DIR="), 1)
+        self.assertEqual(env.count("MUNICODE_SECRETS_DIR="), 1)
 
         kratos_env = secrets / "kratos.env"
         cipher_values = [

@@ -62,7 +62,7 @@ public interface IDevelopmentWorkspaceProvider
 
 public static class WorkspaceOwnership
 {
-    public const string Manager = "municode-workspaces";
+    public const string Manager = "municode";
 
     /// <summary>Permanent volume deletion needs the complete retained-volume identity, never a partial match.</summary>
     public static void RequireRetainedVolumeLabels(IReadOnlyDictionary<string, string> labels)

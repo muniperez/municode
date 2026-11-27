@@ -4,7 +4,7 @@ namespace Municode.Api.Services;
 
 public static class BootstrapRegistration
 {
-    public static IServiceCollection AddWorkspacesBootstrap(this IServiceCollection services)
+    public static IServiceCollection AddMunicodeBootstrap(this IServiceCollection services)
     {
         services.AddScoped<BootstrapService>();
         services.AddHttpClient<IBootstrapIdentityStore, BootstrapKratosIdentityStore>(client =>

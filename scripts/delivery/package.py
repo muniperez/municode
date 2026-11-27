@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MPL-2.0
-"""Assemble and verify a self-contained Municode Workspaces release."""
+"""Assemble and verify a self-contained Municode release."""
 
 from __future__ import annotations
 
@@ -78,24 +78,6 @@ def component_inventory(root: Path) -> dict[str, object]:
     }
 
 
-def add_cli_aliases(root: Path, targets: dict[str, object]) -> None:
-    for rid in targets["components"]["cli"]["rids"]:
-        directory = root / rid
-        if not directory.exists():
-            continue
-        if rid == "win-x64":
-            binary = directory / "municode.exe"
-            alias = directory / "workspaces.cmd"
-            if binary.is_file() and not alias.exists():
-                alias.write_bytes(b'@echo off\r\n"%~dp0municode.exe" %*\r\n')
-        else:
-            binary = directory / "municode"
-            alias = directory / "workspaces"
-            if binary.is_file() and not alias.exists():
-                alias.write_text('#!/bin/sh\nexec "$(dirname "$0")/municode" "$@"\n')
-                alias.chmod(0o755)
-
-
 def validate_targets() -> dict[str, object]:
     targets = json.loads(TARGETS.read_text())
     require(targets.get("schemaVersion") == 1, "Unsupported package target schema.")
@@ -107,7 +89,7 @@ def validate_targets() -> dict[str, object]:
 def validate_release() -> dict[str, object]:
     release = json.loads((ROOT / "packaging" / "release.json").read_text())
     require(release.get("schemaVersion") == 1, "Unsupported release metadata schema.")
-    require(release.get("product") == "municode-workspaces", "Unexpected release product.")
+    require(release.get("product") == "municode", "Unexpected release product.")
     images = release.get("images")
     require(isinstance(images, dict) and images, "Release image inventory is empty.")
     for name, image in images.items():
@@ -190,7 +172,7 @@ def package(args: argparse.Namespace) -> Path:
     release = validate_release()
     components = validate_payloads(args)
     args.output.mkdir(parents=True, exist_ok=True)
-    archive_name = f"municode-workspaces-{args.version}-{args.rid}.tar.gz"
+    archive_name = f"municode-{args.version}-{args.rid}.tar.gz"
     archive = args.output / archive_name
     manifest_path = args.output / "release-manifest.json"
     checksums_path = args.output / "checksums.txt"
@@ -199,8 +181,8 @@ def package(args: argparse.Namespace) -> Path:
         "Release output already exists; select an empty ignored artifacts directory.",
     )
 
-    with tempfile.TemporaryDirectory(prefix="workspaces-package-") as temporary:
-        root = Path(temporary) / f"municode-workspaces-{args.version}"
+    with tempfile.TemporaryDirectory(prefix="municode-package-") as temporary:
+        root = Path(temporary) / f"municode-{args.version}"
         copy_tree(BUNDLE, root)
         (root / "docs").mkdir()
         for name in ("operator.md", "user.md"):
@@ -210,13 +192,11 @@ def package(args: argparse.Namespace) -> Path:
         for name, (relative, source) in components.items():
             destination = root / relative
             copy_tree(source, destination)
-            if name == "cli":
-                add_cli_aliases(destination, targets)
             inventories[name] = component_inventory(destination)
 
         manifest = {
             "schemaVersion": 1,
-            "product": "municode-workspaces",
+            "product": "municode",
             "version": args.version,
             "rid": args.rid,
             "sourceRepository": "https://github.com/muniperez/municode",

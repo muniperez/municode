@@ -40,24 +40,24 @@ internal static class DatabaseMigrationCommand
         var known = db.Database.GetMigrations().ToHashSet(StringComparer.Ordinal);
         var applied = (await db.Database.GetAppliedMigrationsAsync(ct)).ToArray();
         if (applied.Any(id => !known.Contains(id)))
-            throw new InvalidOperationException("This release cannot use a newer Workspaces database.");
+            throw new InvalidOperationException("This release cannot use a newer Municode database.");
 
         if (applied.Length > 0) return;
 
         await using var command = db.Database.GetDbConnection().CreateCommand();
         command.CommandText = db.Database.IsSqlite()
-            ? """
+            ? $"""
                 SELECT EXISTS (SELECT 1 FROM sqlite_schema
-                    WHERE type IN ('table', 'view') AND name NOT IN ('sqlite_sequence', '__WorkspacesMigrationsHistory', '__EFMigrationsLock'))
+                    WHERE type IN ('table', 'view') AND name NOT IN ('sqlite_sequence', '{MunicodeDatabase.MigrationsHistoryTable}', '__EFMigrationsLock'))
                 """
-            : """
+            : $"""
                 SELECT EXISTS (
                     SELECT 1 FROM pg_catalog.pg_class c
                     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
                     WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
-                        AND c.relname <> '__WorkspacesMigrationsHistory')
+                        AND c.relname <> '{MunicodeDatabase.MigrationsHistoryTable}')
                 """;
         if (Convert.ToBoolean(await command.ExecuteScalarAsync(ct)))
-            throw new InvalidOperationException("Workspaces requires a dedicated, empty database for its first migration.");
+            throw new InvalidOperationException("Municode requires a dedicated, empty database for its first migration.");
     }
 }

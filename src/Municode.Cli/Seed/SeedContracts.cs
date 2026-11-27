@@ -33,8 +33,8 @@ internal sealed record SeedSelection(
         SeedGuard.Require(!Overlaps(GatewayDomain, DashboardHostname) && !Overlaps(GatewayDomain, ApiHostname),
             "The gateway suffix must not overlap the dashboard or API hostname.");
         SeedGuard.Require(Regex.IsMatch(ReleaseTag,
-            @"^workspaces-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$"),
-            "Select an exact workspaces-vMAJOR.MINOR.PATCH[-prerelease] release; never latest.");
+            @"^municode-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$"),
+            "Select an exact municode-vMAJOR.MINOR.PATCH[-prerelease] release; never latest.");
     }
 
     private static bool IsPublicHostname(string value) =>
@@ -82,13 +82,13 @@ internal sealed record SeedReleaseIdentity(
 {
     public static SeedReleaseIdentity Validate(SeedReleaseIdentity identity, string expectedTag)
     {
-        SeedGuard.Require(identity.Tag == expectedTag && identity.Product == "municode-workspaces"
+        SeedGuard.Require(identity.Tag == expectedTag && identity.Product == "municode"
             && identity.Repository == "https://github.com/muniperez/municode"
             && Regex.IsMatch(identity.SourceRevision, "^[0-9a-f]{40}$")
             && Regex.IsMatch(identity.BundleSha256, "^[0-9a-f]{64}$")
             && Regex.IsMatch(identity.ManifestSha256, "^[0-9a-f]{64}$"),
-            "Release manifest identity is unsupported or does not belong to this exact Workspaces release.");
-        SeedGuard.Require(identity.BundleName == $"municode-workspaces-{expectedTag["workspaces-v".Length..]}-linux-any.tar.gz",
+            "Release manifest identity is unsupported or does not belong to this exact Municode release.");
+        SeedGuard.Require(identity.BundleName == $"municode-{expectedTag["municode-v".Length..]}-linux-any.tar.gz",
             "Release bundle identity does not match the selected exact tag and standalone distribution.");
         return identity;
     }
@@ -186,7 +186,7 @@ internal static class SeedGuard
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
     public static string CredentialScope(string credential, string operationId) =>
-        Hash("municode-workspaces-seed:" + operationId + ":" + credential);
+        Hash("municode-seed:" + operationId + ":" + credential);
 
     public static string SafeShellQuote(string value) =>
         "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";

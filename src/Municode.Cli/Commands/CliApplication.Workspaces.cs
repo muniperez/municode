@@ -16,15 +16,13 @@ public sealed partial class CliApplication
     private async Task<int> RunWorkspacesAsync(string[] args, CancellationToken ct)
     {
         var action = args.FirstOrDefault();
-        if (action == "seed")
-            return await RunSeedAsync(args.Skip(1).ToArray(), ct);
         if (action is not ("list" or "selections" or "create" or "open" or "status" or "delete" or "start" or "stop"
             or "cancel-idle-stop" or "idle-timeout" or "resize-next-start" or "vms" or "launch" or "vm-status"
             or "vm-start" or "vm-stop" or "vm-cancel-idle-stop" or "vm-discard" or "vm-resize-next-start"
             or "stop-all" or "task-renew" or "task-complete"))
             throw WorkspaceUsage("Expected list, selections, create, open, status, delete, start, stop, cancel-idle-stop, "
                 + "idle-timeout, resize-next-start, vms, launch, vm-status, vm-start, vm-stop, vm-cancel-idle-stop, "
-                + "vm-discard, vm-resize-next-start, stop-all, task-renew or task-complete. See workspaces --help.");
+                + "vm-discard, vm-resize-next-start, stop-all, task-renew or task-complete. See municode workspaces --help.");
 
         string Required(string option) =>
             GetOption(args, option) is { Length: > 0 } value

@@ -19,9 +19,9 @@ using Municode.Common.Providers.Vultr;
 
 namespace Municode.Api.Extensions;
 
-public static class WorkspacesApiServiceCollectionExtensions
+public static class MunicodeApiServiceCollectionExtensions
 {
-    public static IServiceCollection AddWorkspacesApi(
+    public static IServiceCollection AddMunicodeApi(
         this IServiceCollection services,
         IConfiguration configuration)
     {
@@ -73,7 +73,7 @@ public static class WorkspacesApiServiceCollectionExtensions
         services.Configure<KratosOptions>(
             configuration.GetSection(KratosOptions.SectionName));
         services.AddSingleton<AccountOriginValidator>();
-        services.AddWorkspacesDatabase();
+        services.AddMunicodeDatabase();
         services.AddSingleton<IConsoleUrlProvider, ConsoleUrlProvider>();
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<IIdGenerator, IdGenerator>();

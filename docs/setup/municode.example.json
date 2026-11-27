@@ -22,7 +22,7 @@
   },
   "OpenBao": {
     "Address": "https://bao.example.test",
-    "MountPath": "workspaces",
+    "MountPath": "municode",
     "EnvironmentPrefix": "example"
   },
   "DevelopmentWorkspaces": {
@@ -49,7 +49,7 @@
   "DevelopmentWorkspaceGateway": {
     "Enabled": false,
     "GatewayDomain": "workspaces.example.test",
-    "ServiceCredentialFile": "/etc/workspaces/secrets/gateway",
+    "ServiceCredentialFile": "/etc/municode/secrets/gateway",
     "ControlPlaneUrl": "http://127.0.0.1:7100",
     "TrustedProxyAddress": "127.0.0.1",
     "RelayHost": "127.0.0.1",
@@ -60,7 +60,7 @@
     "ApiBaseUrl": "https://api.example.test",
     "ManagementAddresses": ["192.0.2.10/32"],
     "RelayBindAddress": "127.0.0.1",
-    "RelayLockFile": "/var/lib/workspaces/relay.lock",
+    "RelayLockFile": "/var/lib/municode/relay.lock",
     "RelayMinimumPort": 42000,
     "RelayMaximumPort": 42999,
     "PreviewServices": {
@@ -69,6 +69,6 @@
   },
   "WorkspaceSsh": {
     "PublicKey": "",
-    "PrivateKeyFile": "/etc/workspaces/secrets/worker-ssh"
+    "PrivateKeyFile": "/etc/municode/secrets/worker-ssh"
   }
 }

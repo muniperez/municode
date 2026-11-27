@@ -25,7 +25,7 @@ public sealed class AccountFlowsController(
     BrowserSessionService sessions,
     IKratosSessionValidator kratosSessions) : ControllerBase
 {
-    private const string ProviderPendingCookie = "__Host-workspaces-oidc";
+    private const string ProviderPendingCookie = "__Host-municode-oidc";
     private const string ProviderContinuePath = "/sign-in/continue";
 
     [HttpGet("browser")]

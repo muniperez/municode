@@ -14,7 +14,7 @@ internal sealed class SeedHost(ISeedProcess? runner = null) : ISeedHost
 {
     private readonly ISeedProcess _process = runner ?? SeedProcess.Default;
 
-    internal static string RemoteDirectory(SeedState state) => "/var/lib/municode-workspaces-seed/" + state.Id;
+    internal static string RemoteDirectory(SeedState state) => "/var/lib/municode-seed/" + state.Id;
 
     public async Task CheckPrerequisitesAsync(CancellationToken cancellationToken)
     {
@@ -31,7 +31,7 @@ internal sealed class SeedHost(ISeedProcess? runner = null) : ISeedHost
             SeedGuard.Require(!File.Exists(key + ".pub"),
                 "The generated SSH key is partially present; preserve and reconcile it.");
             await RequireAsync("ssh-keygen",
-                ["-q", "-t", "ed25519", "-N", "", "-C", "municode-workspaces-seed", "-f", key],
+                ["-q", "-t", "ed25519", "-N", "", "-C", "municode-seed", "-f", key],
                 null, cancellationToken);
         }
         SeedFiles.Check(key);
@@ -97,7 +97,7 @@ install -d -m 0700 __REMOTE__
         foreach (var name in new[] { selection.DashboardHostname, selection.ApiHostname, "*." + selection.GatewayDomain })
         {
             var probe = name.StartsWith("*.", StringComparison.Ordinal)
-                ? "workspaces-seed-probe." + name[2..]
+                ? "municode-seed-probe." + name[2..]
                 : name;
             try
             {
@@ -172,7 +172,7 @@ install -d -m 0700 __REMOTE__
             + " && \"$bundle_root/seed-start.sh\" " + config
             + " --release-root \"$bundle_root\""
             + " --install-root /opt/municode/workspaces"
-            + " --secrets-dir /etc/municode/workspaces/secrets"
+            + " --secrets-dir /etc/municode/secrets"
             + " --setup-token-output " + Quote(remote + "/setup-token");
         await RequireSshAsync(state, directory, command, cancellationToken);
         await DownloadAsync(state, directory, remote + "/setup-token", setupToken, cancellationToken);

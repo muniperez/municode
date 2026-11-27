@@ -99,7 +99,7 @@ public sealed partial class CliApplication
             if (IsSeedCommand(args))
             {
                 _console.WriteLine("Seed interrupted. Durable operation state and billable provider resources are retained; "
-                    + "use 'workspaces seed status <operation>' then resume with the original credential scope. Never start a replacement plan.");
+                    + "use 'municode seed status <operation>' then resume with the original credential scope. Never start a replacement plan.");
                 return CliExitCodes.ValidationError;
             }
             _console.WriteLine("Operation canceled.");
@@ -203,12 +203,8 @@ public sealed partial class CliApplication
                 _console.WriteLine("Usage: municode token set <token>");
                 return CliExitCodes.Success;
             case "workspaces":
-            case var workspace when workspace.StartsWith("workspaces ", StringComparison.Ordinal):
-                if (command == "workspaces seed" || command.StartsWith("workspaces seed ", StringComparison.Ordinal))
-                {
-                    PrintSeedHelp();
-                    return CliExitCodes.Success;
-                }
+            case var workspace when workspace.StartsWith("workspaces ", StringComparison.Ordinal)
+                && workspace != "workspaces seed" && !workspace.StartsWith("workspaces seed ", StringComparison.Ordinal):
                 PrintWorkspaceHelp();
                 return CliExitCodes.Success;
             case "seed":
@@ -234,9 +230,7 @@ public sealed partial class CliApplication
         return CliExitCodes.ValidationError;
     }
 
-    private static bool IsSeedCommand(string[] args) =>
-        args.FirstOrDefault() == "seed"
-        || args.Length >= 2 && args[0] == "workspaces" && args[1] == "seed";
+    private static bool IsSeedCommand(string[] args) => args.FirstOrDefault() == "seed";
 
     internal static string? GetOption(IReadOnlyList<string> args, string name)
     {

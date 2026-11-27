@@ -167,8 +167,7 @@ Version: the first release after the rename is `municode-v0.2.0-<label>.1`.
 `--release latest` considers only `municode-v*` tags.
 
 Commands are top-level verbs of the `municode` executable, next to `seed`,
-`login` and `workspaces`. The release's `workspaces` wrapper passes arguments
-through, so `workspaces deploy` works too.
+`login` and `workspaces`.
 
 ### Components
 

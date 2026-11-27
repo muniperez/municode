@@ -23,11 +23,11 @@ internal sealed class SeedRelease(
         CancellationToken cancellationToken)
     {
         SeedGuard.Require(Regex.IsMatch(tag,
-                @"^workspaces-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$"),
-            "Seed requires an exact Workspaces release tag.");
+                @"^municode-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$"),
+            "Seed requires an exact Municode release tag.");
         SeedFiles.CreateDirectory(directory);
-        var version = tag["workspaces-v".Length..];
-        var bundle = $"municode-workspaces-{version}-linux-any.tar.gz";
+        var version = tag["municode-v".Length..];
+        var bundle = $"municode-{version}-linux-any.tar.gz";
         var names = new[] { "release-manifest.json", bundle, "checksums.txt", "checksums.txt.sigstore.json" };
         foreach (var name in names)
             await DownloadAsync(tag, name, Path.Combine(directory, name), cancellationToken);
@@ -41,25 +41,25 @@ internal sealed class SeedRelease(
             "verify-blob", "--new-bundle-format", "--bundle",
             Path.Combine(directory, "checksums.txt.sigstore.json"),
             "--certificate-identity",
-            $"https://github.com/muniperez/municode/.github/workflows/workspaces-release.yml@refs/tags/{tag}",
+            $"https://github.com/muniperez/municode/.github/workflows/municode-release.yml@refs/tags/{tag}",
             "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com",
             Path.Combine(directory, "checksums.txt")
         ], null, cancellationToken);
         SeedGuard.Require(verification.ExitCode == 0,
-            "The release inventory does not verify against the exact Municode Workspaces GitHub Actions signing identity.");
+            "The release inventory does not verify against the exact Municode GitHub Actions signing identity.");
         return VerifyFiles(tag, directory);
     }
 
     internal static SeedVerifiedRelease VerifyFiles(string tag, string directory)
     {
-        var version = tag["workspaces-v".Length..];
-        var bundle = $"municode-workspaces-{version}-linux-any.tar.gz";
+        var version = tag["municode-v".Length..];
+        var bundle = $"municode-{version}-linux-any.tar.gz";
         VerifyInventory(directory, new[] { "release-manifest.json", bundle });
         var manifestPath = Path.Combine(directory, "release-manifest.json");
         using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
         var manifest = document.RootElement;
         SeedGuard.Require(manifest.GetProperty("schemaVersion").GetInt32() == 1
-            && manifest.GetProperty("product").GetString() == "municode-workspaces"
+            && manifest.GetProperty("product").GetString() == "municode"
             && manifest.GetProperty("version").GetString() == version
             && manifest.GetProperty("rid").GetString() == "linux-any"
             && manifest.GetProperty("sourceRepository").GetString() == "https://github.com/muniperez/municode"

@@ -26,19 +26,19 @@ done
 mkdir -p "$install/runtime/api" "$install/runtime/worker" "$install/runtime/gateway" \
     "$install/dashboard" "$secrets/ssh" "$secrets/bootstrap" "$secrets/openbao-approle"
 cat > "$install/.env" <<'EOF'
-WORKSPACES_INSTALLATION_ID=replace
+MUNICODE_INSTALLATION_ID=replace
 CONSOLE_HOSTNAME=console.invalid
 CONSOLE_URL=https://console.invalid
 API_HOSTNAME=api.invalid
 API_URL=https://api.invalid
-WORKSPACES_GATEWAY_DOMAIN=workspaces.invalid
-WORKSPACES_SECRETS_DIR=/replace
-WORKSPACES_DOTNET_IMAGE=synthetic
-WORKSPACES_POSTGRES_IMAGE=synthetic
-WORKSPACES_OPENBAO_IMAGE=synthetic
-WORKSPACES_KRATOS_IMAGE=synthetic
-WORKSPACES_CADDY_IMAGE=synthetic
-WORKSPACES_WORKER_SSH_PUBLIC_KEY=synthetic
+MUNICODE_GATEWAY_DOMAIN=workspaces.invalid
+MUNICODE_SECRETS_DIR=/replace
+MUNICODE_DOTNET_IMAGE=synthetic
+MUNICODE_POSTGRES_IMAGE=synthetic
+MUNICODE_OPENBAO_IMAGE=synthetic
+MUNICODE_KRATOS_IMAGE=synthetic
+MUNICODE_CADDY_IMAGE=synthetic
+MUNICODE_WORKER_SSH_PUBLIC_KEY=synthetic
 EOF
 printf synthetic > "$install/release-manifest.json"
 printf synthetic > "$install/runtime/api/Municode.Api.dll"
@@ -167,15 +167,15 @@ if "api-bootstrap" in " ".join(args) and "status" in args:
         print('{"state":"required","expiresAt":"2099-01-01T00:00:00Z"}')
     raise SystemExit(0)
 if len(args) >= 2 and args[:2] == ["volume", "ls"]:
-    installation = os.environ.get("FAKE_VOLUME_INSTALLATION", "workspaces-seed-operation")
+    installation = os.environ.get("FAKE_VOLUME_INSTALLATION", "municode-seed-operation")
     requested = next((value.split("=", 2)[2] for value in args
-                      if value.startswith("label=com.municode.workspaces.installation-id=")),
+                      if value.startswith("label=com.municode.installation-id=")),
                      None)
     if requested is None or installation == requested:
-        print("municode-workspaces_openbao")
+        print("municode_openbao")
     raise SystemExit(0)
 if len(args) >= 2 and args[:2] == ["volume", "inspect"]:
-    print(os.environ.get("FAKE_VOLUME_INSTALLATION", "workspaces-seed-operation"))
+    print(os.environ.get("FAKE_VOLUME_INSTALLATION", "municode-seed-operation"))
     raise SystemExit(0)
 if len(args) >= 2 and args[:2] == ["volume", "rm"]:
     if exists("openbao-initialized"):
@@ -186,7 +186,7 @@ if len(args) >= 3 and args[:2] == ["compose", "ps"]:
     print("cid-" + args[-1])
     raise SystemExit(0)
 if len(args) >= 3 and args[0] == "inspect" and "installation-id" in " ".join(args):
-    print("workspaces-seed-operation")
+    print("municode-seed-operation")
     raise SystemExit(0)
 if len(args) >= 2 and args[0] == "inspect":
     service = args[-1].removeprefix("cid-")
@@ -225,8 +225,8 @@ class SeedStartTests(unittest.TestCase):
             "PATH": str(self.bin) + os.pathsep + self.env["PATH"],
             "FAKE_STATE_DIR": str(self.state),
             "FAKE_SECRETS_DIR": str(self.secrets) + ".seed-pending",
-            "WORKSPACES_SEED_HEALTH_SETTLE_INTERVAL": "0",
-            "WORKSPACES_SEED_OPENBAO_READY_INTERVAL": "0",
+            "MUNICODE_SEED_HEALTH_SETTLE_INTERVAL": "0",
+            "MUNICODE_SEED_OPENBAO_READY_INTERVAL": "0",
         })
 
     def tearDown(self):
@@ -235,9 +235,9 @@ class SeedStartTests(unittest.TestCase):
     def command(self):
         return [
             str(SEED_START),
-            "--release-tag", "workspaces-v1.2.3",
+            "--release-tag", "municode-v1.2.3",
             "--release-root", str(self.release),
-            "--installation-id", "workspaces-seed-operation",
+            "--installation-id", "municode-seed-operation",
             "--dashboard-hostname", "console.example.com",
             "--api-hostname", "api.example.com",
             "--gateway-domain", "workspaces.example.net",
@@ -296,7 +296,7 @@ class SeedStartTests(unittest.TestCase):
         self.assertTrue((self.secrets / "seed-install-complete").is_file())
         self.assertEqual(
             (Path(str(self.secrets) + ".seed-owner")).read_text().strip(),
-            "workspaces-seed-operation workspaces-v1.2.3 complete",
+            "municode-seed-operation municode-v1.2.3 complete",
         )
 
     def test_initialized_openbao_with_malformed_recovery_is_preserved_and_refused(self):

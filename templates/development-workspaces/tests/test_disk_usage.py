@@ -407,7 +407,7 @@ class DiskUsageTests(unittest.TestCase):
         self.assertEqual("protected_path", second["refused"])
 
 
-@unittest.skipUnless(os.environ.get("WORKSPACES_DISK_USAGE_GUEST") ==
+@unittest.skipUnless(os.environ.get("MUNICODE_DISK_USAGE_GUEST") ==
                      "RUN-DISK-USAGE-ON-DISPOSABLE-GUEST", "requires explicit disposable guest opt-in")
 class DiskUsageExt4GuestTests(unittest.TestCase):
     @classmethod

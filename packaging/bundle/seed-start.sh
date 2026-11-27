@@ -195,13 +195,13 @@ for host in (dashboard, api, gateway):
     if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+", host):
         raise SystemExit("Unsafe public hostname.")
 values = {
-    "WORKSPACES_INSTALLATION_ID": installation,
+    "MUNICODE_INSTALLATION_ID": installation,
     "CONSOLE_HOSTNAME": dashboard,
     "CONSOLE_URL": "https://" + dashboard,
     "API_HOSTNAME": api,
     "API_URL": "https://" + api,
-    "WORKSPACES_GATEWAY_DOMAIN": gateway,
-    "WORKSPACES_SECRETS_DIR": secrets,
+    "MUNICODE_GATEWAY_DOMAIN": gateway,
+    "MUNICODE_SECRETS_DIR": secrets,
 }
 lines = []
 seen = set()
@@ -225,7 +225,7 @@ chmod 600 "$install_root/.env"
 cd "$install_root"
 preflight_openbao_ownership() {
     existing_volumes="$(docker volume ls -q \
-        --filter label=com.docker.compose.project=municode-workspaces \
+        --filter label=com.docker.compose.project=municode \
         --filter label=com.docker.compose.volume=openbao)"
     if [ -n "$existing_volumes" ]; then
         [ "$(printf '%s\n' "$existing_volumes" | wc -l)" -eq 1 ] || {
@@ -233,7 +233,7 @@ preflight_openbao_ownership() {
             exit 1
         }
         [ "$(docker volume inspect \
-            --format '{{ index .Labels "com.municode.workspaces.installation-id" }}' \
+            --format '{{ index .Labels "com.municode.installation-id" }}' \
             "$existing_volumes")" = "$installation_id" ] || {
             echo "Pre-existing OpenBao volume ownership changed before startup." >&2
             exit 1
@@ -242,7 +242,7 @@ preflight_openbao_ownership() {
     existing_containers="$(docker compose ps -aq openbao openbao-agent)"
     for container in $existing_containers; do
         [ "$(docker inspect \
-            --format '{{ index .Config.Labels "com.municode.workspaces.installation-id" }}' \
+            --format '{{ index .Config.Labels "com.municode.installation-id" }}' \
             "$container")" = "$installation_id" ] || {
             echo "Pre-existing OpenBao container ownership changed before startup." >&2
             exit 1
@@ -272,15 +272,15 @@ reset_unconfigured_openbao() {
         exit 1
     }
     volume="$(docker volume ls -q \
-        --filter label=com.docker.compose.project=municode-workspaces \
+        --filter label=com.docker.compose.project=municode \
         --filter label=com.docker.compose.volume=openbao \
-        --filter "label=com.municode.workspaces.installation-id=$installation_id")"
+        --filter "label=com.municode.installation-id=$installation_id")"
     [ -n "$volume" ] && [ "$(printf '%s\n' "$volume" | wc -l)" -eq 1 ] || {
         echo "No unique OpenBao volume is owned by this exact installation; preserve the host." >&2
         exit 1
     }
     [ "$(docker volume inspect \
-        --format '{{ index .Labels "com.municode.workspaces.installation-id" }}' "$volume")" \
+        --format '{{ index .Labels "com.municode.installation-id" }}' "$volume")" \
         = "$installation_id" ] || {
         echo "OpenBao volume ownership changed before reset." >&2
         exit 1
@@ -289,7 +289,7 @@ reset_unconfigured_openbao() {
     owned_containers=
     for container in $containers; do
         [ "$(docker inspect \
-            --format '{{ index .Config.Labels "com.municode.workspaces.installation-id" }}' \
+            --format '{{ index .Config.Labels "com.municode.installation-id" }}' \
             "$container")" = "$installation_id" ] || {
             echo "OpenBao container ownership changed before reset." >&2
             exit 1
@@ -327,7 +327,7 @@ except Exception:
         case "$result" in
             true|false) printf '%s\n' "$result"; return 0 ;;
         esac
-        sleep "${WORKSPACES_SEED_OPENBAO_READY_INTERVAL:-2}"
+        sleep "${MUNICODE_SEED_OPENBAO_READY_INTERVAL:-2}"
     done
     return 1
 }
@@ -401,7 +401,7 @@ OPENBAO_ROOT_TOKEN_FILE="$secrets_dir/openbao-root-token" \
     docker compose --profile maintenance run --rm openbao-configure
 [ -s "$secrets_dir/openbao-approle/role-id" ] &&
 [ -s "$secrets_dir/openbao-approle/secret-id" ] || {
-    echo "OpenBao Workspaces AppRole configuration is incomplete." >&2
+    echo "OpenBao Municode AppRole configuration is incomplete." >&2
     exit 1
 }
 : > "$openbao_configured.pending"
@@ -428,7 +428,7 @@ if ! valid_setup_token "$setup_token"; then
     printf '%s\n' \
         "{\"installationId\":\"$installation_id\",\"operationId\":\"first-owner\"}" |
         docker compose --profile maintenance run --rm --no-TTY api-bootstrap \
-            prepare --stdin --output-file /run/workspaces-bootstrap/setup-token
+            prepare --stdin --output-file /run/municode-bootstrap/setup-token
     if [ -e "$setup_token" ] && ! valid_setup_token "$setup_token"; then
         rm -f "$setup_token"
     fi
@@ -436,7 +436,7 @@ if ! valid_setup_token "$setup_token"; then
         printf '%s\n' \
             "{\"installationId\":\"$installation_id\",\"operationId\":\"first-owner\"}" |
             docker compose --profile maintenance run --rm --no-TTY api-bootstrap \
-                rotate-token --stdin --output-file /run/workspaces-bootstrap/setup-token
+                rotate-token --stdin --output-file /run/municode-bootstrap/setup-token
         token_rotated_this_run=true
     fi
 fi
@@ -472,7 +472,7 @@ case "$token_decision" in
         printf '%s\n' \
             "{\"installationId\":\"$installation_id\",\"operationId\":\"first-owner\"}" |
             docker compose --profile maintenance run --rm --no-TTY api-bootstrap \
-                rotate-token --stdin --output-file /run/workspaces-bootstrap/setup-token
+                rotate-token --stdin --output-file /run/municode-bootstrap/setup-token
         token_rotated_this_run=true
         valid_setup_token "$setup_token" || {
             echo "The expired first-owner token could not be rotated safely." >&2
@@ -497,7 +497,7 @@ cp "$setup_token" "$setup_token_output.pending"
 chmod 600 "$setup_token_output.pending"
 mv "$setup_token_output.pending" "$setup_token_output"
 
-settle_interval=${WORKSPACES_SEED_HEALTH_SETTLE_INTERVAL:-5}
+settle_interval=${MUNICODE_SEED_HEALTH_SETTLE_INTERVAL:-5}
 consecutive=0
 attempt=0
 while [ "$attempt" -lt 6 ] && [ "$consecutive" -lt 3 ]; do
@@ -523,4 +523,4 @@ done
     exit 1
 }
 
-printf '%s\n' "Workspaces release $release_tag is installed and running."
+printf '%s\n' "Municode release $release_tag is installed and running."

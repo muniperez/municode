@@ -1,7 +1,7 @@
 {
-  "$id": "https://workspaces.invalid/identity.schema.json",
+  "$id": "https://municode.invalid/identity.schema.json",
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Workspaces operator identity",
+  "title": "Municode operator identity",
   "type": "object",
   "properties": {
     "traits": {

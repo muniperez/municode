@@ -13,8 +13,8 @@ var migrate = args.Length > 0 && args[0] == "migrate";
 var maintenance = args.Length > 0 && args[0] == "maintenance";
 var builder = WebApplication.CreateBuilder(maintenance ? [] : migrate ? args[1..] : args);
 builder.Configuration.AddDevelopmentWorkspaceConfiguration();
-builder.Services.AddWorkspacesApi(builder.Configuration);
-builder.Services.AddWorkspacesBootstrap();
+builder.Services.AddMunicodeApi(builder.Configuration);
+builder.Services.AddMunicodeBootstrap();
 builder.Services.AddSetupTransport();
 
 await using var app = builder.Build();

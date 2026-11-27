@@ -207,7 +207,7 @@ try {
     await expect(dialog.getByRole("status")).toContainText(callback === "callback" ? "app_created" : "connected");
     if (callback === "installed") await expect(dialog.getByText("fixture-owner/test-repo (private)", { exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("button", { name: /Municode Workspaces Callback workspace/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Municode Callback workspace/ })).toBeVisible();
     assert.equal(new URL(page.url()).search, "");
   }
   assert.deepEqual(mutations.map(mutation => mutation.path), ["/api/github-apps/complete", "/api/github-apps/installation"]);

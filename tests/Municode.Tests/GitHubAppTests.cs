@@ -51,7 +51,7 @@ public sealed class GitHubAppTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Forbidden, (await developer.PostAsJsonAsync("/api/github-apps/setup", Request())).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await owner.PostAsJsonAsync("/api/github-apps/setup", Request() with { OrganizationId = "foreign" })).StatusCode);
         using var csrfMissing = await Browser("no_csrf", Org, OrganizationRole.Admin);
-        csrfMissing.DefaultRequestHeaders.Remove("X-Workspaces-CSRF");
+        csrfMissing.DefaultRequestHeaders.Remove("X-Municode-CSRF");
         Assert.Equal(HttpStatusCode.Forbidden, (await csrfMissing.PostAsJsonAsync("/api/github-apps/setup", Request())).StatusCode);
         owner.DefaultRequestHeaders.Host = "attacker.example";
         var setup = await Begin();
@@ -301,9 +301,9 @@ public sealed class GitHubAppTests : IAsyncLifetime
         await db.SaveChangesAsync();
         var session = await scope.ServiceProvider.GetRequiredService<BrowserSessionService>().CreateAsync(id, "identity-" + id, "session-" + id, default);
         var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("Cookie", "__Host-workspaces-session=" + session.Cookie);
+        client.DefaultRequestHeaders.Add("Cookie", "__Host-municode-session=" + session.Cookie);
         client.DefaultRequestHeaders.Add("Origin", "https://console.example.test");
-        client.DefaultRequestHeaders.Add("X-Workspaces-CSRF", session.CsrfToken);
+        client.DefaultRequestHeaders.Add("X-Municode-CSRF", session.CsrfToken);
         return client;
     }
     private static Task<HttpResponseMessage> Hook(HttpClient client, string id, string body, string delivery, string? signature = null, string eventName = "installation")
@@ -326,7 +326,7 @@ public sealed class GitHubAppTests : IAsyncLifetime
             builder.UseEnvironment("Development").ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Database:Provider"] = "Sqlite", ["Database:RunMigrationsOnStartup"] = "false",
-                ["ConnectionStrings:Workspaces"] = connection.ConnectionString, ["Console:BaseUrl"] = "https://console.example.test",
+                ["ConnectionStrings:Municode"] = connection.ConnectionString, ["Console:BaseUrl"] = "https://console.example.test",
                 ["GitHub:ApiUrl"] = "https://api.example.test", ["Cors:AllowedOrigins:0"] = "https://console.example.test",
                 ["OpenBao:EnvironmentPrefix"] = "github-tests"
             }));
