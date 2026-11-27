@@ -165,16 +165,16 @@ public sealed class GatewayRelayTests
         using var listener = new System.Diagnostics.Metrics.MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
-            if (instrument.Meter.Name == "Municode.Gateway" && instrument.Name.StartsWith("workspaces.gateway.", StringComparison.Ordinal))
+            if (instrument.Meter.Name == "Municode.Gateway" && instrument.Name.StartsWith("municode.gateway.", StringComparison.Ordinal))
                 l.EnableMeasurementEvents(instrument);
         };
         listener.SetMeasurementEventCallback<long>((instrument, value, tags, _) =>
         {
             var text = string.Join(",", tags.ToArray().Select(tag => $"{tag.Key}={tag.Value}"));
             measurements.Enqueue((instrument.Name, value, text));
-            if (instrument.Name == "workspaces.gateway.websocket.closes" && text == "outcome=revoked")
+            if (instrument.Name == "municode.gateway.websocket.closes" && text == "outcome=revoked")
                 revokedCloseRecorded.TrySetResult(true);
-            if (instrument.Name == "workspaces.gateway.connections.active" && value < 0 && text == "operation=websocket")
+            if (instrument.Name == "municode.gateway.connections.active" && value < 0 && text == "operation=websocket")
                 activeWebSocketDecremented.TrySetResult(true);
         });
         listener.SetMeasurementEventCallback<double>((instrument, _, tags, _) =>
@@ -193,13 +193,13 @@ public sealed class GatewayRelayTests
         await activeWebSocketDecremented.Task.WaitAsync(timeout.Token);
 
         var recorded = measurements.ToArray();
-        Assert.Contains(recorded, m => m is { Name: "workspaces.gateway.websocket.closes", Tags: "outcome=revoked" });
-        Assert.Contains(recorded, m => m is { Name: "workspaces.gateway.admission.wait", Tags: "outcome=admitted" });
-        Assert.True(recorded.Where(m => m is { Name: "workspaces.gateway.relay.bytes", Tags: "operation=websocket,direction=upstream" })
+        Assert.Contains(recorded, m => m is { Name: "municode.gateway.websocket.closes", Tags: "outcome=revoked" });
+        Assert.Contains(recorded, m => m is { Name: "municode.gateway.admission.wait", Tags: "outcome=admitted" });
+        Assert.True(recorded.Where(m => m is { Name: "municode.gateway.relay.bytes", Tags: "operation=websocket,direction=upstream" })
             .Sum(m => m.Value) >= "metric-input".Length);
-        Assert.True(recorded.Where(m => m is { Name: "workspaces.gateway.relay.bytes", Tags: "operation=websocket,direction=downstream" })
+        Assert.True(recorded.Where(m => m is { Name: "municode.gateway.relay.bytes", Tags: "operation=websocket,direction=downstream" })
             .Sum(m => m.Value) >= "metric-input".Length);
-        Assert.Equal(0, recorded.Where(m => m is { Name: "workspaces.gateway.connections.active", Tags: "operation=websocket" })
+        Assert.Equal(0, recorded.Where(m => m is { Name: "municode.gateway.connections.active", Tags: "operation=websocket" })
             .Sum(m => m.Value));
         Assert.DoesNotContain(recorded, m => m.Tags.Contains(fixture.Host, StringComparison.OrdinalIgnoreCase)
             || m.Tags.Contains(Fixture.Session, StringComparison.Ordinal));
@@ -324,11 +324,13 @@ public sealed class GatewayRelayTests
         fixture.Control.Target = fixture.Control.Target! with { Bearer = null };
         using var request = new HttpRequestMessage(HttpMethod.Get, "/");
         request.Headers.Add("Cookie", fixture.Cookie + "; preview_session=app-only");
+        request.Headers.Add("X-Municode-CSRF", "control-plane-only");
         using var response = await fixture.Client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
         Assert.Contains("preview_session=app-only", body);
         Assert.DoesNotContain(Fixture.Session, body);
         Assert.DoesNotContain("secret-t3", body);
+        Assert.DoesNotContain("control-plane-only", body);
     }
 
     [Fact]
@@ -541,7 +543,7 @@ public sealed class GatewayRelayTests
                     catch (Exception ex) when (ex is WebSocketException or OperationCanceledException) { }
                     return;
                 }
-                await context.Response.WriteAsync($"{context.Request.Headers.Authorization}|{context.Request.Host}|{context.Request.Headers["X-Forwarded-Host"]}|{context.Request.Headers["X-Forwarded-Proto"]}|{context.Request.Headers.Cookie}");
+                await context.Response.WriteAsync($"{context.Request.Headers.Authorization}|{context.Request.Host}|{context.Request.Headers["X-Forwarded-Host"]}|{context.Request.Headers["X-Forwarded-Proto"]}|{context.Request.Headers.Cookie}|{context.Request.Headers["X-Municode-CSRF"]}");
             });
             await fixture.upstream.StartAsync();
             var address = fixture.upstream.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();

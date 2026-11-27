@@ -18,7 +18,7 @@ builder.Configuration.AddDevelopmentWorkspaceConfiguration();
 var services = builder.Services;
 var configuration = builder.Configuration;
 
-services.AddWorkspacesDatabase();
+services.AddMunicodeDatabase();
 services.AddSingleton(TimeProvider.System);
 services.AddSingleton<IIdGenerator, IdGenerator>();
 services.AddScoped<DevelopmentWorkspaceService>();

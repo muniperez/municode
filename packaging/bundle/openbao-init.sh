@@ -22,12 +22,12 @@ export BAO_ADDR BAO_CACERT BAO_TOKEN
 bao status >/dev/null
 
 mounts="$(bao secrets list -format=json)"
-if printf '%s' "$mounts" | grep -Fq '"workspaces/"'; then
-    info="$(bao read -format=json sys/mounts/workspaces)"
+if printf '%s' "$mounts" | grep -Fq '"municode/"'; then
+    info="$(bao read -format=json sys/mounts/municode)"
     printf '%s' "$info" | grep -Eq '"type"[[:space:]]*:[[:space:]]*"kv"' || exit 1
     printf '%s' "$info" | grep -Eq '"version"[[:space:]]*:[[:space:]]*"2"' || exit 1
 else
-    bao secrets enable -path=workspaces -version=2 kv >/dev/null
+    bao secrets enable -path=municode -version=2 kv >/dev/null
 fi
 
 auth_mounts="$(bao auth list -format=json)"
@@ -35,12 +35,12 @@ if ! printf '%s' "$auth_mounts" | grep -Fq '"approle/"'; then
     bao auth enable approle >/dev/null
 fi
 
-bao policy write workspaces "$POLICY_FILE" >/dev/null
-bao write auth/approle/role/workspaces \
-    token_policies=workspaces token_type=service token_period=24h \
+bao policy write municode "$POLICY_FILE" >/dev/null
+bao write auth/approle/role/municode \
+    token_policies=municode token_type=service token_period=24h \
     secret_id_ttl=0 secret_id_num_uses=0 >/dev/null
 
-role_id="$(bao read -field=role_id auth/approle/role/workspaces/role-id)"
+role_id="$(bao read -field=role_id auth/approle/role/municode/role-id)"
 if [ -s "$ROLE_ID_FILE" ]; then
     [ "$(cat "$ROLE_ID_FILE")" = "$role_id" ] || {
         echo "The existing OpenBao role ID does not match." >&2
@@ -50,8 +50,8 @@ else
     printf '%s\n' "$role_id" > "$ROLE_ID_FILE"
 fi
 if [ ! -s "$SECRET_ID_FILE" ]; then
-    bao write -field=secret_id -f auth/approle/role/workspaces/secret-id > "$SECRET_ID_FILE"
+    bao write -field=secret_id -f auth/approle/role/municode/secret-id > "$SECRET_ID_FILE"
 fi
 chmod 600 "$ROLE_ID_FILE" "$SECRET_ID_FILE"
 unset BAO_TOKEN role_id
-echo "OpenBao Workspaces policy, KV v2 mount, and AppRole are ready."
+echo "OpenBao Municode policy, KV v2 mount, and AppRole are ready."

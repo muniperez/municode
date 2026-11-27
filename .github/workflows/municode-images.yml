@@ -1,23 +1,23 @@
-name: Workspaces images
+name: Municode images
 
 on:
   pull_request:
     paths:
-      - .github/workflows/workspaces-images.yml
+      - .github/workflows/municode-images.yml
       - src/Municode.Api/**
       - src/Municode.Worker/**
       - src/Municode.Gateway/**
       - src/Municode.Common/**
   push:
     tags:
-      - workspaces-v*
+      - municode-v*
 
 permissions:
   contents: read
 
 jobs:
   publish:
-    if: github.repository == 'muniperez/municode' && startsWith(github.ref, 'refs/tags/workspaces-v')
+    if: github.repository == 'muniperez/municode' && startsWith(github.ref, 'refs/tags/municode-v')
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -38,16 +38,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#workspaces-v}"
+          version="${GITHUB_REF_NAME#municode-v}"
           docker buildx build --platform linux/amd64,linux/arm64 --push \
             --file src/Municode.Api/Dockerfile \
             --tag "ghcr.io/muniperez/municode-api:$version" .
           docker buildx build --platform linux/amd64,linux/arm64 --push \
             --file src/Municode.Worker/Dockerfile \
-            --tag "ghcr.io/muniperez/municode-workspaces-worker:$version" .
+            --tag "ghcr.io/muniperez/municode-worker:$version" .
           docker buildx build --platform linux/amd64,linux/arm64 --push \
             --file src/Municode.Gateway/Dockerfile \
-            --tag "ghcr.io/muniperez/municode-workspaces-gateway:$version" .
+            --tag "ghcr.io/muniperez/municode-gateway:$version" .
 
   contracts:
     if: github.event_name == 'pull_request'

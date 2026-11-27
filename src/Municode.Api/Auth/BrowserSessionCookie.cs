@@ -6,7 +6,7 @@ namespace Municode.Api.Auth;
 
 public static class BrowserSessionCookie
 {
-    public const string Name = "__Host-workspaces-session";
+    public const string Name = "__Host-municode-session";
 
     /// <summary>
     /// Remembered sessions persist across browser restarts until their maximum lifetime; standard sessions use a

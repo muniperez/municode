@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-TOKEN_FILE=${OPENBAO_TOKEN_FILE:-/run/workspaces-openbao/token}
+TOKEN_FILE=${OPENBAO_TOKEN_FILE:-/run/municode-openbao/token}
 [ -r "$TOKEN_FILE" ] && [ -s "$TOKEN_FILE" ] || exit 1
 BAO_ADDR=${BAO_ADDR:-https://openbao:8200}
 BAO_CACERT=${BAO_CACERT:-/run/secrets/openbao-ca.crt}

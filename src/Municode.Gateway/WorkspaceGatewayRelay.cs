@@ -279,6 +279,7 @@ public sealed class WorkspaceGatewayRelay : IDisposable
                 !PrivateHeaders.Contains(header.Key) && !connectionHeaders.Contains(header.Key) &&
                 !header.Key.StartsWith("X-Forwarded-", StringComparison.OrdinalIgnoreCase) &&
                 !header.Key.StartsWith("X-Workspaces-", StringComparison.OrdinalIgnoreCase) &&
+                !header.Key.StartsWith("X-Municode-", StringComparison.OrdinalIgnoreCase) &&
                 !header.Key.StartsWith("Sec-WebSocket-", StringComparison.OrdinalIgnoreCase)) &&
                 !upstream.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray()))
                 upstream.Content?.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray());

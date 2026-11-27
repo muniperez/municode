@@ -185,7 +185,7 @@ describe("account browser forms", () => {
     fireEvent.change(screen.getByLabelText("Password"), { target: { value: "synthetic-new-password" } });
     fireEvent.click(screen.getByRole("button", { name: "Save password" }));
     expect(await screen.findByText("Password updated.")).toBeInTheDocument();
-    expect(fetcher.mock.calls[1][1].headers).toHaveProperty("X-Workspaces-CSRF", "synthetic-csrf");
+    expect(fetcher.mock.calls[1][1].headers).toHaveProperty("X-Municode-CSRF", "synthetic-csrf");
   });
 
   it("clears a rejected password, reloads the same form, and only submits again on explicit retry", async () => {
@@ -331,7 +331,7 @@ describe("keep me signed in", () => {
     expect(url).toMatch(/\/api\/account\/session\/preference$/);
     expect(init.method).toBe("PUT");
     expect(JSON.parse(init.body as string)).toEqual({ keepSignedIn: true });
-    expect((init.headers as Record<string, string>)["X-Workspaces-CSRF"]).toBe("synthetic-csrf");
+    expect((init.headers as Record<string, string>)["X-Municode-CSRF"]).toBe("synthetic-csrf");
     expect(window.localStorage.getItem("municode.keepSignedIn")).toBe("1");
   });
 });

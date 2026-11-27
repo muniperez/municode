@@ -15,14 +15,11 @@ namespace Municode.Cli.Tests;
 
 public sealed class CliSeedTests
 {
-    [Theory]
-    [InlineData("seed")]
-    [InlineData("workspaces")]
-    public async Task ExactSeedAliasesPlanWithoutProviderMutation(string command)
+    [Fact]
+    public async Task ExactSeedPlansWithoutProviderMutation()
     {
         using var fixture = new SeedCliFixture();
         var args = SeedPlanArgs(fixture.CredentialPath);
-        if (command == "workspaces") args = ["workspaces", "seed", .. args.Skip(1)];
         Assert.Equal(CliExitCodes.Success,
             await fixture.Application.RunAsync(args, CancellationToken.None));
         Assert.Equal(0, fixture.Providers.CreateCalls);
@@ -35,6 +32,18 @@ public sealed class CliSeedTests
             fixture.Environment.ConfigHome, "seed", operation, "operation.json"));
         Assert.DoesNotContain(SeedCliFixture.Credential, journal, StringComparison.Ordinal);
         Assert.Contains("credentialScope", journal);
+    }
+
+    [Fact]
+    public async Task WorkspaceSeedAliasIsNotRouted()
+    {
+        using var fixture = new SeedCliFixture();
+        Assert.Equal(CliExitCodes.ValidationError, await fixture.Application.RunAsync(
+            ["workspaces", "seed", .. SeedPlanArgs(fixture.CredentialPath).Skip(1)], CancellationToken.None));
+        Assert.Equal(CliExitCodes.ValidationError, await fixture.Application.RunAsync(
+            ["help", "workspaces", "seed"], CancellationToken.None));
+        Assert.Equal(CliExitCodes.Success, await fixture.Application.RunAsync(
+            ["help", "seed"], CancellationToken.None));
     }
 
     [Fact]
@@ -72,7 +81,7 @@ public sealed class CliSeedTests
         var operation = await fixture.PlanAsync();
         Assert.Equal(CliExitCodes.ValidationError, await fixture.Application.RunAsync(
         [
-            "workspaces", "seed", "apply", operation,
+            "seed", "apply", operation,
             "--credential-file", fixture.CredentialPath, "--approve", fixture.Approval()
         ], CancellationToken.None));
         Assert.Equal(1, fixture.Providers.CreateCalls);
@@ -130,7 +139,7 @@ public sealed class CliSeedTests
         "--dashboard-hostname", "console.example.com",
         "--api-hostname", "api.example.com",
         "--gateway-domain", "workspaces.example.net",
-        "--release", "workspaces-v1.2.3",
+        "--release", "municode-v1.2.3",
         "--credential-file", credential
     ];
 
@@ -252,8 +261,8 @@ public sealed class CliSeedTests
         }
 
         public static SeedReleaseIdentity Identity(string tag) => new(
-            tag, "municode-workspaces", "https://github.com/muniperez/municode",
-            new string('a', 40), "municode-workspaces-1.2.3-linux-any.tar.gz",
+            tag, "municode", "https://github.com/muniperez/municode",
+            new string('a', 40), "municode-1.2.3-linux-any.tar.gz",
             new string('b', 64), new string('c', 64), "github-sigstore");
     }
 

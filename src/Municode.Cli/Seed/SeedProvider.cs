@@ -142,7 +142,7 @@ internal sealed partial class SeedProvider : ISeedProvider
                 server_type = selection.Size,
                 image = long.Parse(quote.Image, CultureInfo.InvariantCulture),
                 user_data = CloudInit(publicKey),
-                labels = new Dictionary<string, string> { ["municode-workspaces-seed"] = state.Id },
+                labels = new Dictionary<string, string> { ["municode-seed"] = state.Id },
                 public_net = new { enable_ipv4 = true, enable_ipv6 = false },
                 start_after_create = true
             },
@@ -198,7 +198,7 @@ ssh_pwauth: false
     private bool Owned(JsonElement value, string operationId) =>
         _provider == "hetzner"
             ? value.TryGetProperty("labels", out var labels)
-                && labels.TryGetProperty("municode-workspaces-seed", out var id)
+                && labels.TryGetProperty("municode-seed", out var id)
                 && id.GetString() == operationId
             : value.TryGetProperty("tags", out var tags)
                 && tags.EnumerateArray().Any(tag => tag.GetString() == Name(operationId));

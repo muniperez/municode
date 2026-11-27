@@ -554,7 +554,7 @@ public sealed class KratosBrowserFlowClient(HttpClient client, IOptions<KratosOp
                 return null;
             if (response.StatusCode == HttpStatusCode.Forbidden)
             {
-                // The redirect and continuity cookie belong to Kratos. Require a fresh Workspaces sign-in and form instead.
+                // The redirect and continuity cookie belong to Kratos. Require a fresh Municode sign-in and form instead.
                 if (payload.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object &&
                     error.TryGetProperty("id", out var errorId) && errorId.ValueKind == JsonValueKind.String &&
                     errorId.ValueEquals("session_refresh_required"))

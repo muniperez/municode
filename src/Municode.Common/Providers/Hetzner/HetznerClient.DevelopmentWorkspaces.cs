@@ -128,7 +128,7 @@ public sealed partial class HetznerClient : IDevelopmentWorkspaceProvider
 
     public async Task DeleteWorkspaceVolumeAsync(string id, IReadOnlyDictionary<string, string> labels, CancellationToken ct)
     {
-        if (!labels.TryGetValue("managed-by", out var manager) || manager != "municode-workspaces"
+        if (!labels.TryGetValue("managed-by", out var manager) || manager != "municode"
             || !labels.TryGetValue("kind", out var kind) || kind != "primary"
             || !labels.ContainsKey("workspace") || !labels.ContainsKey("organization"))
             throw new InvalidOperationException("Complete retained workspace ownership labels are required.");

@@ -53,12 +53,12 @@ public sealed class SeedJournalTests
         Id = id,
         Plan = new(
             new("hetzner", "nbg1", "cx22", "console.example.com", "api.example.com",
-                "workspaces.example.net", "workspaces-v1.2.3"),
+                "workspaces.example.net", "municode-v1.2.3"),
             new("account", "credential-scope", "image", "linux/amd64", 2, 4096, 40,
                 [new("vps", 10m, 0.01m, "EUR", "hourly", "none", "fixture")],
                 DateTimeOffset.UtcNow, "fixture"),
-            new("workspaces-v1.2.3", "municode-workspaces", "https://github.com/muniperez/municode",
-                new string('a', 40), "municode-workspaces-1.2.3-linux-any.tar.gz",
+            new("municode-v1.2.3", "municode", "https://github.com/muniperez/municode",
+                new string('a', 40), "municode-1.2.3-linux-any.tar.gz",
                 new string('b', 64), new string('c', 64), "github-sigstore"))
     };
 

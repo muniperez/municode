@@ -36,7 +36,7 @@ public sealed class BootstrapKratosIdentityStore(HttpClient client, IOptions<Kra
                 throw BootstrapException.Unavailable();
             if (!item.TryGetProperty("metadata_admin", out var metadata) ||
                 metadata.ValueKind != JsonValueKind.Object ||
-                !metadata.TryGetProperty("workspaces_bootstrap", out var bootstrap) ||
+                !metadata.TryGetProperty("municode_bootstrap", out var bootstrap) ||
                 bootstrap.ValueKind != JsonValueKind.Object ||
                 ReadString(bootstrap, "installationId") != installationId ||
                 ReadString(bootstrap, "operationId") != operationId)
@@ -95,7 +95,7 @@ public sealed class BootstrapKratosIdentityStore(HttpClient client, IOptions<Kra
                 schema_id = "user",
                 traits = new { email, name = new { first = displayName } },
                 credentials = new { password = new { config = new { password } } },
-                metadata_admin = new { workspaces_bootstrap = new { installationId, operationId } }
+                metadata_admin = new { municode_bootstrap = new { installationId, operationId } }
             })
         };
         using var response = await SendAsync(request, cancellationToken);
@@ -104,7 +104,7 @@ public sealed class BootstrapKratosIdentityStore(HttpClient client, IOptions<Kra
         var result = ParseIdentity(root);
         if (!root.TryGetProperty("metadata_admin", out var metadata) ||
             metadata.ValueKind != JsonValueKind.Object ||
-            !metadata.TryGetProperty("workspaces_bootstrap", out var marker) ||
+            !metadata.TryGetProperty("municode_bootstrap", out var marker) ||
             ReadString(marker, "installationId") != installationId || ReadString(marker, "operationId") != operationId)
             throw BootstrapException.Unavailable();
         return result;

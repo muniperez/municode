@@ -26,11 +26,11 @@ public static class BootstrapCommand
             var builder = WebApplication.CreateBuilder(Array.Empty<string>());
             builder.Logging.ClearProviders();
             builder.Configuration.AddDevelopmentWorkspaceConfiguration();
-            builder.Services.AddWorkspacesDatabase();
+            builder.Services.AddMunicodeDatabase();
             builder.Services.Configure<KratosOptions>(builder.Configuration.GetSection(KratosOptions.SectionName));
             builder.Services.AddSingleton(TimeProvider.System);
             builder.Services.AddSingleton<IIdGenerator, IdGenerator>();
-            builder.Services.AddWorkspacesBootstrap();
+            builder.Services.AddMunicodeBootstrap();
             await using var provider = builder.Services.BuildServiceProvider();
             await using var scope = provider.CreateAsyncScope();
             var service = scope.ServiceProvider.GetRequiredService<BootstrapService>();

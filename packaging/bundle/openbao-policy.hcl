@@ -1,16 +1,16 @@
-path "workspaces/data/env/+/orgs/+/providers/+/credentials/+" {
+path "municode/data/env/+/orgs/+/providers/+/credentials/+" {
   capabilities = ["create", "read", "update"]
 }
 
-path "workspaces/metadata/env/+/orgs/+/providers/+/credentials/+" {
+path "municode/metadata/env/+/orgs/+/providers/+/credentials/+" {
   capabilities = ["delete"]
 }
 
-path "workspaces/data/env/+/orgs/+/integrations/+/credentials/+" {
+path "municode/data/env/+/orgs/+/integrations/+/credentials/+" {
   capabilities = ["create", "read", "update"]
 }
 
-path "workspaces/metadata/env/+/orgs/+/integrations/+/credentials/+" {
+path "municode/metadata/env/+/orgs/+/integrations/+/credentials/+" {
   capabilities = ["delete"]
 }
 
@@ -23,6 +23,6 @@ path "auth/token/lookup-self" {
 }
 
 # Operator-provisioned secrets such as the budget SMTP password; services only read them.
-path "workspaces/data/env/+/operator/+" {
+path "municode/data/env/+/operator/+" {
   capabilities = ["read"]
 }

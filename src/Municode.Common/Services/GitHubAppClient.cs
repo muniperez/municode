@@ -104,7 +104,7 @@ public sealed partial class GitHubAppClient(HttpClient client, TimeProvider cloc
         bool tokenRevocation = false)
     {
         using var request = new HttpRequestMessage(method, new Uri("https://api.github.com/" + path));
-        request.Headers.UserAgent.ParseAdd("Workspaces-GitHub-App/1.0");
+        request.Headers.UserAgent.ParseAdd("Municode-GitHub-App/1.0");
         request.Headers.Accept.ParseAdd("application/vnd.github+json");
         request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
         if (token is not null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);

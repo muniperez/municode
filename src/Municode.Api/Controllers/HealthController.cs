@@ -16,7 +16,7 @@ public sealed class HealthController : ControllerBase
 
         var pendingMigrations = await db.Database.GetPendingMigrationsAsync(cancellationToken);
         return pendingMigrations.Any()
-            ? Results.Problem("Workspaces database migrations are pending.", statusCode: 503)
+            ? Results.Problem("Municode database migrations are pending.", statusCode: 503)
             : Results.Ok(new { status = "ready" });
     }
 }

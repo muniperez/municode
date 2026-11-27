@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MPL-2.0
-"""Verify component digests inside an extracted Municode Workspaces release."""
+"""Verify component digests inside an extracted Municode release."""
 
 import hashlib
 import json
@@ -24,7 +24,7 @@ def main():
         if entry.is_symlink():
             fail(f"Symlinks are forbidden in a release: {entry}")
     manifest = json.loads((root / "release-manifest.json").read_text())
-    if manifest.get("schemaVersion") != 1 or manifest.get("product") != "municode-workspaces":
+    if manifest.get("schemaVersion") != 1 or manifest.get("product") != "municode":
         fail("Unexpected release manifest.")
     roots = {
         "api": root / "runtime" / "api",

@@ -692,7 +692,7 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Database:Provider"] = "Sqlite", ["Database:RunMigrationsOnStartup"] = "false",
-                ["ConnectionStrings:Workspaces"] = connection.ConnectionString
+                ["ConnectionStrings:Municode"] = connection.ConnectionString
             }));
             builder.ConfigureTestServices(services =>
             {

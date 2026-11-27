@@ -328,7 +328,7 @@ public sealed class BrowserSessionServiceTests
     public async Task PostgresSerializesConcurrentRenewalsRevocationsRotationsAndPreferenceChanges()
     {
         var databaseOptions = new DbContextOptionsBuilder<WorkspaceDbContext>();
-        WorkspacesDatabase.ConfigurePostgres(databaseOptions, Environment.GetEnvironmentVariable(LocalPostgresFactAttribute.ConnectionVariable)!);
+        MunicodeDatabase.ConfigurePostgres(databaseOptions, Environment.GetEnvironmentVariable(LocalPostgresFactAttribute.ConnectionVariable)!);
         await VerifyConcurrencyAsync(databaseOptions.Options);
 
         static async Task VerifyConcurrencyAsync(DbContextOptions<WorkspaceDbContext> options)
@@ -562,7 +562,7 @@ public sealed class BrowserSessionServiceTests
 
 internal sealed class LocalPostgresFactAttribute : FactAttribute
 {
-    public const string ConnectionVariable = "WORKSPACES_TEST_POSTGRES";
+    public const string ConnectionVariable = "MUNICODE_TEST_POSTGRES";
 
     public LocalPostgresFactAttribute()
     {

@@ -9,7 +9,7 @@ public sealed class PostgresSchemaFactory : IDesignTimeDbContextFactory<Workspac
     public WorkspaceDbContext CreateDbContext(string[] args)
     {
         var options = new DbContextOptionsBuilder<WorkspaceDbContext>();
-        WorkspacesDatabase.ConfigurePostgres(options, "Host=localhost;Database=workspaces");
+        MunicodeDatabase.ConfigurePostgres(options, "Host=localhost;Database=municode");
         return new WorkspaceDbContext(options.Options);
     }
 }
@@ -19,7 +19,7 @@ public sealed class SqliteSchemaFactory : IDesignTimeDbContextFactory<WorkspaceS
     public WorkspaceSqliteDbContext CreateDbContext(string[] args)
     {
         var options = new DbContextOptionsBuilder<WorkspaceSqliteDbContext>();
-        WorkspacesDatabase.ConfigureSqlite(options, "Data Source=:memory:");
+        MunicodeDatabase.ConfigureSqlite(options, "Data Source=:memory:");
         return new WorkspaceSqliteDbContext(options.Options);
     }
 }

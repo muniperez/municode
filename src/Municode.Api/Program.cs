@@ -12,8 +12,8 @@ if (args.Length > 0 && args[0] == "bootstrap")
 var migrate = args.Length > 0 && args[0] == "migrate";
 var builder = WebApplication.CreateBuilder(migrate ? args[1..] : args);
 builder.Configuration.AddDevelopmentWorkspaceConfiguration();
-builder.Services.AddWorkspacesApi(builder.Configuration);
-builder.Services.AddWorkspacesBootstrap();
+builder.Services.AddMunicodeApi(builder.Configuration);
+builder.Services.AddMunicodeBootstrap();
 builder.Services.AddSetupTransport();
 
 var app = builder.Build();

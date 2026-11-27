@@ -136,7 +136,7 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
 
     private WorkspaceDbContext Context() => postgresOptions is not null ? new WorkspaceDbContext(postgresOptions) :
         new WorkspaceSqliteDbContext(new DbContextOptionsBuilder<WorkspaceSqliteDbContext>().UseSqlite(connection,
-            sqlite => sqlite.MigrationsHistoryTable(WorkspacesDatabase.MigrationsHistoryTable)).Options);
+            sqlite => sqlite.MigrationsHistoryTable(MunicodeDatabase.MigrationsHistoryTable)).Options);
     private DevelopmentWorkspaceProcessor Processor() => ActivatorUtilities.CreateInstance<DevelopmentWorkspaceProcessor>(services);
 
     [Theory]
@@ -1876,7 +1876,7 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
     private Task<DevelopmentWorkspaceOperation> CurrentOperation(string id) =>
         db.DevelopmentWorkspaceOperations.AsNoTracking().SingleAsync(x => x.Id == id);
     private static Dictionary<string, string> VolumeLabels(DevelopmentWorkspace workspace) => new()
-        { ["managed-by"] = "municode-workspaces", ["organization"] = workspace.OrganizationId, ["workspace"] = workspace.Id, ["kind"] = "primary" };
+        { ["managed-by"] = "municode", ["organization"] = workspace.OrganizationId, ["workspace"] = workspace.Id, ["kind"] = "primary" };
     private static Dictionary<string, string> ComputeLabels(DevelopmentWorkspace workspace, DevelopmentWorkspaceVm vm) =>
         new(VolumeLabels(workspace)) { ["kind"] = vm.Kind, ["vm"] = vm.Id, ["generation"] = "1", ["operation"] = vm.AllocationOperationId! };
 

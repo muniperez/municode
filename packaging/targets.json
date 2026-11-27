@@ -9,12 +9,12 @@
     "worker": {
       "project": "src/Municode.Worker/Municode.Worker.csproj",
       "artifact": "Municode.Worker.dll",
-      "image": "ghcr.io/muniperez/municode-workspaces-worker"
+      "image": "ghcr.io/muniperez/municode-worker"
     },
     "gateway": {
       "project": "src/Municode.Gateway/Municode.Gateway.csproj",
       "artifact": "Municode.Gateway.dll",
-      "image": "ghcr.io/muniperez/municode-workspaces-gateway"
+      "image": "ghcr.io/muniperez/municode-gateway"
     },
     "dashboard": {
       "project": "modules/dashboard/package.json",
@@ -25,7 +25,7 @@
       "project": "src/Municode.Cli/Municode.Cli.csproj",
       "artifact": "municode",
       "rids": ["linux-x64", "linux-arm64", "osx-arm64", "win-x64"],
-      "integration": "Merged self-contained executable project consumed by delivery release targets; package adds the workspaces command alias."
+      "integration": "Merged self-contained executable project consumed by delivery release targets."
     }
   }
 }

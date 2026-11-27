@@ -54,7 +54,7 @@ export function SidebarNavigation({ onNavigate }: { onNavigate: () => void }) {
                 <GalleryVerticalEnd className="size-4" aria-hidden="true" />
               </span>
               <span className="grid min-w-0 flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-semibold">Municode Workspaces</span>
+                <span className="truncate font-semibold">Municode</span>
                 <span className="truncate text-xs">{selectedOrganization?.name || "Workspace"}</span>
               </span>
               <ChevronsUpDown className="ml-auto size-4 shrink-0" aria-hidden="true" />

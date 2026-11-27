@@ -1,4 +1,4 @@
-# Workspaces licensing
+# Municode licensing
 
 The Workspaces control-plane implementation and its tests incorporate source
 from MiniCloud at `b0e4edc3398364210c9e274e0b1de9cd8352e3fe`. These files

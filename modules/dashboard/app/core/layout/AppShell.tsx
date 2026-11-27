@@ -43,7 +43,7 @@ export function AppShell() {
                   <SidebarNavigation onNavigate={() => setOpen(false)} />
                 </SheetContent>
               </Sheet>
-              <span>Municode Workspaces</span>
+              <span>Municode</span>
             </header>
             <main ref={main} tabIndex={-1} className="mx-auto min-w-0 max-w-7xl p-4 md:p-6">
               <BudgetAlertBanner />

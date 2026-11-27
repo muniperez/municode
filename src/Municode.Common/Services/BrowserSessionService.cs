@@ -67,7 +67,7 @@ public sealed class BrowserSessionService(
         var user = await db.Users.SingleOrDefaultAsync(x => x.Id == userId, cancellationToken);
         if (user is null || user.KratosIdentityId != kratosIdentityId)
         {
-            throw new InvalidOperationException("The identity is not bound to this Workspaces user.");
+            throw new InvalidOperationException("The identity is not bound to this Municode user.");
         }
 
         var now = timeProvider.GetUtcNow();
@@ -387,7 +387,7 @@ public sealed class BrowserSessionService(
 
         if (existing.UserId != userId || existing.KratosIdentityId != kratosIdentityId ||
             !await db.Users.AnyAsync(x => x.Id == userId && x.KratosIdentityId == kratosIdentityId, cancellationToken))
-            throw new InvalidOperationException("The identity is not bound to this Workspaces user.");
+            throw new InvalidOperationException("The identity is not bound to this Municode user.");
 
         // Kratos settings can retain its session ID; rotate the local secret, not the unique upstream binding.
         var now = timeProvider.GetUtcNow();
