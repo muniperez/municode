@@ -203,11 +203,22 @@ municode CLI                             /opt/municode/releases/<release-id>/   
    output from `scripts/delivery/build-release.sh --ref <git-ref>`. That script
    builds the README's package commands in a clean `git worktree` at an exact
    commit and writes `release-manifest.json`, the bundle and `checksums.txt`
-   (no Sigstore bundle). The CLI verifies the inventory and component digests,
-   requires a clean exact source revision, and records trust `local-build`. Seed
-   still refuses local builds. This source supports the workflow where each
-   operator deploys their own instance from their own machine without waiting
-   for a tagged CI release.
+   (no Sigstore bundle). A dirty caller checkout is refused unless
+   `--allow-dirty` is passed; that override records `sourceDirty: true` and
+   still builds only the requested commit, not the uncommitted changes. The CLI
+   verifies the inventory and component digests, requires `sourceDirty: false`
+   and an exact source revision, and records trust `local-build`. It computes
+   the release ID as `local-<first 12 source hex>-<first 12 archive SHA-256 hex>`
+   from the verified bundle, not from its directory name. Seed still refuses
+   local builds.
+
+   Local builds package `docker image save` archives at `images/{api,worker,gateway}.tar`
+   inside the bundle. After verifying the bundle, the host stages the three
+   images with `docker image load --input`, verifies each Docker image ID, and
+   tags each by the manifest's `reference` before preflight. The local bundle
+   selects those references in its release-owned environment and uses
+   `pull_policy: never` for those services. No registry credentials are needed
+   for these images; the other pinned dependencies are pulled as usual.
 
 **CLI version coupling.** Seed requires the CLI and release source revisions to
 match. Deploy drops that requirement because the host logic ships in the
@@ -243,6 +254,14 @@ no negotiation.
   `MUNICODE_POLICY_FILE`) for `api`, `api-migrate` and `worker`, instead of
   `./workspaces.json` (now `./municode.json`) from the release tree. The bundled `municode.json`
   becomes the template that install copies into `config/` once.
+- Local builds additionally record `sourceDirty` (boolean), `imagePlatform`
+  (`linux/amd64` or `linux/arm64`), and `imageArchives`, keyed by `api`, `worker`
+  and `gateway`. Each entry records its relative `path`, the raw archive's hex
+  SHA-256 (`sha256`), the Docker config digest (`imageId`, prefixed `sha256:`),
+  and the local Compose `reference` (`municode-<component>:local-<full config
+  digest hex>`). `dependencies` remains the registry digest inventory. Image
+  tar members can exceed the signed release's per-file limit; local verifiers
+  must stream and separately bound these known entries.
 
 ### Running release identity
 

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import gzip
 import hashlib
 import json
@@ -20,8 +21,6 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
-BUNDLE = ROOT / "packaging" / "bundle"
-TARGETS = ROOT / "packaging" / "targets.json"
 REQUIRED_BACKEND_FILES = {
     "api": "Municode.Api.dll",
     "worker": "Municode.Worker.dll",
@@ -31,6 +30,14 @@ REQUIRED_BACKEND_FILES = {
 
 class PackageError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class LocalBuild:
+    source_dirty: bool
+    image_platform: str
+    image_directory: Path
+    image_ids: dict[str, str]
 
 
 def require(condition: bool, message: str) -> None:
@@ -80,16 +87,16 @@ def component_inventory(root: Path) -> dict[str, object]:
     }
 
 
-def validate_targets() -> dict[str, object]:
-    targets = json.loads(TARGETS.read_text())
+def validate_targets(source_root: Path = ROOT) -> dict[str, object]:
+    targets = json.loads((source_root / "packaging" / "targets.json").read_text())
     require(targets.get("schemaVersion") == 1, "Unsupported package target schema.")
     for component in ("api", "worker", "gateway", "dashboard", "cli"):
         require(component in targets["components"], f"Missing package target: {component}")
     return targets
 
 
-def validate_release() -> dict[str, object]:
-    release = json.loads((ROOT / "packaging" / "release.json").read_text())
+def validate_release(source_root: Path = ROOT) -> dict[str, object]:
+    release = json.loads((source_root / "packaging" / "release.json").read_text())
     require(release.get("schemaVersion") == 1, "Unsupported release metadata schema.")
     require(release.get("product") == "municode", "Unexpected release product.")
     images = release.get("images")
@@ -168,10 +175,36 @@ def deterministic_archive(staging: Path, archive: Path) -> None:
                         bundle.addfile(info)
 
 
-def package(args: argparse.Namespace) -> Path:
+def add_local_images(root: Path, contract: dict, local: LocalBuild) -> dict:
+    images = {}
+    env = {"MUNICODE_RUNTIME_PULL_POLICY": "never"}
+    require(local.image_ids.keys() == REQUIRED_BACKEND_FILES.keys(), "Incomplete local image inventory.")
+    compose = (root / "compose.yml").read_text()
+    (root / "images").mkdir()
+    for name, image_id in local.image_ids.items():
+        require(re.fullmatch(r"sha256:[0-9a-f]{64}", image_id), f"Invalid {name} image ID.")
+        relative = f"images/{name}.tar"
+        image = root / relative
+        shutil.move(local.image_directory / f"{name}.tar", image)
+        reference = f"municode-{name}:local-{image_id.removeprefix('sha256:')}"
+        images[name] = {"path": relative, "sha256": file_digest(image),
+                        "imageId": image_id, "reference": reference}
+        env[f"MUNICODE_{name.upper()}_IMAGE"] = reference
+    with (root / ".env.example").open("a") as template:
+        template.write("\n")
+        for key, value in env.items():
+            require(f"${{{key}:-" in compose, f"Source revision does not support local builds: {key}")
+            contract[key] = {"owner": "release"}
+            template.write(f"{key}={value}\n")
+    (root / "env-contract.json").write_text(json.dumps(contract, indent=2, sort_keys=True) + "\n")
+    return {"sourceDirty": local.source_dirty, "imagePlatform": local.image_platform,
+            "imageArchives": images}
+
+
+def package(args: argparse.Namespace, *, source_root: Path = ROOT, local: LocalBuild | None = None) -> Path:
     validate_identity(args)
-    targets = validate_targets()
-    release = validate_release()
+    targets = validate_targets(source_root)
+    release = validate_release(source_root)
     components = validate_payloads(args)
     args.output.mkdir(parents=True, exist_ok=True)
     archive_name = f"municode-{args.version}-{args.rid}.tar.gz"
@@ -185,10 +218,10 @@ def package(args: argparse.Namespace) -> Path:
 
     with tempfile.TemporaryDirectory(prefix="municode-package-", dir=args.output) as temporary:
         root = Path(temporary) / f"municode-{args.version}"
-        copy_tree(BUNDLE, root)
+        copy_tree(source_root / "packaging" / "bundle", root)
         (root / "docs").mkdir()
         for name in ("operator.md", "user.md"):
-            shutil.copy2(ROOT / "docs" / name, root / "docs" / name)
+            shutil.copy2(source_root / "docs" / name, root / "docs" / name)
 
         inventories: dict[str, object] = {}
         for name, (relative, source) in components.items():
@@ -201,11 +234,12 @@ def package(args: argparse.Namespace) -> Path:
             ["dotnet", str((api / REQUIRED_BACKEND_FILES["api"]).resolve()), "migrations", "list", "--json"],
             cwd=api, check=True, stdout=subprocess.PIPE, text=True,
         )
+        contract = json.loads((root / "env-contract.json").read_text())
         manifest = {
             "schemaVersion": 1,
             "deployProtocol": 1,
             "migrations": json.loads(migrations.stdout),
-            "envContract": json.loads((root / "env-contract.json").read_text()),
+            "envContract": contract,
             "product": "municode",
             "version": args.version,
             "rid": args.rid,
@@ -216,6 +250,8 @@ def package(args: argparse.Namespace) -> Path:
             "components": inventories,
             "bundle": archive_name,
         }
+        if local is not None:
+            manifest.update(add_local_images(root, contract, local))
         (root / "release-manifest.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n"
         )
