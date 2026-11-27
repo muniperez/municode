@@ -45,10 +45,20 @@ image and plan in the dashboard before creating the first coding VM.
 For control-plane registration, use `municode instance add`, `list`, `show`,
 or `remove`. See [the operator command reference](operator.md#register-a-control-plane).
 
-Use `municode deploy plan` to stage a release and check whether it can be
-deployed to a registered control plane. It uses pinned SSH and root or
-passwordless `sudo`. It can stage images and files, but does not switch
-services, run migrations, or change operator configuration.
+For the common upgrade, register an existing host (including one not created
+with seed), review a plan, then approve exactly that plan:
+
+```sh
+municode instance add production --ssh ops@control.example.com \
+  --confirm-host-fingerprint SHA256:...
+municode deploy plan --instance production --release latest
+municode deploy apply <operation> --approve <digest>
+```
+
+Verify the fingerprint independently. Deploy uses pinned SSH and requires root
+or passwordless `sudo -n`. Plan stages the release and checks whether it can be
+deployed; it does not switch services, run migrations or change operator
+configuration.
 
 | Command | Effect |
 | --- | --- |

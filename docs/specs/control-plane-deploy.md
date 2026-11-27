@@ -1,7 +1,6 @@
 # Spec: deploy a new release to an existing control plane
 
-Status: proposed. Municode has no external users yet, so this design carries
-no backwards compatibility: existing instances are reinstalled, not migrated.
+Status: Implemented on coordinator PR #182; live validation pending (#177).
 Tracking: epic #168, see the [issue breakdown](#issue-breakdown).
 
 ## Problem

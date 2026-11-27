@@ -316,29 +316,73 @@ pass `--instance-name <name>` to `municode seed plan`.
 
 ## Operate and upgrade
 
-Back up PostgreSQL, OpenBao, Caddy state, installation state and protected secrets
-together. Keep recovery material offline. Before an upgrade, download and verify
-a new exact archive, stop accepted work, back up, install into a new root, and
-switch only after migrations and health checks pass. Do not overwrite an active
-release or reuse its installation ID on another host.
-
-On a release that supports maintenance mode, run the following against the active
-release's database before stopping the worker. Use the API executable with the
-same database configuration as the running API:
+### Quick path: register and deploy
 
 ```sh
-Municode.Api maintenance enter
-Municode.Api maintenance status --json
+municode instance add production --ssh ops@control.example.com \
+  --confirm-host-fingerprint SHA256:...
+municode deploy plan --instance production --release latest
+municode deploy apply <operation> --approve <digest>
 ```
 
-For the Compose bundle, use `municode-compose run --rm --no-deps api-migrate`,
-passing the DLL path from that service's `command` followed by the maintenance arguments.
+This registers any deploy-capable host you can reach over SSH, including one
+installed with `install.sh` rather than `seed`. Verify the host fingerprint
+independently before confirming it. For a non-root SSH user, the host must allow
+passwordless `sudo -n`. Review the plan and use its exact operation and approval
+digest. `latest` selects the newest eligible published signed release; drafts
+and prereleases are excluded unless `--prerelease` is used.
 
-Keep the worker running until `enabled` is `true` and `nonterminalOperations`
-is `0`; operations can be pending without an active lease. If the drain times out,
-do not stop the worker. Use `maintenance exit` to reopen admission after an aborted
-drain or once the new release and its worker are running. Reads and existing
-workspace connections remain available while only maintenance mode is active.
+### Plan, apply and inspect
+
+`municode deploy plan` verifies and stages the release, then runs a read-only
+preflight. Check its blockers, release and configuration changes, migration
+state, image set and approval digest before applying. A blocked plan has no
+approval digest. For an exact tag, replace `latest` with the tag printed by the
+release. To deploy a locally built release, build a clean bundle with
+[`build-release.sh`](../scripts/delivery/README.md), then plan with
+`--bundle-dir <dir> --trust local-build`; this unsigned trust level is recorded
+on the host and in `/health/version`.
+
+Apply runs in a host systemd unit, drains nonterminal workspace operations
+(15 minutes by default), backs up the matched database and host state, migrates,
+starts the target and checks public health endpoints. `--drain-timeout
+<seconds>` changes the drain limit. `--offhost-backup <dir>` also downloads the
+matched backup to that local directory, verifies its files and keeps them
+owner-only; it includes secrets, so protect the directory as carefully as the
+host backup.
+
+Use `municode deploy status <operation>` to read local and host progress, or
+`municode deploy status --instance <name>` to inspect the active release and
+latest host operation without a local operation journal. Status also reports
+the public `/health/version` when available.
+
+If the workstation or SSH connection is interrupted, run
+`municode deploy resume <operation>`. The host journal is authoritative, and
+resume follows a running unit or continues recovery. Before traffic may have
+opened, a failed or interrupted apply automatically starts the previous release;
+if migrations began, it restores the matched snapshot first. Create a new plan
+to retry. After the host records that traffic may have opened, it does not
+automatically restore user data: resume retries forward. Rolling forward with a
+fixed release is the recommended recovery.
+
+If OpenBao's unseal key is not already on the host, pass
+`--unseal-key-file <path>` to apply or resume. The file must be protected and
+owner-only. The CLI streams the key over pinned SSH stdin; it is not put in
+arguments, the plan or journal. Supply it again if a resumed operation must
+restart a unit that needs the key.
+
+### Manual rollback
+
+`municode deploy rollback <operation>` restarts the previous release. After
+traffic may have opened, the command requires explicit acknowledgements. If the
+database must be restored, `--restore-database` restores the matched snapshot
+and `--accept-data-loss-since <timestamp>` must exactly match `openAt` from
+`municode deploy status <operation>`. This acknowledges losing writes since
+traffic opened. If the worker resumed, also pass
+`--accept-provider-reconciliation`; restoring the snapshot can forget provider
+resources created since it, which must be reconciled from the host backup's
+`post-open-operations.json`. Pass `--unseal-key-file <path>` when the host does
+not have the required key.
 
 The worker evaluates budgets and delivers budget webhooks. Tune it with the
 `BudgetAlerts` configuration section: `Enabled` (default `true`),
