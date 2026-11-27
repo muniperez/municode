@@ -103,3 +103,62 @@ municode seed resume <operation> \
 Evidence should record provider, region, size, exact release tag/source,
 operation ID, timestamps, public health result, resource counts and cleanup,
 without credentials, setup token, OpenBao material, private keys or bearer URLs.
+
+## Live deploy validation
+
+This deploy checklist is also manual and is not part of CI. Use only a
+designated disposable control plane with isolated data and provider capacity.
+The deploy CLI requires an SSH-pinned host and a release installed with deploy
+support. Do not run these steps on `dev.muni.dev` or another shared instance
+without the owner's explicit approval.
+
+### Disposable seeded instance
+
+- [ ] Start with an older signed release and confirm it is healthy. Register it
+      with `municode instance add` only if seed did not register it.
+- [ ] Run `municode deploy plan --instance <name> --release latest`. Review the
+      exact target, preflight, migration and configuration changes, blockers,
+      approval digest and estimated drain. Confirm latest resolves to the
+      intended published release.
+- [ ] Apply the reviewed plan with `municode deploy apply <operation> --approve
+      <digest> --offhost-backup <protected-dir>`. Confirm health and
+      `/health/version` report the target release; confirm the local backup
+      manifest verifies and keep its secret-bearing files protected.
+- [ ] In a disposable test release, inject a controlled migration failure.
+      Confirm the agent restores the matched snapshot and starts the previous
+      release before traffic may have opened. Check database and public health.
+- [ ] Complete a successful deploy, then test manual rollback after traffic
+      opened. Read the exact `openAt` from `municode deploy status <operation>`;
+      use `--restore-database --accept-data-loss-since <openAt>`. If the worker
+      resumed, also use `--accept-provider-reconciliation` and reconcile the
+      exported provider operations. Confirm the previous release and health.
+- [ ] Build an unsigned bundle from a clean source revision with
+      `scripts/delivery/build-release.sh --ref <git-ref>`. Plan it with
+      `municode deploy plan --instance <name> --bundle-dir <dir> --trust
+      local-build`, review the local-build trust label and digest, apply it and
+      confirm `/health/version` identifies the result.
+
+### `install.sh` instance
+
+- [ ] Prepare a disposable host using a release with deploy support and
+      `install.sh`. Create a non-root SSH account with passwordless `sudo -n`.
+- [ ] Independently verify its SSH host fingerprint and register it with
+      `municode instance add <name> --ssh <alias> --confirm-host-fingerprint
+      SHA256:...`.
+- [ ] Repeat plan and apply from the older signed release to latest. Confirm
+      pinned SSH works as the non-root user, the deploy succeeds, and
+      `/health/version` reports the target.
+
+### Owner-approved personal instance
+
+- [ ] Do not reinstall `dev.muni.dev` without explicit owner approval. There is
+      no backwards compatibility: reinstalling loses workspace data, so record
+      and accept that impact before proceeding. Reinstall it from a release
+      containing deploy support, either by reseeding or by installing on a fresh
+      host and registering it with `municode instance add`.
+- [ ] Publish or build a newer release, then run deploy plan and apply against
+      `dev.muni.dev`. Confirm `/health/version` reports the newer release and
+      record health, timestamps and any recovery actions on issue #177.
+
+Keep logs and evidence under `.local/artifacts/`; do not record credentials,
+unseal material, backup contents, private keys or bearer URLs.

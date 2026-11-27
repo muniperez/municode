@@ -43,12 +43,23 @@ the first workspace are separate post-login actions. See the
 [live validation checklist](docs/setup/live-seed-validation.md) for the manual
 test that must run on disposable provider capacity outside CI.
 
-For an existing control plane, register it with `municode instance add`, stage
-and review a release with `municode deploy plan`, then run `municode deploy apply`
-with the printed approval digest. Use `municode deploy status` to inspect live
-progress, `municode deploy resume` after an interrupted connection, and
-`municode deploy rollback` to recover the previous release. See the
-[deploy command reference](docs/user.md#cli) for options and rollback safeguards.
+For the common upgrade, register any existing control plane you can reach over
+SSH (including hosts not created with seed), then plan and approve the release:
+
+```sh
+municode instance add production --ssh ops@control.example.com \
+  --confirm-host-fingerprint SHA256:...
+municode deploy plan --instance production --release latest
+municode deploy apply <operation> --approve <digest>
+```
+
+Verify the SSH fingerprint independently; non-root users need passwordless
+`sudo -n`. Use `municode deploy status <operation>` to inspect progress and
+`municode deploy resume <operation>` after interruption. See the
+[operator guide](docs/operator.md#operate-and-upgrade) and
+[deploy command reference](docs/user.md#cli) for local builds, backups and
+rollback safeguards, and the
+[live validation checklist](docs/setup/live-seed-validation.md#live-deploy-validation).
 
 ## Build and test
 
