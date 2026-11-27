@@ -3,9 +3,11 @@
 """Install the first Municode release; refuse to change an active release."""
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
 import json
+import os
 from pathlib import Path
 import re
 import secrets
@@ -52,14 +54,34 @@ def directory(path, mode):
         raise ValueError(f"Installation directory must not be a symlink: {path}")
 
 
+@contextmanager
+def deploy_lock(path, *, create=False):
+    flags = os.O_NOFOLLOW | os.O_NONBLOCK | (os.O_WRONLY | os.O_CREAT if create else os.O_RDONLY)
+    if present(path) and not regular(path):
+        raise ValueError("Deploy lock must be a regular file.")
+    with os.fdopen(os.open(path, flags, 0o600), "a" if create else "r") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError("Another Municode installation or deploy holds the deploy lock.") from error
+        yield
+
+
+def freeze_release(path):
+    for entry in path.rglob("*"):
+        if entry != path / ".env":
+            entry.chmod(0o555 if entry.is_dir() or entry.stat().st_mode & 0o100 else 0o444)
+    path.chmod(0o555)
+
+
 def assignments(path):
     values = {}
-    for line in path.read_text().splitlines():
+    for number, line in enumerate(path.read_text().splitlines(), 1):
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         key, separator, value = line.partition("=")
-        if not separator or key in values:
-            raise ValueError(f"Invalid or duplicate assignment in {path}: {key}")
+        if not separator or not re.fullmatch(r"[A-Z][A-Z0-9_]*", key) or key in values:
+            raise ValueError(f"Invalid or duplicate assignment in {path.name} at line {number}.")
         values[key] = value
     return values
 
@@ -201,14 +223,7 @@ def install(args, identity, manifest, required):
     for path, mode in ((releases, 0o755), (config, 0o700), (state, 0o700), (wrapper.parent, 0o755)):
         directory(path, mode)
 
-    lock_path = state / "deploy.lock"
-    if present(lock_path) and not regular(lock_path):
-        raise ValueError("Deploy lock must be a regular file.")
-    with lock_path.open("a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            raise ValueError("Another Municode installation or deploy holds the deploy lock.") from error
+    with deploy_lock(state / "deploy.lock", create=True):
         if present(active):
             if not regular(active):
                 raise ValueError("Active release record must be a regular file.")
@@ -273,10 +288,8 @@ def install(args, identity, manifest, required):
                 raise ValueError("Release contract does not match the installer-owned keys.")
             values = release_values | installer_values | operator_values
             stage.chmod(0o700)
-            for path in stage.rglob("*"):
-                path.chmod(0o555 if path.is_dir() or path.stat().st_mode & 0o100 else 0o444)
             atomic_write(stage / ".env", render({key: values[key] for key in template}), 0o400)
-            stage.chmod(0o555)
+            freeze_release(stage)
             write_json(journal, installation | {"phase": "promotion"})
 
         promotions = []

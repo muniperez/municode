@@ -101,6 +101,9 @@ def main(root=None):
     if manifest.get("schemaVersion") != 1 or manifest.get("product") != "municode":
         fail("Unexpected release manifest.")
     verify_deploy_contract(root, manifest)
+    agent = root / "deploy_host.py"
+    if not agent.is_file() or manifest.get("hostAgent") != {"path": agent.name, "sha256": digest(agent)}:
+        fail("Host deploy agent inventory mismatch.")
     roots = {
         "api": root / "runtime" / "api",
         "worker": root / "runtime" / "worker",

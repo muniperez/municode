@@ -202,6 +202,24 @@ records its identity. Manual installs default to `local-build` trust; pass
 inventory's Sigstore signature and exact Municode release workflow identity.
 Seed always verifies that identity before any provider mutation.
 
+The release bundle ships a host-side `deploy_host.py` for the deploy CLI. It
+stages a verified archive without switching `current` or restarting services:
+
+```sh
+sudo python3 -B deploy_host.py stage --operation <op> \
+  --bundle <uploaded-archive> --bundle-sha256 <sha256> \
+  --trust github-sigstore --verified-release-tag <verified-tag>
+sudo python3 -B deploy_host.py preflight --plan <plan.json> --json
+```
+
+For a clean local bundle with image archives, use `--trust local-build` and
+omit `--verified-release-tag`. The preflight plan supplies the staged
+`targetRelease` and `deployProtocol`, plus `operationId`, `instanceName`,
+`installationId` and the pinned SSH `hostFingerprint`. Preflight reports
+blockers and approval inputs as JSON without modifying the running
+installation. Missing on-host OpenBao unseal material is reported separately:
+it must be supplied at apply time, not copied into the plan.
+
 ## Configure and initialize
 
 The installer renders the release's read-only `.env` from the exact release
