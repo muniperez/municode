@@ -21,11 +21,11 @@ import urllib.request
 from runtime import (Blocked, Git, Linux, Runtime, T3_RELAY_CLIENT, atomic_json, installed_t3, load_config,
                      require, run, t3_descriptor_matches)
 
-CONFIG = "/etc/workspaces-workspace/runtime.json"
-STATE = "/var/lib/workspaces-workspace"
+CONFIG = "/etc/municode-workspace/runtime.json"
+STATE = "/var/lib/municode-workspace"
 BASE = "/workspace/t3"
-MANAGEMENT_UNIT = "workspaces-t3-connect.service"
-MANAGEMENT_SCRIPT = "/opt/workspaces-workspace/t3_connect.py"
+MANAGEMENT_UNIT = "municode-t3-connect.service"
+MANAGEMENT_SCRIPT = "/opt/municode-workspace/t3_connect.py"
 ACTIVATION_TIMEOUT = 240
 ACTIVATION_FILE = "connect-activation.json"
 IN_FLIGHT = ("pending", "restarting")
@@ -70,7 +70,7 @@ def require_trusted_listener(proc_root=Path("/proc")):
             "Untrusted Connect management unit")
     pid = properties.get("MainPID", "")
     require(pid.isdecimal() and int(pid) > 0, "Connect management listener is missing")
-    for path in (unit_file, MANAGEMENT_SCRIPT, "/opt/workspaces-workspace/runtime.py"):
+    for path in (unit_file, MANAGEMENT_SCRIPT, "/opt/municode-workspace/runtime.py"):
         Linux.verify_unit_file(path)
     process = proc_root / pid
     status = dict(line.split(":", 1) for line in (process / "status").read_text().splitlines() if ":" in line)
@@ -238,7 +238,7 @@ def relay_start_diagnostics(started_at, position):
         result.update(events=sorted(found_events), errors=sorted(found_errors),
                       relayExitCodes=sorted(exit_codes), relayHttpStatuses=sorted(http_statuses))
     try:
-        properties = run(["systemctl", "show", "workspaces-t3.service",
+        properties = run(["systemctl", "show", "municode-t3.service",
                           "-p", "ExecMainStatus", "-p", "ExecMainCode"], timeout=5)
         for line in properties.splitlines():
             key, _, value = line.partition("=")
@@ -254,7 +254,7 @@ def relay_start_diagnostics(started_at, position):
             try:
                 if os.readlink(process / "exe") == T3_RELAY_CLIENT and \
                         (process / "cgroup").read_text().strip() == \
-                        "0::/workspaceswork.slice/workspaces-t3.service":
+                        "0::/municodework.slice/municode-t3.service":
                     result["relayProcessRunning"] = True
                     break
             except OSError:
@@ -285,7 +285,7 @@ def activate(config, state_dir=STATE):
     position = trace_position()
     try:
         reason = "t3_inactive"
-        require(run(["systemctl", "is-active", "workspaces-t3.service"], timeout=5) == "active",
+        require(run(["systemctl", "is-active", "municode-t3.service"], timeout=5) == "active",
                 "Activation never starts stopped compute or an inactive T3 service")
         reason = "status_unavailable"
         status = json.loads(run(command("status"), timeout=40, cwd="/workspace"))
@@ -299,7 +299,7 @@ def activate(config, state_dir=STATE):
         reason = "interrupted"
         require(time.time() < operation["deadline"] - 100, "Activation start was delayed; retry explicitly")
         reason = "restart_failed"
-        run(["systemctl", "restart", "workspaces-t3.service"], timeout=90)
+        run(["systemctl", "restart", "municode-t3.service"], timeout=90)
         until = min(time.time() + 90, operation["deadline"] - 30)
         linked = False
         while time.time() < until:
@@ -430,7 +430,7 @@ class Enrollment:
             atomic_json(Path(self.state_dir) / ACTIVATION_FILE, activation)
             try:
                 # Restart the helper so a retry cannot be lost while its previous invocation exits.
-                run(["systemctl", "restart", "--no-block", "workspaces-t3-connect-activate.service"], timeout=10)
+                run(["systemctl", "restart", "--no-block", "municode-t3-connect-activate.service"], timeout=10)
             except Blocked:
                 activation = save_activation(self.config, self.state_dir, activation["id"],
                                              "failed", "queue_failed")
@@ -574,7 +574,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # Cross-origin forms cannot send this header, and this server never grants CORS access.
         if not self.authorized():
             return
-        if self.headers.get("X-Workspaces-Connect") != "1" or self.headers.get("Content-Length", "0") != "0":
+        if self.headers.get("X-Municode-Connect") != "1" or self.headers.get("Content-Length", "0") != "0":
             self.reply(403, {})
             return
         try:

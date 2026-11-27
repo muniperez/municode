@@ -30,39 +30,39 @@ import uuid
 from urllib.parse import urljoin
 
 HERE = Path(__file__).resolve().parent
-RUNTIME = Path("/opt/workspaces-workspace/runtime.py")
-STORAGE_TIERS = Path("/opt/workspaces-workspace/storage_tiers.py")
+RUNTIME = Path("/opt/municode-workspace/runtime.py")
+STORAGE_TIERS = Path("/opt/municode-workspace/storage_tiers.py")
 EXPECTED_RUNTIME_SHA256 = None
 ACK = "RUN-NATIVE-QUALIFICATION-ON-DISPOSABLE-IMAGE-BUILDER"
 SCOPES = ["orchestration:read", "orchestration:operate", "terminal:read", "terminal:operate",
           "source-control:write", "filesystem:read"]
-T3_UNIT = "workspaces-t3.service"
-MOUNT_UNIT = "workspaces-workspace-mount.service"
-WORK_CGROUP = Path("/sys/fs/cgroup/workspaceswork.slice")
+T3_UNIT = "municode-t3.service"
+MOUNT_UNIT = "municode-workspace-mount.service"
+WORK_CGROUP = Path("/sys/fs/cgroup/municodework.slice")
 T3_CGROUP = WORK_CGROUP / T3_UNIT
-UNITS = (T3_UNIT, "workspaces-workspace.service",
-         "workspaces-t3-connect.service", "workspaces-t3-connect-activate.service",
-         "workspaces-scratch-mounts.service", "workspaces-scratch-watch.service", MOUNT_UNIT,
-         "workspaces-repos-checkpoint.service", "workspaces-repos-checkpoint.timer")
-SCRATCH_HELPER = Path("/opt/workspaces-workspace/scratch_mounts.py")
+UNITS = (T3_UNIT, "municode-workspace.service",
+         "municode-t3-connect.service", "municode-t3-connect-activate.service",
+         "municode-scratch-mounts.service", "municode-scratch-watch.service", MOUNT_UNIT,
+         "municode-repos-checkpoint.service", "municode-repos-checkpoint.timer")
+SCRATCH_HELPER = Path("/opt/municode-workspace/scratch_mounts.py")
 SCRATCH_FIXTURE = Path("/workspace/repos/native-scratch")
 SCRATCH_OUTPUTS = ("node_modules", "bin", "obj", "dist")
 # Every T3 provider instance the image seeds before T3 starts, by instance ID: (driver, executable).
 SEEDED_AGENT_PROVIDERS = {
-    "workspaces-antigravity": ("antigravity", "/opt/workspaces-antigravity/agy_acp_server.par"),
-    "workspaces-muse": ("muse", "/usr/local/bin/muse"),
+    "municode-antigravity": ("antigravity", "/opt/municode-antigravity/agy_acp_server.par"),
+    "municode-muse": ("muse", "/usr/local/bin/muse"),
 }
 UNIT_HASHES = {
-    "workspaces-t3.service": "eb206ae737439b7557a013712072a1e992993d66e4e441df4d41ff3d42914f9c",
-    "workspaces-workspace.service": "72b4ad78746e1ece5aaf2b9d7099d871eabb46c756e4115ca4cc96791e941cec",
-    MOUNT_UNIT: "63df74733de304f2e1cbf2fcf1c54a8b139de6cfa209e2e24e1301c16071e6b9",
-    "workspaceswork.slice": "e1de2748256aed52d74784f73c1c640eb25ec50ac7a3788b09c84599b5e66618",
-    "workspaces-t3-connect.service": "39116af295f7f3b91a3b22048211396ccc36d34431ea1fb625df9d3b1432a24b",
-    "workspaces-t3-connect-activate.service": "fd2a967a1b575513d589312a2d8b973f9ee105f9ab44708b8c5757bd5930b2d2",
-    "workspaces-scratch-mounts.service": "47a5e929f926630374c23349c2d37cbe39e287dea9da72660bc810ba84cd7803",
-    "workspaces-scratch-watch.service": "d0edd0d14b17880b6e86b331750e0b324a6ecf597058923581bcd2abda563ac6",
-    "workspaces-repos-checkpoint.service": "368003fd14e0e567c6fe93b0e73eb837fd06baabe0683769a01b2a038bd7d960",
-    "workspaces-repos-checkpoint.timer": "72fc2dcc4513fc273d6b6fc4a3aa3406a6099ac18dd543a96ea3729ab4033801",
+    "municode-t3.service": "16186f69ca75039722072919ef496b1cefc37a983bb9ee09078fac5550754cd5",
+    "municode-workspace.service": "28b51dbd9bb23259aa5c7dee1d1e8fa465eadb4749801a7e5742f9584951463a",
+    MOUNT_UNIT: "ae8eeb8fedf78173c85bdd5388db484e80921db336ae79fb0034cd7bd0e25863",
+    "municodework.slice": "e1de2748256aed52d74784f73c1c640eb25ec50ac7a3788b09c84599b5e66618",
+    "municode-t3-connect.service": "db715f2ebe343b7da7abde161a321b2f8239b266141793c5e627d692cc07d128",
+    "municode-t3-connect-activate.service": "bbd4274e9e2d6477709eecdf8d82de7b438993d2a5a72d529edb5ed2dbf4be02",
+    "municode-scratch-mounts.service": "b0d467a55553366471278bd064d7032a7530dbee63ba4d084bbf941632824c20",
+    "municode-scratch-watch.service": "bef56cb212a534c667d0086df86496754cc4eab99365dc5357b63463deb166b3",
+    "municode-repos-checkpoint.service": "29617441be69d7e07fbad0eb558907fe689ce19065b42bbc0f79dbf5cc0ba0a7",
+    "municode-repos-checkpoint.timer": "3a05127c3ba835c37ae5d277baac097e6aebb2de9361e2edf8cccfc0002d12b6",
 }
 GUARD_PROBE = "target-and-toolchain-guard"
 PRISTINE_PROBE = "pristine-tools-only-no-default-apps"
@@ -419,7 +419,7 @@ def bootstrap_with_local_enrollment(config, directory):
 
 
 def initialize_codex_without_credentials(workspace, home, *, observe=None):
-    binaries = list(Path("/opt/workspaces-tools/node_modules/@openai").glob("codex*/vendor/*/bin/codex"))
+    binaries = list(Path("/opt/municode-tools/node_modules/@openai").glob("codex*/vendor/*/bin/codex"))
     check(len(binaries) == 1, "NATIVE_CODEX_EXECUTABLE_AMBIGUOUS")
     binary = binaries[0]
     check(binary.is_file() and not binary.is_symlink() and binary.stat().st_uid == 0 and
@@ -665,7 +665,7 @@ class Native:
         validate_authorization(self.authorization, dt.datetime.now(dt.timezone.utc),
                                sha("/etc/machine-id"))
         check('VERSION_ID="24.04"' in Path("/etc/os-release").read_text(), "UBUNTU_2404_ONLY")
-        marker = Path("/etc/workspaces-disposable-image-builder")
+        marker = Path("/etc/municode-disposable-image-builder")
         check(marker.is_file() and marker.stat().st_uid == 0 and
               not marker.stat().st_mode & 0o022 and
               marker.read_text().strip() == "DESTROY-DISPOSABLE-IMAGE-BUILDER", "BUILDER_MARKER_REQUIRED")
@@ -675,9 +675,9 @@ class Native:
         for path in (HERE, *HERE.parents, RUNTIME, RUNTIME.parent):
             info = path.stat()
             check(info.st_uid == 0 and not info.st_mode & 0o022, "ROOT_OWNED_STAGING_REQUIRED")
-        check(not Path("/etc/workspaces-workspace/runtime.json").exists(), "EXISTING_RUNTIME_CONFIG")
-        check(not Path("/var/lib/workspaces-workspace").exists() or
-              not any(Path("/var/lib/workspaces-workspace").iterdir()), "EXISTING_RUNTIME_STATE")
+        check(not Path("/etc/municode-workspace/runtime.json").exists(), "EXISTING_RUNTIME_CONFIG")
+        check(not Path("/var/lib/municode-workspace").exists() or
+              not any(Path("/var/lib/municode-workspace").iterdir()), "EXISTING_RUNTIME_STATE")
         check(not os.path.ismount("/workspace") and
               (not Path("/workspace").exists() or not any(Path("/workspace").iterdir())),
               "NONEMPTY_OR_MOUNTED_WORKSPACE")
@@ -728,7 +728,7 @@ class Native:
         self.report.value.update(clockSource="native-vm-utc",
                                  startedAt=dt.datetime.now(dt.timezone.utc).isoformat(),
                                  installedImmutableInputs=inputs,
-                                 installedImageManifestSha256=sha("/opt/workspaces-workspace/image-manifest.json"))
+                                 installedImageManifestSha256=sha("/opt/municode-workspace/image-manifest.json"))
         return {"architecture": "x86_64", "ubuntuSerial": "20251001",
                 "machineIdSha256": sha("/etc/machine-id"), "toolVersionsMatched": True,
                 "codingUid": 2000}
@@ -739,10 +739,10 @@ class Native:
                      if len(line.split()) == 2 and line.split()[1] == "installed"]
         check(not any(name.startswith(("postgresql", "libpq")) for name in installed),
               "UNREQUESTED_DATABASE_PACKAGES_INSTALLED")
-        for name in ("/opt/workspaces-preview", "/var/lib/postgresql",
+        for name in ("/opt/municode-preview", "/var/lib/postgresql",
                      "/etc/postgresql", "/var/log/postgresql",
-                     "/etc/systemd/system/workspaces-postgres.service",
-                     "/etc/systemd/system/workspaces-preview-canary.service"):
+                     "/etc/systemd/system/municode-postgres.service",
+                     "/etc/systemd/system/municode-preview-canary.service"):
             path = Path(name)
             check(not path.exists() and not path.is_symlink(), "UNREQUESTED_DEFAULT_APP_PRESENT")
         try:
@@ -771,7 +771,7 @@ class Native:
 
     def codex_git(self):
         backing = self.directory / "codex-git-fixture.ext4"
-        mountpoint = Path("/var/lib") / ("workspaces-native-git-" + self.run_id)
+        mountpoint = Path("/var/lib") / ("municode-native-git-" + self.run_id)
         device = None
         filesystem_uuid = None
         workspace = mountpoint / "workspace"
@@ -907,7 +907,7 @@ class Native:
                     shutil.rmtree(candidate)
                 check(local_git.inspect([registration], workspace) == evidence,
                       "GIT_BASELINE_NOT_RESTORED_AFTER_PROBE_NEGATIVE")
-            command(["systemctl", "start", "workspaceswork.slice"])
+            command(["systemctl", "start", "municodework.slice"])
             saved = call("git-save", gatewayAdmissionsFenced=True, unobservableToolsAbsent=True,
                          t3SnapshotSequence=0)
             check(saved["type"] == "GitSaved" and saved["repositories"] == evidence,
@@ -929,9 +929,9 @@ class Native:
                     "scope": "loop-backed synthetic Git fixture; no T3 instance; separate cold T3 probes follow"}
         finally:
             try:
-                events = Path("/sys/fs/cgroup/workspaceswork.slice/cgroup.events")
+                events = Path("/sys/fs/cgroup/municodework.slice/cgroup.events")
                 if events.exists() and "frozen 1" in events.read_text():
-                    command(["systemctl", "thaw", "workspaceswork.slice"])
+                    command(["systemctl", "thaw", "municodework.slice"])
                 # ismount() misses a bind mount whose parent is on the same filesystem.
                 bound = subprocess.run(["findmnt", "-rn", "-M", str(workspace), "-o", "UUID"],
                                        capture_output=True, text=True, timeout=30)
@@ -981,18 +981,18 @@ class Native:
         self.config = dict(vmId=self.run_id, generation=1, kind="primary", uid=2000, gid=2000,
                            workspace="/workspace", repositories=[], requireFreshBackup=False,
                            startServices=True, observedTerminalInputs=False,
-                           infrastructureUnits=["workspaces-t3.service"],
-                           stopUnits=["workspaces-t3.service"],
+                           infrastructureUnits=["municode-t3.service"],
+                           stopUnits=["municode-t3.service"],
                            volume=dict(device=str(self.alias), providerDeviceId=self.alias.name,
                                        providerVolumeId=self.run_id, filesystemUuid=fs_uuid,
                                        initializeOwner=True, owner=owner))
-        write_json("/etc/workspaces-workspace/runtime.json", self.config)
+        write_json("/etc/municode-workspace/runtime.json", self.config)
         self.owns_runtime = True
-        check(command(["systemctl", "show", "workspaces-workspace.service", "-p", "MainPID", "--value"]) == "0",
+        check(command(["systemctl", "show", "municode-workspace.service", "-p", "MainPID", "--value"]) == "0",
               "SUPERVISOR_ALREADY_RUNNING_BEFORE_IMAGE_BOOTSTRAP")
-        check(not Path("/run/workspaces-workspace/control.sock").exists(),
+        check(not Path("/run/municode-workspace/control.sock").exists(),
               "SUPERVISOR_SOCKET_PRESENT_BEFORE_IMAGE_BOOTSTRAP")
-        check(command(["systemctl", "show", "workspaces-t3.service", "-p", "MainPID", "--value"]) == "0",
+        check(command(["systemctl", "show", "municode-t3.service", "-p", "MainPID", "--value"]) == "0",
               "T3_STARTED_BEFORE_IMAGE_BOOTSTRAP")
         result = bootstrap_with_local_enrollment(self.config, self.directory)
         check(result["type"] == "BootstrapReady", "BOOTSTRAP_RECEIPT_REQUIRED")
@@ -1017,15 +1017,15 @@ class Native:
               "CODEX_RESTORE_FIXTURE_NOT_OWNED")
         guarded_loop(self.device, self.directory / "fixture.ext4")
         check(command(["findmnt", "-rn", "-M", "/workspace", "-o", "UUID"]) == fs_uuid and
-              json.loads(Path("/workspace/.workspaces-volume.json").read_text()) ==
+              json.loads(Path("/workspace/.municode-volume.json").read_text()) ==
               self.config["volume"]["owner"], "CODEX_RESTORE_FIXTURE_MOUNT_CHANGED")
         self.codex_link_fixture = retain_codex_arg0_links(
             Path("/workspace"), Path("/workspace/home"), self.run_id)
         for name, value in (("config/native-user.json", '{"userCreated":true}\n'),
                             ("transcripts/native-user.txt", "representative-user-data\n"),
-                            ("config/lost+found/.workspaces-volume.json", "nested user metadata-like file\n"),
+                            ("config/lost+found/.municode-volume.json", "nested user metadata-like file\n"),
                             ("artifacts/lost+found", "nested user filename, not filesystem metadata\n"),
-                            ("transcripts/.workspaces-volume.json", "nested transcript metadata-like file\n")):
+                            ("transcripts/.municode-volume.json", "nested transcript metadata-like file\n")):
             path = Path("/workspace") / name
             path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             os.chown(path.parent, 2000, 2000)
@@ -1044,7 +1044,7 @@ class Native:
                 "enrollmentPeer": "synthetic-loopback-verified-TLS-only"}
 
     def retained_volume_remount(self):
-        scratch_units = ("workspaces-scratch-mounts.service", "workspaces-scratch-watch.service")
+        scratch_units = ("municode-scratch-mounts.service", "municode-scratch-watch.service")
         for unit in (T3_UNIT, *scratch_units):
             for prop in ("Requires", "After"):
                 check(MOUNT_UNIT in command(["systemctl", "show", unit, "-p", prop, "--value"]).split(),
@@ -1089,7 +1089,7 @@ class Native:
         before = settings_path.read_bytes()
         settings = json.loads(before)
         instances = settings.get("providerInstances", {})
-        provider = instances.get("workspaces-copilot", {})
+        provider = instances.get("municode-copilot", {})
         check(provider.get("driver") == "acpRegistry" and provider.get("enabled") is True and
               provider.get("config") == {"source": "local", "commandPath": "/usr/local/bin/copilot",
                                          "commandArgs": ["--acp", "--stdio"]},
@@ -1106,7 +1106,7 @@ class Native:
                 raise ProbeError("AGENT_PROVIDER_BINARY_UNUSABLE", {"instanceId": instance_id}) from None
         for action in ("configure", "probe"):
             result = json.loads(command(as_coding + [
-                "python3", "-B", "/opt/workspaces-workspace/copilot_provider.py", action],
+                "python3", "-B", "/opt/municode-workspace/copilot_provider.py", action],
                 cwd="/workspace"))
             check(result.get("state") == ("AlreadyConfigured" if action == "configure" else "Compatible"),
                   "COPILOT_CODING_USER_SETUP_FAILED")
@@ -1138,7 +1138,7 @@ class Native:
             raise ProbeError("SCRATCH_ENVIRONMENT_FILE_INVALID") from None
         check(not tiers.scratch_ready(tiers.SCRATCH), "SCRATCH_LAYOUT_NOT_PREPARED")
         check(os.stat(tiers.SCRATCH).st_dev != os.stat("/workspace").st_dev, "SCRATCH_ON_RETAINED_VOLUME")
-        check(command(["systemctl", "show", "workspaces-t3.service", "-p", "EnvironmentFiles", "--value"])
+        check(command(["systemctl", "show", "municode-t3.service", "-p", "EnvironmentFiles", "--value"])
               .startswith(tiers.ENV_FILE), "T3_SCRATCH_ENVIRONMENT_FILE_NOT_LOADED")
         main_pid = self.t3_unit()["MainPID"]
         environment = dict(entry.split("=", 1) for entry in
@@ -1191,13 +1191,13 @@ class Native:
         try:
             adapter.stop_services()
         finally:
-            # stop_services leaves workspaceswork.slice frozen; T3 must not start inside it.
+            # stop_services leaves municodework.slice frozen; T3 must not start inside it.
             adapter.thaw()
         # Earlier fault probes can exhaust the watcher's independent fixture budget.
-        command(["systemctl", "reset-failed", "workspaces-scratch-watch.service"])
+        command(["systemctl", "reset-failed", "municode-scratch-watch.service"])
         adapter.start_services()
         self.t3_recovered(previous)
-        self.wait(lambda: command(["systemctl", "is-active", "workspaces-scratch-watch.service"]) == "active")
+        self.wait(lambda: command(["systemctl", "is-active", "municode-scratch-watch.service"]) == "active")
         marker = Path(tiers.MARKER)
         check(tiers.read_marker(marker) is True and stat.S_IMODE(marker.stat().st_mode) == 0o600,
               "CACHE_MIGRATION_MARKER_NOT_WRITTEN")
@@ -1232,11 +1232,11 @@ class Native:
         return {**result, "terminalEnvironmentMatched": sorted(expected), "terminalWroteScratchCacheAndTmp": True}
 
     def start_services(self):
-        check(command(["systemctl", "show", "workspaces-t3.service", "-p", "MainPID", "--value"]) != "0",
+        check(command(["systemctl", "show", "municode-t3.service", "-p", "MainPID", "--value"]) != "0",
               "FRESH_BOOTSTRAP_DID_NOT_START_T3")
         self.wait(lambda: (Path("/workspace/t3/userdata/statev2.sqlite").exists()))
         for prop, expected in (("KillMode", "process"), ("SendSIGKILL", "no")):
-            check(command(["systemctl", "show", "workspaces-t3.service", "-p", prop, "--value"]) == expected,
+            check(command(["systemctl", "show", "municode-t3.service", "-p", prop, "--value"]) == expected,
                   "UNSAFE_T3_STOP_POLICY")
         renderer = t3_renderer_evidence()
         tokens = {}
@@ -1245,7 +1245,7 @@ class Native:
               "REAL_HEADLESS_CLI_FLAGS_MISSING")
         for name, scopes in (("operate", SCOPES), ("readonly", ["orchestration:read"])):
             path = self.directory / (name + ".secret")
-            argv = ["python3", "-B", "/opt/workspaces-workspace/issue-t3-session.py",
+            argv = ["python3", "-B", "/opt/municode-workspace/issue-t3-session.py",
                     "--vm-id", self.run_id, "--generation", "1",
                     "--operation-id", "native-token-" + name, "--ttl", "900",
                     "--subject", self.run_id]
@@ -1265,9 +1265,9 @@ class Native:
                 "renderer": renderer}
 
     def connect_management(self):
-        check(command(["systemctl", "is-active", "workspaces-t3-connect.service"]) == "active",
+        check(command(["systemctl", "is-active", "municode-t3-connect.service"]) == "active",
               "CONNECT_MANAGEMENT_NOT_STARTED")
-        management = ["/usr/bin/python3", "-B", "/opt/workspaces-workspace/t3_connect.py"]
+        management = ["/usr/bin/python3", "-B", "/opt/municode-workspace/t3_connect.py"]
         binding = ["--vm-id", self.run_id, "--generation", "1"]
         admission = json.loads(command(management + ["admission", *binding]))
         check(admission == dict(type="ConnectManagementAdmission", admitted=True,
@@ -1321,7 +1321,7 @@ class Native:
     @staticmethod
     def check_t3_pid(pid):
         check(pid > 0 and Path("/proc", str(pid), "cgroup").read_text().strip() ==
-              "0::/workspaceswork.slice/" + T3_UNIT, "T3_PID_NOT_IN_OWNED_CGROUP")
+              "0::/municodework.slice/" + T3_UNIT, "T3_PID_NOT_IN_OWNED_CGROUP")
 
     def wait_t3(self, predicate, seconds=30):
         seen = {}
@@ -1348,9 +1348,9 @@ class Native:
     def kill_frozen_t3_cgroup(self, original_pid):
         self.fresh_authorization()
         check(self.owns_runtime, "T3_PROBE_RUNTIME_NOT_OWNED")
-        expected_parent = Path("/sys/fs/cgroup/workspaceswork.slice")
-        expected_child = expected_parent / "workspaces-t3.service"
-        check(T3_UNIT == "workspaces-t3.service" and WORK_CGROUP == expected_parent and
+        expected_parent = Path("/sys/fs/cgroup/municodework.slice")
+        expected_child = expected_parent / "municode-t3.service"
+        check(T3_UNIT == "municode-t3.service" and WORK_CGROUP == expected_parent and
               T3_CGROUP == expected_child and
               WORK_CGROUP.resolve(strict=True) == expected_parent and
               T3_CGROUP.resolve(strict=True) == expected_child, "T3_KILL_SCOPE_NOT_OWNED")
@@ -1367,7 +1367,7 @@ class Native:
                           state["Job"] == "" and state["ControlPID"] == 0 and
                           state["MainPID"] == original_pid, "T3_KILL_MAIN_PID_CHANGED")
                     check(command(["systemctl", "show", T3_UNIT, "-p", "ControlGroup", "--value"]) ==
-                          "/workspaceswork.slice/workspaces-t3.service", "T3_KILL_SCOPE_NOT_OWNED")
+                          "/municodework.slice/municode-t3.service", "T3_KILL_SCOPE_NOT_OWNED")
                     self.check_t3_pid(original_pid)
                     self.check_t3_freezer(True)
                     # Kill the monitor too without systemd 255's failing auxiliary-process signal.
@@ -1409,7 +1409,7 @@ class Native:
 
     def t3_recovered(self, previous_pid):
         self.t3_ready(previous_pid)
-        self.wait(lambda: command(["systemctl", "is-active", "workspaces-t3-connect.service"]) == "active")
+        self.wait(lambda: command(["systemctl", "is-active", "municode-t3-connect.service"]) == "active")
         if self.client is not None:
             self.client.close()
         self.client = T3Client(self.directory)
@@ -1620,7 +1620,7 @@ class Native:
                 "productionGatewayObserverExercised": False}
 
     def source_control(self):
-        main_pid = int(command(["systemctl", "show", "workspaces-t3.service", "-p", "MainPID", "--value"]))
+        main_pid = int(command(["systemctl", "show", "municode-t3.service", "-p", "MainPID", "--value"]))
         check(main_pid > 0, "SOURCE_CONTROL_T3_SERVICE_NOT_RUNNING")
         environment = dict(entry.split("=", 1) for entry in
                            Path("/proc", str(main_pid), "environ").read_text().split("\0") if "=" in entry)
@@ -1655,11 +1655,11 @@ class Native:
         spec = importlib.util.spec_from_file_location("native_scratch_mounts", SCRATCH_HELPER)
         helper = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(helper)
-        after = command(["systemctl", "show", "workspaces-t3.service", "-p", "After", "--value"]).split()
-        check("workspaces-scratch-mounts.service" in after, "T3_NOT_ORDERED_AFTER_SCRATCH_MOUNTS")
-        check(command(["systemctl", "is-active", "workspaces-scratch-watch.service"]) == "active",
+        after = command(["systemctl", "show", "municode-t3.service", "-p", "After", "--value"]).split()
+        check("municode-scratch-mounts.service" in after, "T3_NOT_ORDERED_AFTER_SCRATCH_MOUNTS")
+        check(command(["systemctl", "is-active", "municode-scratch-watch.service"]) == "active",
               "SCRATCH_WATCHER_NOT_STARTED_WITH_T3")
-        main_pid = int(command(["systemctl", "show", "workspaces-t3.service", "-p", "MainPID", "--value"]))
+        main_pid = int(command(["systemctl", "show", "municode-t3.service", "-p", "MainPID", "--value"]))
         check(main_pid > 0 and isinstance(self.shell_pid, int), "SCRATCH_T3_TERMINAL_REQUIRED")
 
         def coding(*argv):
@@ -1736,7 +1736,7 @@ class Native:
         check(Path("/workspace/artifacts/native-input-seen").is_file(), "GENUINE_INPUT_NOT_YET_OBSERVED")
         processes = self.rt.Procfs()
         inventory = processes.inventory()
-        main_pid = int(command(["systemctl", "show", "workspaces-t3.service", "-p", "MainPID", "--value"]))
+        main_pid = int(command(["systemctl", "show", "municode-t3.service", "-p", "MainPID", "--value"]))
         check(self.shell_pid in inventory and main_pid in inventory, "NATIVE_SHELL_OR_T3_MISSING")
         process = inventory[self.shell_pid]
         raw = Path("/proc", str(self.shell_pid), "syscall").read_text().split()
@@ -1774,7 +1774,7 @@ class Native:
             inventory = processes.inventory()
             check(any(p["ppid"] == self.shell_pid for p in inventory.values()),
                   "ACTIVE_TERMINAL_FIXTURE_EXITED_BEFORE_CLASSIFIER_PROBE")
-            main_pid = int(command(["systemctl", "show", "workspaces-t3.service", "-p", "MainPID", "--value"]))
+            main_pid = int(command(["systemctl", "show", "municode-t3.service", "-p", "MainPID", "--value"]))
             try:
                 processes.idle_shell(inventory[self.shell_pid], inventory, {main_pid})
             except self.rt.Blocked:
@@ -1950,7 +1950,7 @@ class Native:
     def quiesce(self):
         self.wait(lambda: not any(p["ppid"] == self.shell_pid
                                   for p in self.rt.Procfs().inventory().values()), seconds=15)
-        main_pid = int(command(["systemctl", "show", "workspaces-t3.service", "-p", "MainPID", "--value"]))
+        main_pid = int(command(["systemctl", "show", "municode-t3.service", "-p", "MainPID", "--value"]))
         processes = self.rt.Procfs()
         inventory = processes.inventory()
         unknown = [p for p in inventory.values()
@@ -1966,7 +1966,7 @@ class Native:
                             str(Path("/usr/local/bin/t3").resolve()),
                             str(Path("/usr/local/bin/node").resolve())}
                 item["executable"] = (executable["path"] if executable["path"] in approved or
-                                      executable["path"].startswith("/opt/workspaces-") else "other")
+                                      executable["path"].startswith("/opt/municode-") else "other")
                 item["executableRootOwned"] = executable["uid"] == 0
                 item["executableWritableByCoding"] = bool(executable["mode"] & 0o022) or executable["uid"] == 2000
                 args = Path("/proc", str(p["pid"]), "cmdline").read_bytes().split(b"\0")[:-1]
@@ -1995,16 +1995,16 @@ class Native:
                   "SCRATCH_MOUNTS_NOT_UNMOUNTED_BEFORE_QUIESCE")
         check(not any(point.startswith("/workspace") for point in self.mount_points("self")),
               "MOUNT_REMAINS_BELOW_WORKSPACE")
-        for unit in ("workspaces-scratch-watch.service", "workspaces-scratch-mounts.service"):
+        for unit in ("municode-scratch-watch.service", "municode-scratch-mounts.service"):
             check(command(["systemctl", "show", unit, "-p", "ActiveState", "--value"]) in ("inactive", "failed"),
                   "SCRATCH_HELPER_STILL_ACTIVE_AFTER_QUIESCE")
         check(not os.path.ismount("/workspace"), "WORKSPACE_NOT_UNMOUNTED")
         self.clean_workspace = True
         self.control("receipt-validate", operation="native-quiesce", receiptId=result["receiptId"])
-        for unit in ("workspaces-t3.service",):
+        for unit in ("municode-t3.service",):
             check(command(["systemctl", "show", unit, "-p", "ActiveState", "--value"]) == "inactive",
                   "SERVICE_DID_NOT_STOP")
-        check("frozen 1" in Path("/sys/fs/cgroup/workspaceswork.slice/cgroup.events").read_text(),
+        check("frozen 1" in Path("/sys/fs/cgroup/municodework.slice/cgroup.events").read_text(),
               "POSTSTOP_CGROUP_NOT_FROZEN")
         return {"receiptType": result["type"], "receiptId": result["receiptId"],
                 "receiptBinding": {key: result[key] for key in ("vmId", "generation", "operationId", "revision")},
@@ -2040,8 +2040,8 @@ class Native:
 
     def encrypted_restore(self):
         names = ("artifacts/native-input-seen", "config/native-user.json", "transcripts/native-user.txt",
-                 "config/lost+found/.workspaces-volume.json", "artifacts/lost+found",
-                 "transcripts/.workspaces-volume.json", "config/native-codex-arg0-links.json")
+                 "config/lost+found/.municode-volume.json", "artifacts/lost+found",
+                 "transcripts/.municode-volume.json", "config/native-codex-arg0-links.json")
         mounted = self.directory / "restore-readback"
         restored = self.directory / "restore-target"
         backing = self.directory / "restore-target.ext4"
@@ -2059,7 +2059,7 @@ class Native:
             check((mounted / "lost+found").is_dir() and not (mounted / "lost+found").is_symlink()
                   and not any((mounted / "lost+found").iterdir()),
                   "SOURCE_STANDARD_EXT4_LOST_FOUND_NOT_EMPTY")
-            source_owner = (mounted / ".workspaces-volume.json").read_bytes()
+            source_owner = (mounted / ".municode-volume.json").read_bytes()
             check(json.loads(source_owner) == self.config["volume"]["owner"],
                   "SOURCE_RESTORE_FIXTURE_OWNER_CHANGED")
             expected = {name: sha(mounted / name) for name in names}
@@ -2110,7 +2110,7 @@ class Native:
                 if inspect_archive.poll() is None:
                     inspect_archive.terminate()
                     inspect_archive.wait(timeout=10)
-            check(not {"data/lost+found", "data/.workspaces-volume.json"} & members,
+            check(not {"data/lost+found", "data/.municode-volume.json"} & members,
                   "PRODUCTION_WRITER_INCLUDED_ROOT_FILESYSTEM_METADATA")
             check(all("data/" + name in members for name in names), "NESTED_USER_DATA_OMITTED")
             check(archived_links == source_links, "SOURCE_SYMLINK_METADATA_NOT_ARCHIVED")
@@ -2135,7 +2135,7 @@ class Native:
                       "volume": target_claim}
             runtime = self.rt.Runtime(config, self.directory / "restore-runtime-state")
             runtime.adapter.mount(target_claim)
-            target_marker = restored / ".workspaces-volume.json"
+            target_marker = restored / ".municode-volume.json"
             target_owner = target_marker.read_bytes()
             check(target_owner != source_owner, "RESTORE_TARGET_OWNER_NOT_INDEPENDENT")
             lost = restored / "lost+found"
@@ -2292,14 +2292,14 @@ class Native:
                   "LEFTOVER_CODING_PROCESSES_KEEP_MOUNT_AND_LOOP_FOR_INSPECTION")
             command(["systemctl", "stop", UNITS[1]])
             if os.path.ismount("/workspace") and SCRATCH_HELPER.is_file():
-                command(["systemctl", "stop", "workspaces-scratch-watch.service",
-                         "workspaces-scratch-mounts.service"], timeout=180)
+                command(["systemctl", "stop", "municode-scratch-watch.service",
+                         "municode-scratch-mounts.service"], timeout=180)
                 report = json.loads(command(["/usr/bin/python3", "-I", "-B", str(SCRATCH_HELPER),
                                              "unmount-all"], timeout=180))
                 check(report.get("failed") == 0, "SCRATCH_MOUNTS_KEEP_WORKSPACE_FOR_INSPECTION")
             # Scratch is regenerable; do not leave this run's caches on the builder image.
             for name in ("cache", "tmp"):
-                directory = Path("/var/lib/workspaces-scratch", name)
+                directory = Path("/var/lib/municode-scratch", name)
                 for child in (directory.iterdir() if directory.is_dir() and not directory.is_symlink() else ()):
                     if child.is_dir() and not child.is_symlink():
                         shutil.rmtree(child)
@@ -2310,10 +2310,10 @@ class Native:
                       self.config["volume"]["filesystemUuid"], "CLEANUP_MOUNT_CHANGED")
                 command(["umount", "/workspace"])
             check(not os.path.ismount(self.directory / "readback"), "READBACK_STILL_MOUNTED")
-            config = Path("/etc/workspaces-workspace/runtime.json")
+            config = Path("/etc/municode-workspace/runtime.json")
             check(json.loads(config.read_text())["vmId"] == self.run_id, "CLEANUP_CONFIG_CHANGED")
             config.unlink()
-            state = Path("/var/lib/workspaces-workspace")
+            state = Path("/var/lib/municode-workspace")
             if state.exists():
                 if (state / "state.json").exists():
                     check(json.loads((state / "state.json").read_text())["identity"]["vmId"] == self.run_id,

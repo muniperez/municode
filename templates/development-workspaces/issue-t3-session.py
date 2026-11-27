@@ -16,14 +16,14 @@ ALLOWED_SCOPES = frozenset(("terminal:operate", "orchestration:operate", "termin
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="/etc/workspaces-workspace/runtime.json")
+    parser.add_argument("--config", default="/etc/municode-workspace/runtime.json")
     parser.add_argument("--vm-id", required=True)
     parser.add_argument("--generation", required=True, type=int)
     parser.add_argument("--operation-id", required=True)
     parser.add_argument("--subject", required=True)
     parser.add_argument("--ttl", type=int, default=300)
     parser.add_argument("--scope", action="append", required=True)
-    parser.add_argument("--state-dir", default="/var/lib/workspaces-workspace")
+    parser.add_argument("--state-dir", default="/var/lib/municode-workspace")
     args = parser.parse_args()
     require(os.geteuid() == 0 and not sys.stdout.isatty(), "Root, non-terminal secret capture required")
     c = load_config(args.config)

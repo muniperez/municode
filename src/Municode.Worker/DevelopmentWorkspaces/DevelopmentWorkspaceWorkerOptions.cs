@@ -57,7 +57,7 @@ public sealed class DevelopmentWorkspaceWorkerOptions
             if (!Regex.IsMatch(service, "^[a-z][a-z0-9-]{0,15}$") || service == "t3" ||
                 !WorkspaceTunnelManager.IsPermittedRemotePort(service, preview.Port) || preview.Port == 3773 ||
                 (preview.SupervisedUnit is { } unit &&
-                 (service == "connect" || !Regex.IsMatch(unit, @"^workspaces-preview-[a-z0-9-]{1,24}\.service$"))))
+                 (service == "connect" || !Regex.IsMatch(unit, @"^municode-preview-[a-z0-9-]{1,24}\.service$"))))
                 throw new InvalidOperationException("Workspace previews require a unique gateway service name, its permitted port and an optional registered preview unit.");
         }
         ssh.Validate();

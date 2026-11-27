@@ -1,6 +1,6 @@
 [Unit]
 Description=Periodically checkpoint the VM-disk checkout tree (the runtime enforces the interval)
-PartOf=workspaces-t3.service
+PartOf=municode-t3.service
 
 [Timer]
 OnActiveSec=60

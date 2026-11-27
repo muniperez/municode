@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""workspaces-scratch-mounts: bind-mount git-ignored build outputs onto local scratch.
+"""municode-scratch-mounts: bind-mount git-ignored build outputs onto local scratch.
 
 Runs as root over trees the coding user controls. Every path is opened component by
 component relative to a verified directory descriptor with O_NOFOLLOW, mounts and unmounts
@@ -26,9 +26,9 @@ import time
 import uuid
 
 WORKSPACE = "/workspace"
-SCRATCH = "/var/lib/workspaces-scratch"
-RUN_DIR = "/run/workspaces-scratch-mounts"
-TRASH = ".workspaces-scratch-trash"
+SCRATCH = "/var/lib/municode-scratch"
+RUN_DIR = "/run/municode-scratch-mounts"
+TRASH = ".municode-scratch-trash"
 LAYOUT_MARKER = ".workspaces-layout.json"
 CODING_UID = CODING_GID = 2000
 ALLOWLIST = frozenset({
@@ -2110,7 +2110,7 @@ def run_pass(helper, budget):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="workspaces-scratch-mounts")
+    parser = argparse.ArgumentParser(prog="municode-scratch-mounts")
     parser.add_argument("command", choices=("apply", "watch", "suspend", "resume", "unmount-all", "status",
                                           "prepare-delete", "finish-delete"))
     parser.add_argument("--delete-request")

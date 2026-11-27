@@ -81,7 +81,7 @@ public sealed class DevelopmentWorkspaceGatewayController : ControllerBase
 
     private bool ServiceAuthorized(DevelopmentWorkspaceGatewayOptions options)
     {
-        var supplied = Request.Headers["X-Workspaces-Gateway-Credential"].ToString();
+        var supplied = Request.Headers["X-Municode-Gateway-Credential"].ToString();
         return options.IsConfigured && supplied.Length <= 512 && CryptographicOperations.FixedTimeEquals(
             SHA256.HashData(Encoding.UTF8.GetBytes(supplied)),
             SHA256.HashData(Encoding.UTF8.GetBytes(options.ServiceCredential)));

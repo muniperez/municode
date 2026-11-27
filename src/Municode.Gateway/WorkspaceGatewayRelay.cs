@@ -8,7 +8,7 @@ namespace Municode.Gateway;
 
 public sealed class WorkspaceGatewayRelay : IDisposable
 {
-    public const string CookieName = "__Host-workspaces-workspace";
+    public const string CookieName = "__Host-municode-workspace";
     private readonly IGatewayControlPlane control;
     private readonly DevelopmentWorkspaceGatewayOptions options;
     private readonly HttpClient client;
@@ -20,7 +20,7 @@ public sealed class WorkspaceGatewayRelay : IDisposable
     private readonly SemaphoreSlim certificateAdmissions = new(8);
     private int connections;
     private static readonly HashSet<string> RequestHeaders = new(StringComparer.OrdinalIgnoreCase)
-    { "Accept", "Accept-Language", "Content-Type", "Range", "If-None-Match", "If-Modified-Since", "User-Agent", "X-Workspaces-Connect" };
+    { "Accept", "Accept-Language", "Content-Type", "Range", "If-None-Match", "If-Modified-Since", "User-Agent", "X-Municode-Connect" };
     private static readonly HashSet<string> ResponseHeaders = new(StringComparer.OrdinalIgnoreCase)
     { "Content-Type", "Content-Disposition", "Content-Encoding", "Content-Language", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified", "Vary",
       "Content-Security-Policy", "Referrer-Policy", "X-Content-Type-Options" };
@@ -52,7 +52,7 @@ public sealed class WorkspaceGatewayRelay : IDisposable
         if (context.Request.Headers.Origin.Count > 0 &&
             context.Request.Headers.Origin.ToString() != "https://" + host)
         { context.Response.StatusCode = 403; return; }
-        if (context.Request.Path == "/__workspaces/launch")
+        if (context.Request.Path == "/__municode/launch")
         {
             if (!HttpMethods.IsGet(context.Request.Method) || context.Request.Query.Count != 1 ||
                 context.Request.Query["code"].Count != 1 || context.Request.Query["code"].ToString().Length != 64)
@@ -75,7 +75,7 @@ public sealed class WorkspaceGatewayRelay : IDisposable
         }
         if (context.Request.Headers["Sec-Fetch-Site"].ToString() == "cross-site")
         { context.Response.StatusCode = 403; return; }
-        if (context.Request.Path.StartsWithSegments("/__workspaces"))
+        if (context.Request.Path.StartsWithSegments("/__municode"))
         { context.Response.StatusCode = 404; return; }
         var session = context.Request.Cookies[CookieName];
         if (session?.Length != 64) { context.Response.StatusCode = 401; return; }
@@ -278,7 +278,7 @@ public sealed class WorkspaceGatewayRelay : IDisposable
             if ((RequestHeaders.Contains(header.Key) || target.Bearer is null &&
                 !PrivateHeaders.Contains(header.Key) && !connectionHeaders.Contains(header.Key) &&
                 !header.Key.StartsWith("X-Forwarded-", StringComparison.OrdinalIgnoreCase) &&
-                !header.Key.StartsWith("X-Workspaces-", StringComparison.OrdinalIgnoreCase) &&
+                !header.Key.StartsWith("X-Municode-", StringComparison.OrdinalIgnoreCase) &&
                 !header.Key.StartsWith("Sec-WebSocket-", StringComparison.OrdinalIgnoreCase)) &&
                 !upstream.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray()))
                 upstream.Content?.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray());

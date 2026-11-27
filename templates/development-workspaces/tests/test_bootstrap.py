@@ -187,17 +187,17 @@ class BootstrapTests(unittest.TestCase):
 
     def preview_startup(self, safe=True, version="1.2.3", protocol=2):
         self.config.update(workspace=str(self.root), uid=2000, gid=2000,
-            infrastructureUnits=["workspaces-t3.service", "workspaces-preview-user-app.service"],
-            stopUnits=["workspaces-t3.service", "workspaces-preview-user-app.service"])
+            infrastructureUnits=["municode-t3.service", "municode-preview-user-app.service"],
+            stopUnits=["municode-t3.service", "municode-preview-user-app.service"])
         self.config.pop("startServices", None)
         started = []
         def process(argv, **kwargs):
             if argv[:2] == ["systemctl", "start"]:
                 started.extend(argv[2:])
             if argv[:2] == ["systemctl", "show"]:
-                return ("LoadState=loaded\nFragmentPath=/etc/systemd/system/workspaces-preview-user-app.service\n"
+                return ("LoadState=loaded\nFragmentPath=/etc/systemd/system/municode-preview-user-app.service\n"
                         "DropInPaths=\nKillMode=" + ("process" if safe else "control-group") +
-                        "\nSendSIGKILL=no\nSlice=workspaceswork.slice")
+                        "\nSendSIGKILL=no\nSlice=municodework.slice")
             return ""
         class Opener:
             def open(inner, request, timeout):
@@ -212,7 +212,7 @@ class BootstrapTests(unittest.TestCase):
                 patch.object(runtime.Linux, "verify_unit_file") as unit_file:
             result = self.execute(opener, process)
         self.assertEqual("EnrollmentAccepted", result["type"])
-        self.assertEqual(["workspaces-workspace.service", "workspaces-t3.service"], started)
+        self.assertEqual(["municode-workspace.service", "municode-t3.service"], started)
         unit_file.assert_not_called()
 
     def test_other_t3_versions_and_protocols_fail_closed(self):
@@ -235,12 +235,12 @@ class BootstrapTests(unittest.TestCase):
         started, process, opener = self.preview_startup()
         self.config["kind"] = "primary"
         def commands(argv, **kwargs):
-            if argv == ["systemctl", "start", "workspaces-t3-connect.service"]:
+            if argv == ["systemctl", "start", "municode-t3-connect.service"]:
                 raise runtime.Blocked("Connect management unavailable")
             return process(argv, **kwargs)
         result = self.execute(opener, commands)
         self.assertEqual("EnrollmentAccepted", result["type"])
-        self.assertIn("workspaces-t3.service", started)
+        self.assertIn("municode-t3.service", started)
 
     def test_unstarted_user_service_is_not_implicitly_activated_or_needed_for_tooling(self):
         started, process, opener = self.preview_startup(safe=False)
@@ -248,7 +248,7 @@ class BootstrapTests(unittest.TestCase):
                 patch.object(runtime.Linux, "verify_unit_file"):
             result = self.execute(opener, process)
         self.assertEqual("EnrollmentAccepted", result["type"])
-        self.assertEqual(["workspaces-workspace.service", "workspaces-t3.service"], started)
+        self.assertEqual(["municode-workspace.service", "municode-t3.service"], started)
 
     def test_enrollment_bound_once_with_no_toolchain_install_or_token_persistence(self):
         response = SimpleNamespace(status=200, read=lambda n: b"{}")
@@ -317,7 +317,7 @@ class BootstrapTests(unittest.TestCase):
         original_read = Path.read_text
         build_info = "build_name: server\nserial: 20251002\n"
         def read(path, *args, **kwargs):
-            if str(path) == "/etc/workspaces-disposable-image-builder":
+            if str(path) == "/etc/municode-disposable-image-builder":
                 return "DESTROY-DISPOSABLE-IMAGE-BUILDER"
             if str(path) == "/etc/os-release":
                 return 'VERSION_ID="24.04"\n'
@@ -351,7 +351,7 @@ class BootstrapTests(unittest.TestCase):
                       "relay:write", "*", "unknown:read", "", "--token-only"):
             with self.subTest(scope=scope):
                 arguments = ["issue-t3-session.py", "--vm-id", "vm", "--generation", "2",
-                             "--operation-id", "session", "--subject", "workspaces-gateway",
+                             "--operation-id", "session", "--subject", "municode-gateway",
                              "--scope=orchestration:read", "--scope=" + scope]
                 captured = io.StringIO()
                 with patch.object(sys, "argv", arguments), patch.object(sys, "stdout", captured), \
@@ -368,7 +368,7 @@ class BootstrapTests(unittest.TestCase):
     def issue_session(self, scopes):
         self.config["workspace"] = str(self.root)
         arguments = ["issue-t3-session.py", "--vm-id", "vm", "--generation", "2",
-                     "--operation-id", "session", "--subject", "workspaces-gateway", "--ttl", "120",
+                     "--operation-id", "session", "--subject", "municode-gateway", "--ttl", "120",
                      *[value for scope in scopes for value in ("--scope", scope)],
                      "--state-dir", str(self.root)]
         captured = io.StringIO()

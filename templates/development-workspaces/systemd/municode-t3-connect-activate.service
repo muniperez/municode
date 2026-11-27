@@ -3,14 +3,14 @@ Description=Explicit generation-guarded restart of managed T3 for account enroll
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 -B /opt/workspaces-workspace/t3_connect.py activate
-WorkingDirectory=/opt/workspaces-workspace
+ExecStart=/usr/bin/python3 -B /opt/municode-workspace/t3_connect.py activate
+WorkingDirectory=/opt/municode-workspace
 User=root
 Group=root
 UMask=0077
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/workspace /var/lib/workspaces-workspace
+ReadWritePaths=/workspace /var/lib/municode-workspace
 PrivateTmp=yes
 ProtectHome=yes
 TimeoutStartSec=270

@@ -8,7 +8,7 @@ import { newReport, runAcceptance } from "./workspace-image-release-acceptance.m
 const key = "synthetic-api-key";
 const receipt = "a".repeat(64);
 const launchCode = "b".repeat(64);
-const cookie = `__Host-workspaces-workspace=${receipt}`;
+const cookie = `__Host-municode-workspace=${receipt}`;
 const collection = "/api/development-workspaces";
 const workspaceId = "workspace_synthetic";
 const vmId = "workspacevm_synthetic";
@@ -107,7 +107,7 @@ async function fixture(t, failure, timeouts = deadlines) {
           launchFailed = true;
           return answer({}, 503);
         }
-        return answer({ url: `${origin}/__workspaces/launch?code=${launchCode}` });
+        return answer({ url: `${origin}/__municode/launch?code=${launchCode}` });
       }
       assert.equal(url.searchParams.get("organizationId"), "test-org");
       if (url.pathname.endsWith("/start")) {
@@ -149,7 +149,7 @@ async function fixture(t, failure, timeouts = deadlines) {
       return answer(state);
     }
     assert.equal(req.headers.authorization, undefined);
-    if (url.pathname === "/__workspaces/launch") {
+    if (url.pathname === "/__municode/launch") {
       assert.equal(url.searchParams.get("code"), launchCode);
       return res.writeHead(302, { location: "/", "set-cookie": `${cookie}; Path=/; Secure; HttpOnly` }).end();
     }

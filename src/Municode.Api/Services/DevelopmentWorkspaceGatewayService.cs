@@ -70,7 +70,7 @@ public sealed class DevelopmentWorkspaceGatewayService(
         receipt.LaunchDigest = DevelopmentWorkspaceGatewayOptions.Digest(token);
         db.DevelopmentWorkspaceGatewaySessions.Add(receipt);
         await db.SaveChangesAsync(ct);
-        return new($"https://{host}/__workspaces/launch?code={token}", receipt.LaunchExpiresAt);
+        return new($"https://{host}/__municode/launch?code={token}", receipt.LaunchExpiresAt);
     }
 
     public async Task<DevelopmentWorkspaceGatewayRedemption?> RedeemAsync(DevelopmentWorkspaceGatewayReceiptRequest request, CancellationToken ct)

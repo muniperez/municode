@@ -599,7 +599,7 @@ sealed class FakeControlPlane : IAsyncDisposable
         var fake = new FakeControlPlane(app);
         app.MapPost("/internal/workspace-gateway/resolve", (HttpContext context) =>
         {
-            if (context.Request.Headers["X-Workspaces-Gateway-Credential"] != credential) return Results.Unauthorized();
+            if (context.Request.Headers["X-Municode-Gateway-Credential"] != credential) return Results.Unauthorized();
             Interlocked.Increment(ref fake.resolves);
             return Results.Json(new DevelopmentWorkspaceGatewayTarget(upstreamPort, "synthetic-upstream-bearer"));
         });

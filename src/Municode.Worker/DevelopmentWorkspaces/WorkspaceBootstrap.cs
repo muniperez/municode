@@ -10,8 +10,8 @@ internal sealed record WorkspaceBootstrapSecret(string HostPrivateKey, string Ho
 
 internal static class WorkspaceBootstrap
 {
-    private const string CodexBinary = "/opt/workspaces-tools/node_modules/.bin/codex";
-    private const string CodexWrapperPath = "/opt/workspaces-workspace/codex-device-auth";
+    private const string CodexBinary = "/opt/municode-tools/node_modules/.bin/codex";
+    private const string CodexWrapperPath = "/opt/municode-workspace/codex-device-auth";
     internal const string CodexDeviceAuthWrapper = $"""
         #!/bin/sh
         if [ "$#" -eq 1 ] && [ "$1" = login ]; then
@@ -52,7 +52,7 @@ internal static class WorkspaceBootstrap
             {
                 new
                 {
-                    path = "/etc/ssh/sshd_config.d/90-workspaces-workspace.conf", owner = "root:root", permissions = "0600",
+                    path = "/etc/ssh/sshd_config.d/90-municode-workspace.conf", owner = "root:root", permissions = "0600",
                     content = "PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\nAllowUsers root\nAllowAgentForwarding no\nX11Forwarding no\nGatewayPorts no\nPermitOpen 127.0.0.1:*\n"
                 },
                 new

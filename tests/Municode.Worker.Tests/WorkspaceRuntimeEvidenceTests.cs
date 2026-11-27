@@ -118,7 +118,7 @@ public sealed class WorkspaceRuntimeEvidenceTests
         Assert.True(root.GetProperty("lock_passwd").GetBoolean());
         Assert.Equal(authorizedKey, Assert.Single(root.GetProperty("ssh_authorized_keys").EnumerateArray()).GetString());
         var sshPolicy = Assert.Single(payload.GetProperty("write_files").EnumerateArray(), file =>
-            file.GetProperty("path").GetString() == "/etc/ssh/sshd_config.d/90-workspaces-workspace.conf").GetProperty("content").GetString()!;
+            file.GetProperty("path").GetString() == "/etc/ssh/sshd_config.d/90-municode-workspace.conf").GetProperty("content").GetString()!;
         Assert.Contains("PasswordAuthentication no\n", sshPolicy);
         Assert.Contains("KbdInteractiveAuthentication no\n", sshPolicy);
         Assert.Contains("PermitRootLogin prohibit-password\n", sshPolicy);
@@ -156,7 +156,7 @@ public sealed class WorkspaceRuntimeEvidenceTests
         using var document = JsonDocument.Parse(config["#cloud-config\n".Length..]);
         var payload = document.RootElement;
         var launcher = Assert.Single(payload.GetProperty("write_files").EnumerateArray(), file =>
-            file.GetProperty("path").GetString() == "/opt/workspaces-workspace/codex-device-auth");
+            file.GetProperty("path").GetString() == "/opt/municode-workspace/codex-device-auth");
         Assert.Equal("root:root", launcher.GetProperty("owner").GetString());
         Assert.Equal("0755", launcher.GetProperty("permissions").GetString());
         Assert.Contains("set -- login --device-auth", launcher.GetProperty("content").GetString());

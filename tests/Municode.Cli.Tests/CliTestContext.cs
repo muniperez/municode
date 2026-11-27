@@ -56,7 +56,7 @@ internal sealed record CapturedRequest(
 
 internal sealed class RecordingHandler : HttpMessageHandler
 {
-    public const string LaunchUrl = "https://vm-primary-g3.gateway.example/__workspaces/launch?code=synthetic";
+    public const string LaunchUrl = "https://vm-primary-g3.gateway.example/__municode/launch?code=synthetic";
     public List<CapturedRequest> Requests { get; } = [];
     public string[] Organizations { get; set; } = ["org"];
     public string WorkspacePhase { get; set; } = "stopped";
