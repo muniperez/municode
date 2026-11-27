@@ -53,7 +53,12 @@ public sealed partial class DevelopmentWorkspaceProcessor(
             var queued = await db.DevelopmentWorkspaceVms.AsNoTracking()
                 .FirstOrDefaultAsync(x => x.Phase == "stopped" && x.StartAfterStop, ct);
             if (queued is null) return false;
-            await lifecycle.StartVmAsync(queued.WorkspaceId, queued.OrganizationId, queued.Id, queued.Generation, ct);
+            try { await lifecycle.StartVmAsync(queued.WorkspaceId, queued.OrganizationId, queued.Id, queued.Generation, ct); }
+            catch (DevelopmentWorkspaceException error) when (error.Code == WorkspaceMaintenanceMode.ErrorCode)
+            {
+                // This deferred start has no operation yet. Keep it queued until maintenance exits.
+                return false;
+            }
             return true;
         }
         var token = operation.LeaseToken!;

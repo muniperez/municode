@@ -351,14 +351,18 @@ when a dependency job exits, and dependency chains are never left to `up`.
 | `commit` | Write `active-release.json` (previous becomes `previous`), point the symlink at the target, and prune releases (keep the active and previous) and backups (keep 3). | Retry is idempotent. |
 
 **Maintenance mode** is a small API and worker feature delivered separately.
-`Municode.Api maintenance enter|exit|status` sets a database flag. While it
-is set, the API returns `503` with `Retry-After` for requests that would create
-workspace operations. The worker keeps processing accepted operations until
+`Municode.Api maintenance enter|exit|status [--json]` manages a database flag.
+The JSON response has `enabled` and `nonterminalOperations` fields. While the
+flag is set, the API returns `503` with `Retry-After` and the error code
+`workspace_maintenance` for requests that would enqueue workspace operations.
+The worker pauses new idle-stop scheduling and keeps deferred starts, which
+do not yet have an operation record, queued until maintenance exits. It keeps
+claiming and processing already accepted operations, including pending ones, until
 they reach a terminal state, because operations release their lease and go back
 to `pending` between steps. Zero leases therefore doesn't mean the work
 finished, and an operation that crosses a release boundary could meet changed
 step or evidence semantics. The drain waits for terminal states, not for lease
-expiry.
+expiry. `completed`, `failed`, `cancelled` and `superseded` are terminal.
 
 Workspace VMs keep running throughout. Open T3 and preview sessions disconnect
 while the gateway is down and reconnect afterwards.

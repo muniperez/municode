@@ -2115,6 +2115,28 @@ namespace Municode.Common.Migrations.Sqlite
                     b.ToTable("users", (string)null);
                 });
 
+            modelBuilder.Entity("Municode.Common.Models.WorkspaceMaintenance", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("id");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("enabled");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("workspace_maintenance", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            Id = 1,
+                            Enabled = false
+                        });
+                });
+
             modelBuilder.Entity("Municode.Common.Models.ApiKey", b =>
                 {
                     b.HasOne("Municode.Common.Models.Organization", "Organization")
