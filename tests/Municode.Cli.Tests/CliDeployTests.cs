@@ -130,7 +130,8 @@ public sealed class CliDeployTests
             Assert.Equal("municode-v1.2.2", root.GetProperty("publicVersion").GetProperty("tag").GetString());
             Assert.Equal("planned", root.GetProperty("operation").GetProperty("phase").GetString());
             Assert.Equal(op, root.GetProperty("hostOperation").GetProperty("operationId").GetString());
-            Assert.Equal("state-file", root.GetProperty("hostOperation").GetProperty("source").GetString());
+            Assert.Equal("host-agent", root.GetProperty("hostOperation").GetProperty("source").GetString());
+            Assert.Equal("inactive", root.GetProperty("hostOperation").GetProperty("unit").GetProperty("activeState").GetString());
         }
         fixture.HealthUnavailable = true;
         Assert.Equal(CliExitCodes.Success, await fixture.Run("status", "--instance", "demo"));
@@ -145,6 +146,169 @@ public sealed class CliDeployTests
     }
 
     [Fact]
+    public async Task ApplyRequiresTheLocalApprovalAndReportsChangedHostApproval()
+    {
+        using var fixture = new Fixture();
+        var (op, digest) = await fixture.PlanAsync();
+
+        Assert.Equal(CliExitCodes.ValidationError, await fixture.Run("apply", op, "--approve", new string('0', 64)));
+        Assert.Contains("exactly match", fixture.Console.Error);
+        Assert.Empty(fixture.Executions);
+        Assert.Equal(0, fixture.StatusCalls);
+
+        fixture.ExecutionMode = "changed";
+        Assert.Equal(CliExitCodes.ValidationError, await fixture.Run("apply", op, "--approve", digest));
+        Assert.Contains("--approve", Assert.Single(fixture.Executions));
+        Assert.Contains(digest, fixture.Executions[0]);
+        using var output = JsonDocument.Parse(fixture.Console.Messages.Last());
+        Assert.Equal(new string('f', 64), output.RootElement.GetProperty("liveApprovalDigest").GetString());
+        Assert.Contains("live preflight", output.RootElement.GetProperty("blockers")[0].GetString());
+    }
+
+    [Fact]
+    public async Task ApplyPollsTheTransientUnitStreamsOnlyTheKeyAndVerifiesPublicEndpoints()
+    {
+        using var fixture = new Fixture { HoldExecutionForPoll = true };
+        var (op, digest) = await fixture.PlanAsync();
+        var key = Path.Combine(fixture.Root, "offline-key");
+        SeedFiles.WriteNew(key, "synthetic-secret_12345\r\n"u8);
+        Assert.Equal(CliExitCodes.Success, await fixture.Run("apply", op, "--approve", digest,
+            "--unseal-key-file", key, "--drain-timeout", "42"));
+
+        var command = Assert.Single(fixture.Executions);
+        Assert.Contains($"systemd-run --unit municode-deploy-{op} --collect --pipe", command);
+        Assert.Contains("/opt/municode/releases/municode-v1.2.4/deploy_host.py", command);
+        Assert.Contains("--approve", command);
+        Assert.Contains(digest, command);
+        Assert.Contains("--drain-timeout 42", command);
+        Assert.Contains("--unseal-key-stdin", command);
+        Assert.Equal("synthetic-secret_12345\n", fixture.ExecutionInput);
+        Assert.Equal(2, fixture.StatusCalls);
+        using var output = JsonDocument.Parse(fixture.Console.Messages.Last());
+        Assert.Equal("committed", output.RootElement.GetProperty("hostOperation").GetProperty("phase").GetString());
+        var checks = output.RootElement.GetProperty("publicChecks").EnumerateArray().ToArray();
+        Assert.Equal(new[] { "/health", "/health/ready", "/health/version", "/api/account/capabilities", "/runtime-config.json" },
+            checks.Select(check => check.GetProperty("endpoint").GetString()));
+        Assert.All(checks, check => Assert.True(check.GetProperty("passed").GetBoolean()));
+        var journal = File.ReadAllText(Path.Combine(fixture.Root, "deploy", op, "operation.json"));
+        Assert.DoesNotContain("synthetic-secret", command + journal + fixture.Console.Output + fixture.Console.Error);
+        Assert.DoesNotContain("offline-key", command + journal + fixture.Console.Output + fixture.Console.Error);
+    }
+
+    [Theory]
+    [InlineData(true, "open", "committed", CliExitCodes.Success)]
+    [InlineData(false, "open", "committed", CliExitCodes.Success)]
+    [InlineData(false, "migrate", "rolled-back", CliExitCodes.ValidationError)]
+    public async Task ResumeFollowsAnActiveUnitOrRestartsWithOriginalApproval(
+        bool active, string interruptedPhase, string outcome, int exitCode)
+    {
+        using var fixture = new Fixture();
+        var (op, digest) = await fixture.PlanAsync();
+        fixture.ExecutionMode = "disconnect";
+        Assert.Equal(CliExitCodes.ValidationError, await fixture.Run("apply", op, "--approve", digest, "--drain-timeout", "42"));
+        Assert.Contains($"deploy resume {op}", fixture.Console.Error);
+        fixture.Phase = interruptedPhase;
+        fixture.ExecutionMode = outcome == "rolled-back" ? "recover-pre-open" : null;
+        if (active) fixture.FinishOnNextPoll = true;
+
+        Assert.Equal(exitCode, await fixture.Run("resume", op));
+        Assert.Equal(active ? 1 : 2, fixture.Executions.Count);
+        if (!active)
+        {
+            Assert.Contains(digest, fixture.Executions[1]);
+            Assert.Contains("--drain-timeout 42", fixture.Executions[1]);
+        }
+        using var output = JsonDocument.Parse(fixture.Console.Messages.Last());
+        Assert.Equal(outcome, output.RootElement.GetProperty("hostOperation").GetProperty("phase").GetString());
+    }
+
+    [Fact]
+    public async Task RollbackForwardsAllSafetyFlagsAndPreservesTheExactTimestamp()
+    {
+        using var fixture = new Fixture();
+        var (op, digest) = await fixture.PlanAsync();
+        Assert.Equal(CliExitCodes.Success, await fixture.Run("apply", op, "--approve", digest));
+        Assert.Equal(CliExitCodes.ValidationError, await fixture.Run("rollback", op, "--restore-database"));
+        Assert.Single(fixture.Executions);
+
+        Assert.Equal(CliExitCodes.ValidationError, await fixture.Run("rollback", op));
+        using (var blocked = JsonDocument.Parse(fixture.Console.Messages.Last()))
+            Assert.Contains("openAt", blocked.RootElement.GetProperty("blockers")[0].GetString());
+        Assert.Equal(CliExitCodes.ValidationError, await fixture.Run("rollback", op,
+            "--restore-database", "--accept-data-loss-since", Fixture.OpenAt));
+        using (var blocked = JsonDocument.Parse(fixture.Console.Messages.Last()))
+            Assert.Contains("provider-reconciliation", blocked.RootElement.GetProperty("blockers")[0].GetString());
+        var key = Path.Combine(fixture.Root, "offline-key");
+        SeedFiles.WriteNew(key, "synthetic-secret_12345"u8);
+        Assert.Equal(CliExitCodes.Success, await fixture.Run("rollback", op, "--restore-database",
+            "--accept-data-loss-since", Fixture.OpenAt, "--accept-provider-reconciliation", "--unseal-key-file", key));
+        var command = fixture.Executions[^1];
+        Assert.Contains(" rollback --restore-database --accept-data-loss-since ", command);
+        Assert.Contains(Fixture.OpenAt, command);
+        Assert.Contains("--accept-provider-reconciliation", command);
+        Assert.Contains("--unseal-key-stdin", command);
+        Assert.Equal("synthetic-secret_12345\n", fixture.ExecutionInput);
+    }
+
+    [Fact]
+    public async Task RollbackBeforeOpeningTrafficDoesNotRequireDataLossFlags()
+    {
+        using var fixture = new Fixture();
+        var (op, digest) = await fixture.PlanAsync();
+        fixture.ExecutionMode = "disconnect";
+        Assert.Equal(CliExitCodes.ValidationError, await fixture.Run("apply", op, "--approve", digest));
+        fixture.Phase = "migrate";
+        fixture.ExecutionMode = null;
+
+        Assert.Equal(CliExitCodes.Success, await fixture.Run("rollback", op));
+        Assert.Contains(" rollback --plan ", fixture.Executions[^1]);
+        using var output = JsonDocument.Parse(fixture.Console.Messages.Last());
+        Assert.Equal("rolled-back", output.RootElement.GetProperty("hostOperation").GetProperty("phase").GetString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OffhostBackupOnlyPublishesAnOwnerOnlyVerifiedSnapshot(bool corrupt)
+    {
+        using var fixture = new Fixture { CorruptBackup = corrupt };
+        var (op, digest) = await fixture.PlanAsync();
+        var directory = Path.Combine(fixture.Root, "backups");
+        Assert.Equal(corrupt ? CliExitCodes.ValidationError : CliExitCodes.Success,
+            await fixture.Run("apply", op, "--approve", digest, "--offhost-backup", directory));
+        using var output = JsonDocument.Parse(fixture.Console.Messages.Last());
+        var backup = output.RootElement.GetProperty("offhostBackup");
+        var target = Path.Combine(directory, op);
+        if (corrupt)
+        {
+            Assert.Equal(JsonValueKind.Null, backup.ValueKind);
+            Assert.Contains("SHA-256 mismatch", output.RootElement.GetProperty("blockers")[0].GetString());
+            Assert.Empty(Directory.GetFileSystemEntries(directory));
+        }
+        else
+        {
+            Assert.Equal(target, backup.GetString());
+            SeedFiles.Check(target, directory: true);
+            var snapshot = Path.Combine(target, "secrets.tar");
+            SeedFiles.Check(snapshot);
+            Assert.Equal(Fixture.BackupBytes, File.ReadAllBytes(snapshot));
+        }
+        Assert.DoesNotContain("synthetic-secret", fixture.Console.Output + fixture.Console.Error);
+    }
+
+    [Fact]
+    public async Task FailedPublicVerificationLeavesTheCommittedHostUntouched()
+    {
+        using var fixture = new Fixture { StalePublicVersion = true };
+        var (op, digest) = await fixture.PlanAsync();
+        Assert.Equal(CliExitCodes.ValidationError, await fixture.Run("apply", op, "--approve", digest));
+        using var output = JsonDocument.Parse(fixture.Console.Messages.Last());
+        Assert.Equal("committed", output.RootElement.GetProperty("hostOperation").GetProperty("phase").GetString());
+        Assert.Contains("/health/version", output.RootElement.GetProperty("blockers")[0].GetString());
+        Assert.Single(fixture.Executions);
+    }
+
+    [Fact]
     public void ApprovalDigestMatchesTheHostCanonicalJson()
     {
         // Digest produced by Python json.dumps(sort_keys=True,separators=(',',':'),ensure_ascii=True).
@@ -155,6 +319,10 @@ public sealed class CliDeployTests
 
     private sealed class Fixture : IDisposable, ISeedProcess
     {
+        public const string OpenAt = "2026-11-27T18:12:34.123456Z";
+        public static readonly byte[] BackupBytes = [.. "synthetic-secret"u8, 0x00, 0xff];
+        private static readonly string[] BackupFiles = ["active-release.json", "caddy-data.tar", "config.tar",
+            "kratos.dump", "municode.dump", "openbao.tar", "postgres-globals.sql", "secrets.tar"];
         private readonly FakeInstanceSsh _instanceSsh = new();
         private readonly CliApplication _app;
         private readonly HttpClient _http;
@@ -172,6 +340,16 @@ public sealed class CliDeployTests
         public int UploadCalls { get; private set; }
         public bool CleanedUpload { get; private set; }
         public bool HealthUnavailable { get; set; }
+        public string Phase { get; set; } = "staged";
+        public string? ExecutionMode { get; set; }
+        public List<string> Executions { get; } = [];
+        public string? ExecutionInput { get; private set; }
+        public int StatusCalls { get; private set; }
+        public bool StalePublicVersion { get; init; }
+        public bool CorruptBackup { get; init; }
+        public bool HoldExecutionForPoll { get; init; }
+        public bool FinishOnNextPoll { get; set; }
+        private TaskCompletionSource? _poll;
 
         public Fixture(string version = "1.2.4", int protocol = 1, bool? sourceDirty = null, bool tamperImage = false)
         {
@@ -191,6 +369,14 @@ public sealed class CliDeployTests
 
         public Task<int> Run(string action, params string[] args) =>
             _app.RunAsync(["deploy", action, .. args, "--json"], CancellationToken.None);
+
+        public async Task<(string Id, string Digest)> PlanAsync()
+        {
+            await RegisterAsync();
+            Assert.Equal(CliExitCodes.Success, await Run("plan", "--instance", "demo", "--release", "municode-v1.2.4"));
+            using var output = JsonDocument.Parse(Console.Messages.Last());
+            return (PreflightPlan!.OperationId, output.RootElement.GetProperty("operation").GetProperty("approvalDigest").GetString()!);
+        }
 
         public Task<SeedProcessResult> RunAsync(string file, IReadOnlyList<string> args, byte[]? input, CancellationToken ct)
         {
@@ -228,10 +414,31 @@ public sealed class CliDeployTests
                     });
                 }
             }
-            Assert.Contains("state.json", command);
+            if (command.Contains("systemd-run", StringComparison.Ordinal)) return ExecuteAsync(command, ct);
+            if (command.Contains("backup-manifest.json", StringComparison.Ordinal))
+                return Json(new
+                {
+                    format = 1, PreflightPlan!.OperationId,
+                    files = BackupFiles.ToDictionary(file => file, _ => Convert.ToHexStringLower(
+                        System.Security.Cryptography.SHA256.HashData(BackupBytes)))
+                });
+            if (command.Contains("state.json", StringComparison.Ordinal)) return Result("latest-on-host");
+            Assert.Contains("status --operation", command);
             var op = PreflightPlan!.OperationId;
-            return Json(new DeployHostOperation(command.Contains(op, StringComparison.Ordinal) ? op : "latest-on-host",
-                "staged", "state-file"));
+            var busy = FinishOnNextPoll || _poll is not null;
+            StatusCalls++;
+            var status = Json(new
+            {
+                state = HostState(command.Contains(op, StringComparison.Ordinal) ? op : "latest-on-host"),
+                unit = new { activeState = busy ? "active" : "inactive", subState = busy ? "running" : "dead" }
+            });
+            _poll?.TrySetResult();
+            if (FinishOnNextPoll)
+            {
+                FinishOnNextPoll = false;
+                Phase = "committed";
+            }
+            return status;
         }
 
         public async Task<SeedProcessResult> RunStreamAsync(string file, IReadOnlyList<string> args, Stream input, CancellationToken ct)
@@ -246,6 +453,12 @@ public sealed class CliDeployTests
                 return new(0, "");
             }
             Assert.Contains("sudo -n", command);
+            if (command.Contains("systemd-run", StringComparison.Ordinal))
+            {
+                using var buffer = new StreamReader(input, leaveOpen: true);
+                ExecutionInput = await buffer.ReadToEndAsync(ct);
+                return await ExecuteAsync(command, ct);
+            }
             Assert.Contains("preflight --json --plan", command);
             var plan = await JsonSerializer.DeserializeAsync<DeployPlan>(input, SeedJournal.Json, ct);
             PreflightPlan = plan;
@@ -270,6 +483,64 @@ public sealed class CliDeployTests
                 blockers = Array.Empty<string>()
             });
         }
+
+        public async Task<SeedProcessResult> RunDownloadAsync(
+            string file, IReadOnlyList<string> args, Stream output, CancellationToken ct)
+        {
+            CheckPinned(file, args, false);
+            var command = args[^1];
+            Assert.Contains("sudo -n", command);
+            var backup = Assert.Single(BackupFiles, name => command.Contains(
+                $"/backups/{PreflightPlan!.OperationId}/{name}", StringComparison.Ordinal));
+            await output.WriteAsync(CorruptBackup && backup == "secrets.tar" ? [0x00] : BackupBytes, ct);
+            return new(0, "");
+        }
+
+        private object HostState(string? op = null) => new
+        {
+            operationId = op ?? PreflightPlan!.OperationId,
+            phase = Phase, PreflightPlan!.TargetRelease,
+            pendingStep = Phase == "drain" ? "drain-operations" : null,
+            backupCreatedAt = Phase == "committed" ? OpenAt : null,
+            trafficMayHaveOpened = Phase is "open" or "committed",
+            workerResumed = Phase == "committed",
+            openAt = Phase is "open" or "committed" ? OpenAt : null,
+            ignoredSecret = "synthetic-secret"
+        };
+
+        private async Task<SeedProcessResult> ExecuteAsync(string command, CancellationToken ct)
+        {
+            Executions.Add(command);
+            if (HoldExecutionForPoll)
+            {
+                Phase = "drain";
+                _poll = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                await _poll.Task.WaitAsync(ct);
+                _poll = null;
+            }
+            if (ExecutionMode == "disconnect") return new(255, "");
+            if (ExecutionMode == "changed")
+                return Failure(new { state = HostState(), blockers = new[] { "Approved deploy digest does not match live preflight." },
+                    approvalDigest = new string('f', 64) });
+            if (ExecutionMode == "recover-pre-open")
+            {
+                Phase = "rolled-back";
+                return Failure(new { state = HostState(), blockers = new[] { "Interrupted deploy rolled back; create a new plan to retry." } });
+            }
+            if (command.Contains(" rollback ", StringComparison.Ordinal))
+            {
+                if (Phase is "open" or "committed" && (!command.Contains("--restore-database", StringComparison.Ordinal)
+                    || !command.Contains(OpenAt, StringComparison.Ordinal)))
+                    return Failure(new { state = HostState(), blockers = new[] { "Rollback requires an exact openAt." } });
+                if (Phase == "committed" && !command.Contains("--accept-provider-reconciliation", StringComparison.Ordinal))
+                    return Failure(new { state = HostState(), blockers = new[] { "Rollback requires --accept-provider-reconciliation." } });
+                Phase = "rolled-back";
+            }
+            else Phase = "committed";
+            return await Json(new { state = HostState() });
+        }
+
+        private static SeedProcessResult Failure<T>(T value) => new(1, JsonSerializer.Serialize(value, SeedJournal.Json));
 
         private static void CheckPinned(string file, IReadOnlyList<string> args, bool stream)
         {
@@ -311,14 +582,30 @@ public sealed class CliDeployTests
                         ]
                         """);
                 }
+                else if (uri.Host == "console.example.com")
+                {
+                    Assert.Equal("/runtime-config.json", uri.AbsolutePath);
+                    content = new StringContent("""
+                        {"apiBaseUrl":"https://api.example.com","auth":{"origin":"https://api.example.com",
+                        "capabilitiesUrl":"https://api.example.com/api/account/capabilities"}}
+                        """);
+                }
                 else if (uri.Host == "api.example.com")
                 {
-                    Assert.Equal("/health/version", uri.AbsolutePath);
                     if (fixture.HealthUnavailable) return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
-                    content = new StringContent(JsonSerializer.Serialize(new
+                    var current = fixture.Phase == "committed" && !fixture.StalePublicVersion;
+                    content = new StringContent(uri.AbsolutePath switch
                     {
-                        tag = "municode-v1.2.2", sourceRevision = new string('c', 40), trust = "github-sigstore"
-                    }));
+                        "/health/version" => JsonSerializer.Serialize(new
+                        {
+                            tag = current ? "municode-v1.2.4" : "municode-v1.2.2",
+                            sourceRevision = new string(current ? 'd' : 'c', 40), trust = "github-sigstore"
+                        }),
+                        "/health" => "Healthy",
+                        "/health/ready" => """{"status":"ready"}""",
+                        "/api/account/capabilities" => """{"password":true,"bootstrapState":"completed"}""",
+                        _ => throw new InvalidOperationException("Unexpected API endpoint.")
+                    });
                 }
                 else
                 {

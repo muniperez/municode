@@ -43,6 +43,13 @@ the first workspace are separate post-login actions. See the
 [live validation checklist](docs/setup/live-seed-validation.md) for the manual
 test that must run on disposable provider capacity outside CI.
 
+For an existing control plane, register it with `municode instance add`, stage
+and review a release with `municode deploy plan`, then run `municode deploy apply`
+with the printed approval digest. Use `municode deploy status` to inspect live
+progress, `municode deploy resume` after an interrupted connection, and
+`municode deploy rollback` to recover the previous release. See the
+[deploy command reference](docs/user.md#cli) for options and rollback safeguards.
+
 ## Build and test
 
 Use the .NET 10 SDK and Python 3.11+ from the repository root. All generated

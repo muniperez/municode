@@ -110,12 +110,16 @@ internal sealed class InstanceRegistry(string configHome, ISeedProcess process)
             .ToArray();
     }
 
-    public async Task<InstanceEntry> ShowAsync(string name, CancellationToken ct)
+    public async Task<InstanceEntry> ShowAsync(string name, CancellationToken ct,
+        string? expectedFingerprint = null, string? expectedInstallationId = null)
     {
         ValidateName(name);
         RequireRegistry();
-        using var registryLock = Lock();
+        using var registryLock = Lock(readOnly: true);
         var entry = Load(name);
+        SeedGuard.Require((expectedFingerprint is null || entry.Ssh.HostFingerprint == expectedFingerprint)
+            && (expectedInstallationId is null || entry.Host.InstallationId == expectedInstallationId),
+            "The registered instance no longer matches this deploy operation.");
         var host = await _ssh.ProbeAsync(entry.Ssh, Path.Combine(EntryPath(name), "known_hosts"), ct);
         SeedGuard.Require(host.InstallationId == entry.Host.InstallationId,
             "The host installation ID changed. Remove and explicitly re-register this instance if expected.");
@@ -139,14 +143,14 @@ internal sealed class InstanceRegistry(string configHome, ISeedProcess process)
     }
 
     internal async Task<SeedProcessResult> RunPinnedAsync(
-        InstanceEntry expected, string command, CancellationToken ct, Stream? input = null)
+        InstanceEntry expected, string command, CancellationToken ct, Stream? input = null, Stream? output = null)
     {
-        using var registryLock = Lock();
+        using var registryLock = Lock(readOnly: true);
         var entry = Load(expected.Name);
         SeedGuard.Require(entry.Ssh == expected.Ssh && entry.Host.InstallationId == expected.Host.InstallationId,
             "The registered instance changed during the deploy command.");
         return await _ssh.RunPinnedAsync(entry.Ssh, Path.Combine(EntryPath(entry.Name), "known_hosts"),
-            command, ct, input);
+            command, ct, input, output);
     }
 
     private async Task<InstanceEntry> RegisterAsync(string name, InstanceConnection connection,
@@ -179,7 +183,7 @@ internal sealed class InstanceRegistry(string configHome, ISeedProcess process)
         return entry!;
     }
 
-    private FileStream Lock()
+    private FileStream Lock(bool readOnly = false)
     {
         SeedFiles.CreateDirectory(_root);
         var path = Path.Combine(_root, ".lock");
@@ -187,8 +191,8 @@ internal sealed class InstanceRegistry(string configHome, ISeedProcess process)
         var options = new FileStreamOptions
         {
             Mode = FileMode.OpenOrCreate,
-            Access = FileAccess.ReadWrite,
-            Share = FileShare.None
+            Access = readOnly ? FileAccess.Read : FileAccess.ReadWrite,
+            Share = readOnly ? FileShare.Read : FileShare.None
         };
         if (!OperatingSystem.IsWindows())
             options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
