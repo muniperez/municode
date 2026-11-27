@@ -140,7 +140,7 @@ through, so `workspaces deploy` works too.
 ```text
 workstation                              control-plane host (root or sudo over pinned SSH)
 ───────────                              ────────────────────────────────────────
-municode CLI                        /opt/municode/releases/<release-id>/   immutable trees
+municode CLI                             /opt/municode/releases/<release-id>/   immutable trees
  ├─ instance registry                    /opt/municode/workspaces → releases/<active>  (symlink)
  ├─ release source (signed | latest |    /etc/municode/workspaces/secrets/      unchanged
  │   local-build)                        /etc/municode/workspaces/config/       operator-owned
