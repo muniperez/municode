@@ -1,7 +1,7 @@
 # Spec: deploy a new release to an existing control plane
 
 Status: proposed. Municode has no external users yet, so this design carries
-no backwards compatibility: existing instances are reseeded, not migrated.
+no backwards compatibility: existing instances are reinstalled, not migrated.
  Tracking: see the epic issue linked from the
 [issue breakdown](#issue-breakdown).
 
@@ -54,8 +54,8 @@ preserved. If the deploy fails, the instance must return to the previous release
 - Changing the seed trust model. Seed still accepts only signed releases.
 - Migrating instances installed before this feature, legacy layouts, operator
   Compose overlays, or releases without maintenance mode. Such instances
-  (today dev.muni.dev and cloud3) are reseeded once with a release that has this
-  feature.
+  (today dev.muni.dev and cloud3) are reinstalled once, by `seed` or by
+  `install.sh`, with a release that has this feature.
 
 ## User experience
 
@@ -96,30 +96,52 @@ Commands (all accept `--json`):
 
 | Command | Effect |
 | --- | --- |
-| `workspaces instance list` / `show <name>` | Lists registered instances. `show` also probes the host read-only over pinned SSH. |
+| `workspaces instance add <name> --ssh <destination> [--identity-file <path>] [--confirm-host-fingerprint SHA256:…]` | Registers any instance the workstation can reach over SSH: seeded, installed by `install.sh`, or on any provider. Pins the host key and probes the host read-only. |
+| `workspaces instance list` / `show <name>` / `remove <name>` | Manages the local registry. `show` also probes the host read-only over pinned SSH. |
 | `workspaces deploy plan --instance <n> (--release <tag> \| --release latest [--prerelease] \| --bundle-dir <dir> --trust local-build)` | Verifies, uploads and stages the bundle. Runs a read-only preflight. Prints the diff and an approval digest. |
 | `workspaces deploy apply <op> --approve <digest> [--unseal-key-file <path>] [--drain-timeout <dur>] [--offhost-backup <dir>]` | Runs the host deploy agent and follows its progress. |
 | `workspaces deploy status <op>` | Local journal plus a live host-agent state read over pinned SSH. |
 | `workspaces deploy resume <op>` | Reattaches after a lost connection, or continues an interrupted agent. |
 | `workspaces deploy rollback <op> [--restore-database --accept-data-loss-since <timestamp>] [--accept-provider-reconciliation]` | Returns to the previous release. See [rollback](#failure-and-rollback). |
 
-Seed completion registers its instance automatically, named after the dashboard
-hostname (`--instance-name` overrides it). There is no `adopt` or `add`: only
-instances created by seed can be deployed.
+Any instance is deployable. The only requirement is an SSH connection from the
+workstation, as `root` or as a user with passwordless `sudo`, to a host whose
+control plane was installed by a release with this feature (see
+[host layout](#host-layout)). Seed is one way to get there, and seed completion
+calls `instance add` for you with its own key and pinned host key, named after
+the dashboard hostname (`--instance-name` overrides it).
+
+`instance add`:
+
+- `--ssh <destination>` is anything `ssh` accepts: `user@host`, `host:port`, or
+  a `Host` alias from `~/.ssh/config`. Authentication uses the operator's normal
+  SSH setup (agent, config, `--identity-file`). The CLI stores no private key for
+  added instances, only the destination and the identity-file path if one was given.
+- The host key is pinned at registration into the instance's own `known_hosts`.
+  If `--confirm-host-fingerprint` is given it must match. Otherwise the CLI
+  shows the fingerprint and asks for interactive confirmation (refused
+  non-interactively), as seed does for its independent fingerprint check. From
+  then on every connection uses `StrictHostKeyChecking=yes` against that file, so
+  a changed host key stops the deploy.
+- The read-only probe confirms sudo access, reads `active-release.json` and the
+  installation ID, and reads the dashboard, API and gateway host names from
+  `operator.env`, so the operator doesn't type them. A host without
+  `active-release.json` is rejected with "reinstall with `install.sh` from a
+  release that supports deploy".
 
 ## Design
 
 ### Components
 
 ```text
-workstation                              control-plane VPS (root over pinned SSH)
+workstation                              control-plane host (root or sudo over pinned SSH)
 ───────────                              ────────────────────────────────────────
 workspaces CLI                           /opt/municode/releases/<release-id>/   immutable trees
  ├─ instance registry                    /opt/municode/workspaces → releases/<active>  (symlink)
  ├─ release source (signed | latest |    /etc/municode/workspaces/secrets/      unchanged
  │   local-build)                        /etc/municode/workspaces/config/       operator-owned
  ├─ deploy journal (<config>/deploy/<op>)     operator.env, workspaces.json
- └─ SSH transport (seed pinned options)  /var/lib/municode/workspaces/
+ └─ SSH transport (pinned host key)      /var/lib/municode/workspaces/
                                              active-release.json, deploy.lock,
                                              deploys/<op>/state.json, log, plan.json,
                                              backups/<op>/
@@ -359,9 +381,14 @@ digest, as seed does.
 
 ### Security
 
-- The deploy uses only the instance's pinned SSH material, with seed's strict
-  options (`StrictHostKeyChecking=yes`, pinned `known_hosts`, no agent
-  forwarding).
+- The deploy uses the instance's pinned `known_hosts` with seed's strict
+  options (`StrictHostKeyChecking=yes`, no agent forwarding). Seeded instances
+  use the seed key. Added instances use the operator's own SSH authentication.
+- On a non-root user, every host command runs through `sudo -n`. Interactive
+  sudo prompts aren't supported.
+- Uploads go to a fresh `mktemp -d` directory owned by the SSH user. `stage`
+  (run as root) verifies the archive digest before extracting it, so the upload
+  location isn't trusted.
 - No secret reaches the workstation unless `--offhost-backup` is requested. In
   that case the backup lands in an owner-only directory (`SeedFiles` rules) and
   is never printed.
@@ -383,8 +410,9 @@ Each item is a GitHub issue under epic #168. Dependencies are listed.
    *(Small.)*
 3. **Maintenance mode** (#171): API and worker drain flag plus the
    `maintenance` command. Independent. *(Medium.)*
-4. **Local instance registry** (#172): `instance list|show`, and seed registers
-   on completion. Independent. *(Small.)*
+4. **Local instance registry** (#172): `instance add|list|show|remove` for any
+   SSH-reachable host, and seed registers on completion. Independent.
+   *(Medium.)*
 5. **Host deploy agent: stage and preflight** (#173). Depends on 1 and 10.
    *(Medium.)*
 6. **Host deploy agent: run, rollback and backups** (#174). Depends on 3 and
@@ -393,8 +421,9 @@ Each item is a GitHub issue under epic #168. Dependencies are listed.
    and public verification. Depends on 1, 2, 4, 5 and 6. *(Large / high.)*
 8. **Local release build script** (#176): `scripts/delivery/build-release.sh`.
    Depends on 1. *(Medium.)*
-9. **Operator docs and live validation** (#177): reseed the personal instance
-   with a release that has this feature, then deploy a newer one to it.
+9. **Operator docs and live validation** (#177): deploy to a seeded and to an
+   `install.sh` instance registered with `instance add`. Reinstall the personal
+   instance with a release that has this feature, then deploy a newer one to it.
    Depends on 1–8 and 10. *(Medium, live operations.)*
 10. **Deployable host layout in seed and `install.sh`** (#178): install
     into `releases/<id>`, the symlink, `config/` and `active-release.json`.
