@@ -7,7 +7,7 @@ no backwards compatibility: existing instances are reinstalled, not migrated.
 
 ## Problem
 
-`workspaces seed` installs a control plane once. After that, no supported path
+`municode seed` installs a control plane once. After that, no supported path
 moves an installation to a newer release. Operators upgrade by hand: they copy a
 bundle over SSH, merge `.env`, run `pg_dumpall`, pause OpenBao to archive its
 volume, restart services from the new tree, and roll back by hand. Every hosted
@@ -20,8 +20,8 @@ An operator must be able to run, from the same workstation that seeded the
 instance:
 
 ```sh
-workspaces deploy plan --instance dev --release latest --prerelease
-workspaces deploy apply <operation> --approve <digest>
+municode deploy plan --instance dev --release latest --prerelease
+municode deploy apply <operation> --approve <digest>
 ```
 
 and end with the instance serving the exact target release. Data, secrets,
@@ -60,11 +60,11 @@ preserved. If the deploy fails, the instance must return to the previous release
 ## User experience
 
 ```text
-$ workspaces instance show dev.muni.dev
+$ municode instance show dev.muni.dev
 Instance dev.muni.dev: api.dev.muni.dev, host 46.225.68.165 (pinned SHA256:…)
 Release workspaces-v0.1.0-storage.2 (723df64), installed by seed
 
-$ workspaces deploy plan --instance dev.muni.dev --release latest --prerelease
+$ municode deploy plan --instance dev.muni.dev --release latest --prerelease
 Resolved latest → workspaces-v0.1.0-acceptance.7 (published 2026-11-24, source 1a2b…)
 Verified Sigstore identity, manifest, checksums and component digests.
 Staged on host (no service changed).
@@ -79,9 +79,9 @@ Unseal:    host unseal key present
 Downtime:  API, dashboard and gateway unavailable for about 2–4 minutes
 Backup:    /var/lib/municode/workspaces/backups/<operation> (≈180 MB, 31 GB free)
 Approval digest: 9f0c…
-Run: workspaces deploy apply 5be1… --approve 9f0c…
+Run: municode deploy apply 5be1… --approve 9f0c…
 
-$ workspaces deploy apply 5be1… --approve 9f0c…
+$ municode deploy apply 5be1… --approve 9f0c…
 [prepare]   pulled 0 images                           ✓
 [drain]     maintenance on, 0 nonterminal operations   ✓
 [backup]    matched snapshot (postgres, openbao, caddy, secrets, config) ✓
@@ -96,13 +96,13 @@ Commands (all accept `--json`):
 
 | Command | Effect |
 | --- | --- |
-| `workspaces instance add <name> --ssh <destination> [--identity-file <path>] [--confirm-host-fingerprint SHA256:…]` | Registers any instance the workstation can reach over SSH: seeded, installed by `install.sh`, or on any provider. Pins the host key and probes the host read-only. |
-| `workspaces instance list` / `show <name>` / `remove <name>` | Manages the local registry. `show` also probes the host read-only over pinned SSH. |
-| `workspaces deploy plan --instance <n> (--release <tag> \| --release latest [--prerelease] \| --bundle-dir <dir> --trust local-build)` | Verifies, uploads and stages the bundle. Runs a read-only preflight. Prints the diff and an approval digest. |
-| `workspaces deploy apply <op> --approve <digest> [--unseal-key-file <path>] [--drain-timeout <dur>] [--offhost-backup <dir>]` | Runs the host deploy agent and follows its progress. |
-| `workspaces deploy status <op>` | Local journal plus a live host-agent state read over pinned SSH. |
-| `workspaces deploy resume <op>` | Reattaches after a lost connection, or continues an interrupted agent. |
-| `workspaces deploy rollback <op> [--restore-database --accept-data-loss-since <timestamp>] [--accept-provider-reconciliation]` | Returns to the previous release. See [rollback](#failure-and-rollback). |
+| `municode instance add <name> --ssh <destination> [--identity-file <path>] [--confirm-host-fingerprint SHA256:…]` | Registers any instance the workstation can reach over SSH: seeded, installed by `install.sh`, or on any provider. Pins the host key and probes the host read-only. |
+| `municode instance list` / `show <name>` / `remove <name>` | Manages the local registry. `show` also probes the host read-only over pinned SSH. |
+| `municode deploy plan --instance <n> (--release <tag> \| --release latest [--prerelease] \| --bundle-dir <dir> --trust local-build)` | Verifies, uploads and stages the bundle. Runs a read-only preflight. Prints the diff and an approval digest. |
+| `municode deploy apply <op> --approve <digest> [--unseal-key-file <path>] [--drain-timeout <dur>] [--offhost-backup <dir>]` | Runs the host deploy agent and follows its progress. |
+| `municode deploy status <op>` | Local journal plus a live host-agent state read over pinned SSH. |
+| `municode deploy resume <op>` | Reattaches after a lost connection, or continues an interrupted agent. |
+| `municode deploy rollback <op> [--restore-database --accept-data-loss-since <timestamp>] [--accept-provider-reconciliation]` | Returns to the previous release. See [rollback](#failure-and-rollback). |
 
 Any instance is deployable. The only requirement is an SSH connection from the
 workstation, as `root` or as a user with passwordless `sudo`, to a host whose
@@ -131,12 +131,16 @@ the dashboard hostname (`--instance-name` overrides it).
 
 ## Design
 
+Commands are top-level verbs of the `municode` executable, next to `seed`,
+`login` and `workspaces`. The release's `workspaces` wrapper passes arguments
+through, so `workspaces deploy` works too.
+
 ### Components
 
 ```text
 workstation                              control-plane host (root or sudo over pinned SSH)
 ───────────                              ────────────────────────────────────────
-workspaces CLI                           /opt/municode/releases/<release-id>/   immutable trees
+municode CLI                        /opt/municode/releases/<release-id>/   immutable trees
  ├─ instance registry                    /opt/municode/workspaces → releases/<active>  (symlink)
  ├─ release source (signed | latest |    /etc/municode/workspaces/secrets/      unchanged
  │   local-build)                        /etc/municode/workspaces/config/       operator-owned
@@ -417,7 +421,7 @@ Each item is a GitHub issue under epic #168. Dependencies are listed.
    *(Medium.)*
 6. **Host deploy agent: run, rollback and backups** (#174). Depends on 3 and
    5. *(Large / high.)*
-7. **CLI `workspaces deploy`** (#175): release sources, orchestration, journal
+7. **CLI `municode deploy`** (#175): release sources, orchestration, journal
    and public verification. Depends on 1, 2, 4, 5 and 6. *(Large / high.)*
 8. **Local release build script** (#176): `scripts/delivery/build-release.sh`.
    Depends on 1. *(Medium.)*
