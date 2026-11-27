@@ -42,6 +42,9 @@ internal sealed class CliTestContext : IDisposable
 internal sealed class TestConsole : IConsole
 {
     public bool SupportsAnsi => false;
+    public bool IsInteractive { get; set; }
+    public string? Input { get; set; }
+    public string? ReadLine() => Input;
     public List<string> Messages { get; } = [];
     public List<string> Errors { get; } = [];
     public void Write(string message) => Messages.Add(message);

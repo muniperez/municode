@@ -97,13 +97,17 @@ internal sealed record SeedReleaseIdentity(
 internal sealed record SeedPlan(
     SeedSelection Selection,
     SeedQuote Quote,
-    SeedReleaseIdentity Release)
+    SeedReleaseIdentity Release,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? InstanceName = null)
 {
     public string Approval
     {
         get
         {
             var stableQuote = Quote with { RetrievedAt = DateTimeOffset.UnixEpoch };
+            if (InstanceName is not null)
+                return SeedGuard.Hash(System.Text.Json.JsonSerializer.Serialize(
+                    new { Selection, Quote = stableQuote, Release, InstanceName }, SeedJournal.Json));
             return SeedGuard.Hash(System.Text.Json.JsonSerializer.Serialize(
                 new { Selection, Quote = stableQuote, Release }, SeedJournal.Json));
         }
@@ -126,6 +130,8 @@ internal sealed class SeedState
     public bool HealthVerified { get; set; }
     public string? InstallationId { get; set; }
     public string? LastFailurePhase { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool InstanceRegistered { get; set; }
 
     [JsonIgnore]
     public bool IsComplete => Phase == "complete";
