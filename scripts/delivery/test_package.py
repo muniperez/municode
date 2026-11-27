@@ -655,6 +655,19 @@ class LocalBuildTests(unittest.TestCase):
             self.assertIn(f"MUNICODE_{name.upper()}_IMAGE={reference}\n", env)
         command = [sys.executable, "-B", str(release / "verify_bundle.py")]
         subprocess.run(command, check=True)
+
+        host = self.root.parent / "host"
+        subprocess.run([release / "install.sh", "--host-root", host, "--bundle-sha256", bundle_digest],
+                       check=True, capture_output=True, text=True)
+        installed = host / "opt/municode/releases" / output.name
+        self.assertEqual((host / "opt/municode/current").readlink(), Path("releases") / output.name)
+        rendered = (installed / ".env").read_text().splitlines()
+        self.assertIn("MUNICODE_RUNTIME_PULL_POLICY=never", rendered)
+        for name, letter in (("api", "a"), ("worker", "b"), ("gateway", "c")):
+            self.assertIn(f"MUNICODE_{name.upper()}_IMAGE=municode-{name}:local-{letter * 64}", rendered)
+        self.assertEqual(json.loads((host / "var/lib/municode/active-release.json").read_text())["releaseId"],
+                         output.name)
+
         (release / "images" / "api.tar").write_text("corrupted")
         result = subprocess.run(command, capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
