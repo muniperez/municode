@@ -38,7 +38,7 @@ preparation, bundle verification, HTTPS/health checks and first-owner setup.
 
 The bootstrap provider token is read only from a protected local file. It is
 never copied into the control-plane journal, release, server or provider-account
-store. Seed creates no coding VM; provider registration, image qualification and
+store. Seed creates no coding VM; provider registration, image release acceptance and
 the first workspace are separate post-login actions. See the
 [operator guide](docs/operator.md) for the complete safety contract and
 [live validation checklist](docs/setup/live-seed-validation.md) for the manual
@@ -55,6 +55,7 @@ dotnet build Workspaces.slnx -c Release
 dotnet test Workspaces.slnx -c Release --no-build --results-directory .local/artifacts/test-results
 templates/development-workspaces/test.sh
 python3 -B templates/development-workspaces/image/test-t3-candidate.py
+node --test scripts/workspace-image-release-acceptance.test.mjs # Node.js 22 LTS
 python3 -B -m unittest discover -s scripts/delivery -p 'test_*.py' -v
 ```
 

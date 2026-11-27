@@ -280,7 +280,7 @@ it("creates weekly budgets scoped to workspaces or single VMs and shows the peri
   vi.mocked(createBudget).mockResolvedValue(weekly);
   render(<BudgetsSettingsModule />);
   const card = await screen.findByLabelText("Budget Team");
-  expect(card).toHaveTextContent("$10.00 per week · All provider accounts · workspaces API · VMs Web ephemeral VM");
+  await waitFor(() => expect(card).toHaveTextContent("$10.00 per week · All provider accounts · workspaces API · VMs Web ephemeral VM"));
   expect(card).toHaveTextContent("Estimated $17.27 of $10.00 for 2026-W49 (Nov 30 – Dec 6, UTC) (172.7%)");
   expect(card).toHaveTextContent("($76.00/month)");
   expect(within(card).getByRole("table", { name: "Team estimate by provider" })).toHaveTextContent("Estimated / week");

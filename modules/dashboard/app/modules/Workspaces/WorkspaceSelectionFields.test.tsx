@@ -46,6 +46,26 @@ describe("WorkspaceSelectionFields", () => {
     expect(screen.getByLabelText("Plan")).toHaveValue("");
   });
 
+  it("preserves an image selected as soon as the catalog appears", async () => {
+    let resolveCatalog!: (result: WorkspaceSelections) => void;
+    vi.mocked(getWorkspaceSelections).mockImplementationOnce(() => new Promise(resolve => { resolveCatalog = resolve; }));
+    const view = render(<Fields initial={{ imageId: "", profile: "Standard", planId: "" }} />);
+    const image = screen.getByLabelText("Image") as HTMLSelectElement;
+    // Interact at the catalog DOM commit, before passive effects get a chance to run.
+    const observer = new MutationObserver(() => {
+      if (!image.disabled && image.querySelector('option[value="image-one"]')) {
+        observer.disconnect();
+        image.value = "image-one";
+        image.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    });
+    observer.observe(view.container, { childList: true, subtree: true, attributes: true });
+    resolveCatalog({ available: true, options: choices });
+    await waitFor(() => expect(image).toHaveValue("image-one"));
+    expect(screen.getByLabelText("Size")).toBeEnabled();
+    observer.disconnect();
+  });
+
   it("reports loading, retries failures, and clears stale eligibility after a refresh", async () => {
     const onReadyChange = vi.fn();
     render(<Fields onReadyChange={onReadyChange} />);

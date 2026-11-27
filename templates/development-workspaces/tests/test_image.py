@@ -33,6 +33,66 @@ builder = load("generic_image_builder", "build.py")
 native = load("generic_native_qualification", "native.py")
 
 
+class NativeComponentTests(unittest.TestCase):
+    def run_component(self, component, *, expires_at_probe=None, cleanup_fails=False):
+        probe = native.Native.__new__(native.Native)
+        visited = []
+        authorization_checks = []
+
+        def authorize():
+            authorization_checks.append(len(visited))
+            if len(visited) == expires_at_probe:
+                raise native.ProbeError("AUTHORIZATION_NOT_FRESH")
+
+        def cleanup():
+            visited.append("cleanup")
+            if cleanup_fails:
+                raise native.ProbeError("CLEANUP_BLOCKED")
+            probe.report.value["cleanup"] = "complete"
+
+        ARTIFACTS.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ARTIFACTS) as tmp:
+            path = Path(tmp) / "report.json"
+            probe.report = native.Report(path, "native-synthetic", authorize, component=component)
+            probe.guard = lambda: visited.append(native.GUARD_PROBE)
+            probe.cleanup = cleanup
+            for name, method, _ in native.PROBE_SEQUENCE:
+                setattr(probe, method, lambda name=name: visited.append(name))
+            probe.run()
+            return json.loads(path.read_text()), visited, authorization_checks
+
+    def test_backup_runs_fixture_stop_and_restore_only(self):
+        report, visited, auth = self.run_component("backup-restore")
+        self.assertEqual(visited, [
+            native.GUARD_PROBE, native.PRISTINE_PROBE, native.BOOTSTRAP_PROBE, native.T3_PROBE,
+            native.TERMINAL_PROBE, native.QUIESCE_PROBE, native.READBACK_PROBE,
+            "encrypted-user-file-restore", "cleanup",
+        ])
+        self.assertEqual(auth, list(range(len(visited) - 1)))
+        self.assertTrue(report["componentCheckPassed"])
+        self.assertEqual(report["type"], "NativeWorkspaceComponentCheck")
+        self.assertFalse(report["nativeCandidatePassed"])
+        self.assertFalse(report["runtimeQualifiedNative"])
+
+    def test_scratch_quiesces_after_bind_mounts(self):
+        _, visited, _ = self.run_component("scratch")
+        self.assertLess(visited.index("scratch-build-output-bind-mounts"), visited.index(native.QUIESCE_PROBE))
+        self.assertEqual(visited[-2:], [native.READBACK_PROBE, "cleanup"])
+
+    def test_expired_authorization_skips_mutation_but_runs_owned_cleanup(self):
+        report, visited, auth = self.run_component("t3-recovery", expires_at_probe=4)
+        self.assertEqual(auth, [0, 1, 2, 3, 4])
+        self.assertEqual(visited[-1], "cleanup")
+        self.assertNotIn("t3-oom-crash-restart-stop-race-and-retry-budget", visited)
+        self.assertEqual(report["probes"][-1]["failureCode"], "AUTHORIZATION_NOT_FRESH")
+        self.assertFalse(report["componentCheckPassed"])
+
+    def test_cleanup_failure_blocks_component_check(self):
+        report, _, _ = self.run_component("t3-recovery", cleanup_fails=True)
+        self.assertFalse(report["componentCheckPassed"])
+        self.assertTrue(report["cleanup"].startswith("blocked"))
+
+
 class NativeRendererTests(unittest.TestCase):
     ENTRY = (b'const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/app.js","assets/app.css"])))'
              b'=>i.map(i=>d[i]);import("./app.js");')

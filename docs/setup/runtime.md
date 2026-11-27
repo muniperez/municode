@@ -10,7 +10,7 @@ service credential and private network access to the API and worker.
 
 1. Follow the [control-plane setup](control-plane.md), apply migrations and register the provider
    account and plan. See [prepared images](../../templates/development-workspaces/README.md) for the
-   Ubuntu amd64 image builder, pinned inputs, and qualification. Use the **installed** manifest's
+   Ubuntu amd64 image builder, pinned inputs, and release procedure. Use the **installed** manifest's
    SHA-256, matching provider snapshot ID, account, region, T3 version and protocol in the image
    registration. Set current pricing before enabling workspace lifecycle requests.
 2. Create a dedicated Workspaces worker SSH keypair, for example with
@@ -45,6 +45,65 @@ The gateway's internal certificate check at `/internal/certificate?domain=…` r
 only to the configured proxy for an authorized generation/service hostname. It can be used
 as a certificate admission endpoint. The API also supports a wildcard certificate provisioned
 outside this flow.
+
+## Release a workspace image
+
+Run this gate from the operator workstation, not GitHub Actions. Build and generalize a
+[disposable builder](../../templates/development-workspaces/README.md#prepared-image), power it
+off and capture a **private** snapshot. Register an immutable candidate image key and a test
+plan on an isolated acceptance control plane or in a dedicated test organization with a
+provider account registration not shared with user plans. The normal create API still requires
+`Enabled`, `RuntimeQualified`, `QualifiedAt` and `T3ConnectForNewWorkspaces` in that **test**
+registration. These admission fields are not release approval. Do not enable the candidate
+in the user catalog yet. Check that the test API and worker both map the key to the same exact
+`ProviderImageId` and installed `ManifestSha256`; never repoint an existing image key.
+
+From the repository root with Node.js 22 LTS, give the runner a short-lived API key scoped
+to the test organization with only `workspaces:read` and `workspaces:write`. Put the key in
+an owner-only regular file (`chmod 600`), outside the repository. Supply the path, not its
+contents. No provider credentials are needed by the runner.
+
+```sh
+node scripts/workspace-image-release-acceptance.mjs \
+  --api https://api.example.com --gateway-domain workspace.example.com \
+  --key-file /protected/path/acceptance.key --organization TEST_ORG_ID \
+  --image CANDIDATE_IMAGE_KEY --provider-image SNAPSHOT_ID \
+  --profile TEST_PROFILE_ID --plan TEST_PLAN_ID
+```
+
+The runner creates one disposable workspace, writes a known file as the coding user over the
+normal T3 gateway, closes the terminal and session, stops the VM, starts a new generation
+on the same volume, compares the file byte for byte through a fresh T3 session, then stops
+and permanently deletes the workspace. Its sanitized JSON report is in
+`.local/artifacts/workspace-image-release/`. The provider snapshot ID is operator-supplied;
+the API exposes the workspace's registered image key, not the underlying snapshot ID.
+The runner checks that key on both generations. On failure it records the failed step and
+tries normal Stop and Delete again without changing the failed result. Cleanup closes any T3
+terminal it opened, retries server errors and lost connections until its deadline, and never
+sends Stop or Delete until it reads back the workspace's unique name. If creation's response
+is lost, it searches for its unique name instead of sending a second Create. If cleanup is
+unconfirmed (including after a force-kill), locate the workspace using the report ID or unique
+name in the test organization and reconcile through normal Stop and permanent Delete.
+
+A passing report requires the retained deletion record (`phase` and `volumeStatus` both
+`deleted`, with cleared resource IDs and reservations). The worker confirms server and volume
+absence and requests deletion of related resources. The VM's `/resource-history` endpoint
+only holds utilization samples, not provider inventory. **Before promotion**, use provider
+inventory and activity history in the same account/project and region to confirm:
+
+- Neither generation's server ID nor the retained volume ID in the report is present.
+  Search for additional resources with the same workspace ownership, not just those IDs.
+- Both generations' associated firewalls and any workspace-owned IPs and tags are absent.
+  On Hetzner, check servers, volumes, firewalls and primary IPs by the `workspace=<id>` label.
+  On DigitalOcean, check Droplets and volumes using `muw:workspace:<id>` and trace each
+  Droplet's `muw-fw-…` tag to its dedicated firewall and tag. On Vultr, check instances with
+  `muw:workspace=<id>`, block storage with `w=<id>` in its `muw;…` label, and the firewall
+  groups attached to those instances. Use provider activity history or record attachments
+  during the run if they cannot be identified after deletion.
+
+Record the inventory result with the lifecycle report. Promote only that exact snapshot
+after both pass. On any failure, timeout or unresolved resource, keep the candidate private,
+record the image ID and failed step, and keep the previous approved image available.
 
 ## Runtime interfaces
 
@@ -84,6 +143,7 @@ dotnet build src/Workspaces.Gateway
 dotnet test Workspaces.slnx --results-directory .local/artifacts/test-results
 templates/development-workspaces/test.sh
 python3 -B templates/development-workspaces/image/test-t3-candidate.py
+node --test scripts/workspace-image-release-acceptance.test.mjs
 
 dotnet publish src/Workspaces.Worker -c Release -o .local/artifacts/publish/worker
 dotnet publish src/Workspaces.Gateway -c Release -o .local/artifacts/publish/gateway
@@ -122,8 +182,8 @@ node scripts/workspace-browser-acceptance.mjs
 ```
 
 The synthetic suite covers provisioning, enrollment, relay, persistence, deletion, Git recovery
-and guest protocols. The prepared-image documentation describes the separate native image
-qualification, including real mounts, systemd, T3 and provider network behavior.
+and guest protocols. The prepared-image documentation describes separate component checks for
+real mounts, systemd and T3; neither synthetic nor native checks replace the release lifecycle.
 
 The dashboard browser acceptance drives the built dashboard against a stateful, credential-free
 mock of the workspace API at desktop, 390 px and 320 px widths. It covers the list, filters,

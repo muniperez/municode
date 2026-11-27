@@ -160,6 +160,8 @@ public sealed class GatewayRelayTests
     public async Task WebSocketRecordsLowCardinalityRelayMetricsAndRevocationOutcome()
     {
         var measurements = new System.Collections.Concurrent.ConcurrentQueue<(string Name, long Value, string Tags)>();
+        var revokedCloseRecorded = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var activeWebSocketDecremented = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var listener = new System.Diagnostics.Metrics.MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
@@ -170,6 +172,10 @@ public sealed class GatewayRelayTests
         {
             var text = string.Join(",", tags.ToArray().Select(tag => $"{tag.Key}={tag.Value}"));
             measurements.Enqueue((instrument.Name, value, text));
+            if (instrument.Name == "workspaces.gateway.websocket.closes" && text == "outcome=revoked")
+                revokedCloseRecorded.TrySetResult(true);
+            if (instrument.Name == "workspaces.gateway.connections.active" && value < 0 && text == "operation=websocket")
+                activeWebSocketDecremented.TrySetResult(true);
         });
         listener.SetMeasurementEventCallback<double>((instrument, _, tags, _) =>
             measurements.Enqueue((instrument.Name, 1, string.Join(",", tags.ToArray().Select(tag => $"{tag.Key}={tag.Value}")))));
@@ -183,8 +189,8 @@ public sealed class GatewayRelayTests
         await socket.ReceiveAsync(bytes, timeout.Token);
         fixture.Control.Target = null;
         Assert.Equal(WebSocketMessageType.Close, (await socket.ReceiveAsync(bytes, timeout.Token)).MessageType);
-        for (var i = 0; i < 100 && !measurements.Any(m => m.Name == "workspaces.gateway.websocket.closes"); i++)
-            await Task.Delay(20);
+        await revokedCloseRecorded.Task.WaitAsync(timeout.Token);
+        await activeWebSocketDecremented.Task.WaitAsync(timeout.Token);
 
         var recorded = measurements.ToArray();
         Assert.Contains(recorded, m => m is { Name: "workspaces.gateway.websocket.closes", Tags: "outcome=revoked" });

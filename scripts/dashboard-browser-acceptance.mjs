@@ -416,6 +416,8 @@ const scenarios = [
     await page.getByRole("button", { name: "Launch temporary VM" }).click();
     const dialog = page.getByRole("dialog", { name: "Launch temporary VM" });
     await dialog.getByRole("combobox", { name: "Image" }).selectOption(option.imageId);
+    await expect(dialog.getByRole("combobox", { name: "Image" })).toHaveValue(option.imageId);
+    await expect(dialog.getByRole("combobox", { name: "Size" })).toBeEnabled();
     await dialog.getByRole("combobox", { name: "Size" }).selectOption(option.profile);
     await dialog.getByRole("combobox", { name: "Plan" }).selectOption(option.planId);
     await dialog.getByRole("textbox", { name: "Repository URL" }).fill("https://github.com/example/alpha.git");

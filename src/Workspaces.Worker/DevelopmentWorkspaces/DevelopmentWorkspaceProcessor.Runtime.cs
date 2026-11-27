@@ -317,7 +317,8 @@ public sealed partial class DevelopmentWorkspaceProcessor
             "T3 orchestration state could not be verified as idle. Check T3 for outstanding work before stopping."),
     };
 
-    private async Task<DrainBlocker?> GetRuntimeIdleBlockerAsync(DevelopmentWorkspaceVm vm, string operationId, CancellationToken ct)
+    private async Task<DrainBlocker?> GetRuntimeIdleBlockerAsync(DevelopmentWorkspaceVm vm, string operationId,
+        CancellationToken ct, bool releaseIdleT3Terminals = false)
     {
         var status = Result(await runtime.CallAsync(Target(vm), operationId, "status", new { includeWorkInventory = true }, ct));
         if (status.GetProperty("phase").GetString() != "Ready")
@@ -328,8 +329,17 @@ public sealed partial class DevelopmentWorkspaceProcessor
             !inventory.TryGetProperty("state", out var state) || state.ValueKind != JsonValueKind.String ||
             state.GetString() != "IdleCandidate")
         {
-            return WorkspaceRuntimeRejection.ReadReasonCode(inventory) switch
+            var reason = WorkspaceRuntimeRejection.ReadReasonCode(inventory);
+            if (releaseIdleT3Terminals && reason == "live_t3_terminal")
             {
+                // Stop only: the guest hangs up shells proven idle at their prompt, then inventory is rechecked.
+                await runtime.CallAsync(Target(vm), operationId, "release-t3-terminals", null, ct);
+                return await GetRuntimeIdleBlockerAsync(vm, operationId, ct);
+            }
+            return reason switch
+            {
+                "live_t3_terminal" => new("workspace_drain_t3_terminal",
+                    "A T3 terminal shell is still running a command or job, even if its tab was closed. Finish the job and run exit at the shell prompt."),
                 "unregistered_coding_process" => new("workspace_drain_unregistered_process",
                     "The guest detected an unregistered coding process. Stop it cleanly in the workspace so draining can continue."),
                 "t3_account_approval_pending" => new("workspace_drain_t3_approval",
