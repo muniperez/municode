@@ -1,9 +1,24 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MPL-2.0
-"""Stage and inspect a Municode release on an installed host."""
+"""Deploy a Municode release on an installed host.
+
+Run and rollback are invoked in a transient systemd unit by the caller:
+systemd-run --unit municode-deploy-<operationId> --collect --pipe <agent> ...
+Use --unseal-key-stdin to supply one newline-terminated key; never put it in
+argv or a plan. --drain-timeout is in seconds.
+
+run --plan reads the preflight request plus approvalDigest (or --approve).
+rollback --plan uses operationId to locate the approved host journal.
+run/rollback return the journal as "state", with "blockers" on failure (exit 1).
+status --operation returns {"state": <journal>, "unit": {activeState, subState}}.
+The journal exposes phase, previousRelease, targetRelease, pendingStep and
+the migration, traffic and worker intent markers; openAt is the exact value
+required by --accept-data-loss-since. Status does not acquire the deploy lock.
+"""
 
 import argparse
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -15,6 +30,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 
 sys.dont_write_bytecode = True
 from install_host import (assignments, atomic_write, deploy_lock, directory, freeze_release,
@@ -31,6 +47,13 @@ OWNERSHIP_SERVICES = {"openbao", "openbao-agent"}
 SERVICES = OWNERSHIP_SERVICES | {"postgres", "kratos", "api", "worker", "workspace-gateway", "caddy"}
 STAGED_IDENTITY = ".deploy-release.json"
 GIB = 1024 ** 3
+CLIENTS = ("caddy", "worker", "workspace-gateway", "api", "kratos")
+BACKEND = ("openbao-agent", "kratos", "api", "workspace-gateway")
+DATABASES = ("municode", "kratos")
+VOLUMES = ("openbao", "caddy-data")
+JOBS = ("database-initialize", "kratos-migrate", "api-migrate")
+BAO_OPTIONS = ("-address=https://openbao:8200", "-ca-cert=/run/secrets/openbao-ca.crt")
+DEPLOY_ERRORS = (OSError, ValueError, TypeError, KeyError, AttributeError, EOFError, tarfile.TarError)
 
 
 def require(condition, message):
@@ -61,6 +84,18 @@ class Host:
     def state(self):
         return self.root / "var/lib/municode"
 
+    @property
+    def secrets(self):
+        return self.root / "etc/municode/secrets"
+
+    def backup(self, op):
+        self.operation(op)
+        parent = self.state / "backups"
+        path = parent / op
+        require(parent.is_dir() and parent.resolve() == parent and not path.is_symlink(),
+                "Backups directory is missing or not canonical.")
+        return path
+
     def operation(self, op):
         require(isinstance(op, str) and re.fullmatch(OPERATION, op), "Invalid deploy operation ID.")
         parent = self.state / "deploys"
@@ -86,27 +121,67 @@ def read_state(host, op):
 def write_state(host, op, state):
     path = host.operation(op)
     directory(path, 0o700)
-    write_json(path / "state.json", state)
+    durable_json(path / "state.json", state)
+    sync_path(path.parent)
+
+
+def sync_path(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def durable_write(path, data, mode=0o600):
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}-", delete=False) as file:
+        temporary = Path(file.name)
+        try:
+            file.write(data)
+            file.flush()
+            os.fchmod(file.fileno(), mode)
+            os.fsync(file.fileno())
+            temporary.replace(path)
+            sync_path(path.parent)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def durable_json(path, value):
+    durable_write(path, canonical(value) + b"\n")
 
 
 class Runner:
-    def __call__(self, step, *argv, allowed=(0,), timeout=120):
+    def __init__(self):
+        self.log = None
+
+    def __call__(self, step, *argv, allowed=(0,), timeout=120, data=None, source=None, output=None):
         # Do not let SSH environment variables select a different daemon or override Compose inputs.
         env = {key: os.environ[key] for key in ("PATH", "HOME") if key in os.environ}
         env["DOCKER_HOST"] = "unix:///var/run/docker.sock"
         try:
-            result = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace",
-                                    env=env, timeout=timeout)
+            result = subprocess.run(argv, stdin=(source if source is not None else
+                                                 subprocess.DEVNULL if data is None else None),
+                                    input=data, stdout=output if output is not None else subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, env=env, timeout=timeout)
         except subprocess.TimeoutExpired as error:
+            self.record(step, "timeout")
             raise ValueError(f"{step} timed out.") from error
+        self.record(step, str(result.returncode))
         require(result.returncode in allowed, f"{step} failed (exit {result.returncode}).")
-        return result.stdout.strip()
+        return result.stdout.decode(errors="replace").strip() if output is None else ""
+
+    def record(self, step, outcome):
+        if self.log is not None:
+            with os.fdopen(os.open(self.log, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600),
+                           "a") as stream:
+                stream.write(f"{step}: {outcome}\n")
 
 
-def compose(run, step, release, env, *args):
+def compose(run, step, release, env, *args, **options):
     return run(step, "docker", "compose", "--project-name", "municode",
                "--project-directory", str(release), "--env-file", str(env),
-               "-f", str(release / "compose.yml"), *args)
+               "-f", str(release / "compose.yml"), *args, **options)
 
 
 def identity(manifest, sha, trust):
@@ -394,7 +469,7 @@ def storage_status(host, run, containers, services, secrets, images, local_image
     }
 
 
-def preflight(host, plan, run):
+def preflight(host, plan, run, prepared=None):
     """Inspect under the caller's deploy lock; only the operation may receive temporary files."""
     op = plan["operationId"]
     work = host.operation(op)
@@ -503,7 +578,7 @@ def preflight(host, plan, run):
             exec_service(run, containers, "caddy", "wget", "-qO", "/dev/null", "http://api:8080/health/ready")
         except ValueError as error:
             blockers.append(str(error))
-    require(config_hashes == {"policySha256": digest(policy_path), "operatorEnvSha256": digest(operator_path)},
+    require(config_hashes == host_config_hashes(host),
             "Host configuration changed during preflight; retry the plan.")
     effective = hashlib.sha256(canonical(config_hashes | {"compose": config})).hexdigest()
     result["effectiveConfigHash"] = effective
@@ -513,7 +588,663 @@ def preflight(host, plan, run):
         "targetRelease": target, "deployProtocol": PROTOCOL, "effectiveConfigHash": effective,
         "envDiff": diff, "appliedMigrations": applied, "pendingMigrations": migrations["pending"], "images": images,
     }
+    if prepared is not None:
+        prepared.update(values=values, configHashes=config_hashes, runningServices=set(containers))
     return result
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def host_config_hashes(host):
+    return {"policySha256": digest(host.config / "municode.json"),
+            "operatorEnvSha256": digest(host.config / "operator.env")}
+
+
+def error_message(error):
+    if isinstance(error, (KeyError, TypeError, AttributeError, json.JSONDecodeError)):
+        return "Malformed deploy input or probe response."
+    if isinstance(error, OSError):
+        return f"Deploy filesystem or command access failed (errno {error.errno})."
+    if isinstance(error, (EOFError, tarfile.TarError)):
+        return "Invalid or incomplete deploy archive."
+    return str(error)
+
+
+def compose_at(run, release, step, *args, **options):
+    return compose(run, step, release, release / ".env", *args, **options)
+
+
+def sql(run, release, step, database, query, **options):
+    return compose_at(run, release, step, "exec", "-T", "postgres",
+                      "psql", "-XAt", "-U", "postgres", "-d", database,
+                      "-v", "ON_ERROR_STOP=1", "-c", query, **options)
+
+
+def roles_hash(run, release):
+    # Do not replay globals onto a live cluster. Refuse to restore over drifted roles.
+    roles = sql(run, release, "inspect database roles", "postgres",
+                "SELECT coalesce(json_agg(r ORDER BY rolname)::text, '[]') FROM pg_authid r")
+    memberships = sql(run, release, "inspect database role memberships", "postgres",
+                      "SELECT coalesce(json_agg(m ORDER BY roleid,member,grantor)::text, '[]') FROM pg_auth_members m")
+    return hashlib.sha256(canonical([roles, memberships])).hexdigest()
+
+
+def volume_path(run, installation, name):
+    volume = f"municode_{name}"
+    info, = json.loads(run("inspect backup volume", "docker", "volume", "inspect", volume))
+    path = Path(info["Mountpoint"])
+    require(info["Name"] == volume and info["Driver"] == "local" and not info.get("Options")
+            and info["Labels"].get(INSTALLATION_LABEL) == installation
+            and path.is_absolute() and path.is_dir() and path.resolve() == path,
+            "Backup volume is not a canonical local Municode volume.")
+    return path
+
+
+def capture(run, step, path, *args, **options):
+    with path.open("xb") as file:
+        run(step, *args, **options, output=file)
+        file.flush()
+        os.fsync(file.fileno())
+    require(path.stat().st_size > 0, f"{step} produced no backup data.")
+
+
+def pg_archive(run, release, step, *args, **options):
+    return compose_at(run, release, step, "exec", "-T", "postgres", *args, timeout=3600, **options)
+
+
+def read_backup(host, op, previous):
+    backup = host.backup(op)
+    manifest = object_file(backup / "backup-manifest.json")
+    expected = {"postgres-globals.sql", "active-release.json", "config.tar", "secrets.tar",
+                *(f"{name}.dump" for name in DATABASES), *(f"{name}.tar" for name in VOLUMES)}
+    require(manifest["operationId"] == op and manifest["previousRelease"] == previous
+            and manifest["format"] == 1 and set(manifest["files"]) == expected,
+            "Backup does not match the previous release or operation.")
+    for name in sorted(expected):
+        path = backup / name
+        require(regular(path) and digest(path) == manifest["files"][name], "Backup file failed SHA-256 verification.")
+    require(object_file(backup / "active-release.json") == previous, "Backup active-release record does not match.")
+    return backup, manifest
+
+
+def bao_exec(run, release, step, *args, **options):
+    return compose_at(run, release, step, "exec", "-T", "openbao", "bao", *args, **options)
+
+
+def ensure_unpaused(run, release):
+    container = compose_at(run, release, "find OpenBao container", "ps", "-a", "-q", "openbao")
+    if container:
+        require(re.fullmatch(r"[a-f0-9]{12,64}", container), "Invalid OpenBao container ID.")
+        paused = run("inspect OpenBao pause state", "docker", "container", "inspect", "--format",
+                     "{{.State.Paused}}", container)
+        require(paused in ("true", "false"), "Invalid OpenBao pause state.")
+        if paused == "true":
+            run("unpause OpenBao", "docker", "unpause", container)
+
+
+def create_backup(host, op, previous, installation, release, run):
+    backup = host.backup(op)
+    require(not present(backup), "Backup path already exists.")
+    backup.mkdir(mode=0o700)
+    created = now()
+    roles = roles_hash(run, release)
+
+    def pg_file(name, step, *args):
+        with (backup / name).open("xb") as file:
+            pg_archive(run, release, step, *args, output=file)
+            file.flush()
+            os.fsync(file.fileno())
+        require((backup / name).stat().st_size > 0, f"{step} produced no backup data.")
+
+    pg_file("postgres-globals.sql", "dump database globals", "pg_dumpall", "-U", "postgres", "--globals-only")
+    for database in DATABASES:
+        name = f"{database}.dump"
+        pg_file(name, f"dump {database}", "pg_dump", "-U", "postgres", "-Fc", database)
+        with (backup / name).open("rb") as file:
+            pg_archive(run, release, f"list {database} archive", "pg_restore", "--list",
+                       source=file, output=subprocess.DEVNULL)
+
+    def tar_backup(name, path):
+        require(path.is_dir() and path.resolve() == path, "Backup source is missing or not canonical.")
+        if name in ("config", "secrets"):
+            require(all(not entry.is_symlink() and (entry.is_dir() or regular(entry)) for entry in path.rglob("*")),
+                    "Host backup directories must contain only regular files and directories.")
+        capture(run, f"archive {name}", backup / f"{name}.tar", "tar", "--numeric-owner",
+                "-C", str(path), "-cf", "-", ".", timeout=3600)
+        run(f"list {name} archive", "tar", "-tf", str(backup / f"{name}.tar"),
+            output=subprocess.DEVNULL, timeout=3600)
+
+    openbao = volume_path(run, installation, "openbao")
+    try:
+        compose_at(run, release, "pause OpenBao", "pause", "openbao")
+        tar_backup("openbao", openbao)
+    finally:
+        ensure_unpaused(run, release)
+    tar_backup("caddy-data", volume_path(run, installation, "caddy-data"))
+    tar_backup("config", host.config)
+    tar_backup("secrets", host.secrets)
+    require(object_file(host.state / "active-release.json") == previous, "Active release changed during backup.")
+    durable_json(backup / "active-release.json", previous)
+    durable_json(backup / "backup-manifest.json", {
+        "format": 1, "operationId": op, "previousRelease": previous, "createdAt": created, "rolesSha256": roles,
+        "files": {p.name: digest(p) for p in sorted(backup.iterdir())},
+    })
+    sync_path(backup.parent)
+    return created
+
+
+def replace_directory_contents(source, target):
+    entries = {entry.name: entry for entry in source.iterdir()}
+    for entry in entries.values():
+        destination = target / entry.name
+        existing_dir = destination.is_dir() and not destination.is_symlink()
+        if entry.is_dir() and existing_dir:
+            replace_directory_contents(entry, destination)
+        else:
+            if existing_dir:
+                shutil.rmtree(destination)
+            elif entry.is_dir() and present(destination):
+                destination.unlink()
+            entry.replace(destination)
+    for stale in (entry for entry in target.iterdir() if entry.name not in entries):
+        if stale.is_dir() and not stale.is_symlink():
+            shutil.rmtree(stale)
+        else:
+            stale.unlink()
+    if os.geteuid() == 0:
+        info = source.stat()
+        os.chown(target, info.st_uid, info.st_gid)
+    shutil.copystat(source, target)
+
+
+def restore_host_tree(run, name, archive, path, op):
+    # Keep Compose's required env_file and bind mounts present across a process kill.
+    staged = path.parent / f".restore-{name}-{op}"
+    if present(staged):
+        require(staged.is_dir() and staged.resolve() == staged, "Invalid interrupted restore staging directory.")
+        shutil.rmtree(staged)
+    staged.mkdir(mode=0o700)
+    try:
+        run(f"unpack {name}", "tar", "--numeric-owner", "--same-permissions", "-xf",
+            str(archive), "-C", str(staged), timeout=3600)
+        replace_directory_contents(staged, path)
+    finally:
+        shutil.rmtree(staged)
+
+
+def restore_backup(host, op, previous, installation, release, run):
+    """Restore a matched snapshot with all clients and OpenBao already stopped."""
+    backup, manifest = read_backup(host, op, previous)
+    require(roles_hash(run, release) == manifest["rolesSha256"], "PostgreSQL roles changed since the backup.")
+    paths = {name: volume_path(run, installation, name) for name in VOLUMES}
+    paths.update(config=host.config, secrets=host.secrets)
+    require(all(path.is_dir() and path.resolve() == path for path in paths.values()),
+            "Restore destination is missing or not canonical.")
+    for database in DATABASES:
+        sql(run, release, f"drop {database}", "postgres", f"DROP DATABASE IF EXISTS {database} WITH (FORCE)")
+        sql(run, release, f"recreate {database}", "postgres", f"CREATE DATABASE {database} OWNER {database}")
+        with (backup / f"{database}.dump").open("rb") as file:
+            pg_archive(run, release, f"restore {database}", "pg_restore", "-U", "postgres", "-d", database,
+                       "--exit-on-error", "--single-transaction", source=file)
+    for name, path in paths.items():
+        archive = backup / f"{name}.tar"
+        if name in ("config", "secrets"):
+            restore_host_tree(run, name, archive, path, op)
+            run(f"sync restored {name}", "sync", "-f", str(path), timeout=3600)
+            continue
+        # Clear the destination first: files created after the snapshot must not survive.
+        for item in path.iterdir():
+            if item.is_dir() and not item.is_symlink():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+        run(f"restore {name}", "tar", "--numeric-owner", "--same-permissions", "-xf",
+            str(archive), "-C", str(path), timeout=3600)
+        run(f"sync restored {name}", "sync", "-f", str(path), timeout=3600)
+
+
+def export_reconciliation(run, release, backup, manifest):
+    target = backup / "post-open-operations.json"
+    if present(target):
+        require(regular(target), "Invalid reconciliation export path.")
+        return
+    since = manifest["createdAt"]
+    require(re.fullmatch(r"[0-9]{4}(?:-[0-9]{2}){2}T[0-9]{2}(?::[0-9]{2}){2}\.[0-9]{6}Z", since),
+            "Invalid backup creation timestamp.")
+    query = f"""
+        WITH operations AS (
+            SELECT * FROM development_workspace_operations WHERE created_at >= '{since}'::timestamptz
+        ), vms AS (
+            SELECT * FROM development_workspace_vms WHERE created_at >= '{since}'::timestamptz
+            OR id IN (SELECT vm_id FROM operations)
+        )
+        SELECT json_build_object('operations', coalesce((SELECT json_agg(operations) FROM operations), '[]'::json),
+                                 'vms', coalesce((SELECT json_agg(vms) FROM vms), '[]'::json))
+    """
+    result = json.loads(sql(run, release, "export operations and VMs", "municode", query, timeout=3600))
+    require(isinstance(result["operations"], list) and isinstance(result["vms"], list),
+            "Invalid reconciliation export.")
+    durable_json(target, result)
+
+
+def maintain(run, release, action, timeout=120, op=None):
+    labels = ("--label", f"com.municode.deploy-operation={op}") if op else ()
+    result = json.loads(compose_at(run, release, f"maintenance {action}", "run", "--rm", "--no-deps", "-T",
+                                   "--pull", "never", *labels, "api-migrate", "/opt/municode/Municode.Api.dll",
+                                   "maintenance", action, "--json", timeout=timeout))
+    require(type(result["enabled"]) is bool and type(result["nonterminalOperations"]) is int
+            and result["nonterminalOperations"] >= 0, "Invalid maintenance status response.")
+    return result
+
+
+def await_probe(step, probe, timeout, interval=2):
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        require(remaining > 0, f"{step} timed out.")
+        if probe(min(remaining, 15)):
+            return
+        time.sleep(min(interval, max(0, deadline - time.monotonic())))
+
+
+def await_drain(run, release, timeout, op):
+    def drained(remaining):
+        result = maintain(run, release, "status", timeout=remaining, op=op)
+        require(result["enabled"], "Maintenance mode is not enabled.")
+        return result["nonterminalOperations"] == 0
+
+    await_probe("drain workspace operations", drained, timeout)
+
+
+def unseal_key(host, streamed=None):
+    if streamed is not None:
+        key = streamed
+    else:
+        path = host.secrets / "openbao-unseal-key"
+        require(regular(path) and path.stat().st_size <= 1024, "A protected OpenBao unseal key is required.")
+        key = path.read_bytes()
+    key = key.strip()
+    require(re.fullmatch(rb"[A-Za-z0-9+/=_-]{16,512}", key), "Invalid OpenBao unseal key.")
+    return key
+
+
+def start_openbao(run, release, key, *, recreate=False):
+    flags = ("--force-recreate",) if recreate else ()
+    compose_at(run, release, "start OpenBao", "up", "-d", "--no-deps", "--pull", "never", *flags, "openbao")
+
+    def responding(timeout):
+        try:
+            return json.loads(bao_exec(run, release, "inspect OpenBao seal", "status", *BAO_OPTIONS,
+                                       "-format=json", allowed=(0, 2), timeout=timeout))
+        except ValueError:
+            return None
+
+    def ready(timeout):
+        status = responding(timeout)
+        if status is None:
+            return False
+        require(status["initialized"] is True and type(status["sealed"]) is bool, "Invalid OpenBao seal state.")
+        if status["sealed"]:
+            require(key is not None, "A protected OpenBao unseal key is required.")
+            bao_exec(run, release, "unseal OpenBao", "write", *BAO_OPTIONS, "sys/unseal", "key=-",
+                     data=key, output=subprocess.DEVNULL, timeout=timeout)
+            return False
+        return True
+
+    await_probe("wait for unsealed OpenBao", ready, 180)
+
+
+def start_services(run, release, *services, recreate=False):
+    flags = ("--force-recreate",) if recreate else ()
+    compose_at(run, release, "start " + ", ".join(services), "up", "-d", "--no-deps", "--pull", "never",
+               "--wait", "--wait-timeout", "180", *flags, *services, timeout=210)
+
+
+def ready_api(run, release):
+    image = assignments(release / ".env")["MUNICODE_CADDY_IMAGE"]
+
+    def ready(timeout):
+        try:
+            run("probe private API readiness", "docker", "run", "--rm", "--pull=never",
+                "--network", "municode_private", "--entrypoint", "wget", image,
+                "-qO", "/dev/null", "http://api:8080/health/ready", timeout=timeout)
+            return True
+        except ValueError:
+            return False
+
+    await_probe("wait for private API readiness", ready, 180)
+
+
+class Journal:
+    def __init__(self, host, op, state, run):
+        self.host, self.op, self.state, self.run = host, op, state, run
+        if isinstance(run, Runner):
+            run.log = host.operation(op) / "log"
+
+    def save(self, **fields):
+        self.state.update(fields)
+        write_state(self.host, self.op, self.state)
+
+    def effect(self, phase, step, action, **markers):
+        done = self.state.setdefault("completedSteps", {})
+        if step in done:
+            return
+        self.save(phase=phase, pendingStep=step, **markers)
+        result = action() or {}
+        self.save(pendingStep=None, completedSteps=done | {step: now()}, **result)
+
+
+TERMINAL_PHASES = {"committed", "rolled-back"}
+
+
+def other_operations(host, op):
+    for path in sorted(host.operation(op).parent.iterdir()):
+        if path.name != op and re.fullmatch(OPERATION, path.name) and not path.is_symlink() and path.is_dir():
+            state = read_state(host, path.name)
+            if state is not None:
+                yield path.name, state
+
+
+def guard_operation(host, op):
+    require(not any(state.get("drainStarted") and state.get("phase") not in TERMINAL_PHASES
+                    for _, state in other_operations(host, op)),
+            "Another deploy operation is interrupted; resume or roll it back first.")
+
+
+def operation_jobs(run, op):
+    containers = run("list interrupted deploy jobs", "docker", "ps", "-aq", "--no-trunc",
+                     "--filter", "label=com.docker.compose.project=municode",
+                     "--filter", f"label=com.municode.deploy-operation={op}").splitlines()
+    require(all(re.fullmatch(SHA256, item) for item in containers), "Invalid deploy job container ID.")
+    if containers:
+        run("remove interrupted deploy jobs", "docker", "rm", "-f", *containers)
+
+
+def guard_recovery(host, state, run):
+    previous, target = state["previousRelease"], state["targetRelease"]
+    active = object_file(host.state / "active-release.json")
+    require(active == previous or active == state.get("committedRelease"),
+            "The active release changed since this operation.")
+    releases = [str(host.release(item["releaseId"])) for item in (previous, target)]
+    # Stopped containers can still be stopped/started through the same Compose project.
+    ids = run("list recovery containers", "docker", "ps", "-aq", "--no-trunc",
+              "--filter", "label=com.docker.compose.project=municode").splitlines()
+    require(ids and all(re.fullmatch(SHA256, item) for item in ids), "No Municode recovery containers found.")
+    containers = json.loads(run("inspect recovery containers", "docker", "container", "inspect", *ids))
+    require(sorted(c["Id"] for c in containers) == sorted(ids), "Recovery containers changed during inspection.")
+    for container in containers:
+        labels = container["Config"]["Labels"]
+        service = labels.get("com.docker.compose.service")
+        # Stopped setup jobs can predate deploys from either release directory.
+        if not container["State"].get("Running") and service not in SERVICES:
+            continue
+        require(labels.get("com.docker.compose.project.working_dir") in releases
+                and (service not in OWNERSHIP_SERVICES or labels.get(INSTALLATION_LABEL) == state["installationId"])
+                and (service in SERVICES or labels.get("com.municode.deploy-operation") == state["operationId"]),
+                "A Compose container is not owned by this deploy operation.")
+
+
+def stop_services(run, release, *services):
+    compose_at(run, release, "stop " + ", ".join(services), "stop", *services, timeout=240)
+
+
+def write_environment(release, values):
+    mode = stat.S_IMODE(release.stat().st_mode)
+    if os.geteuid() != 0:
+        release.chmod(mode | stat.S_IWUSR)
+    try:
+        durable_write(release / ".env", render(dict(sorted(values.items()))), 0o400)
+    finally:
+        if os.geteuid() != 0:
+            release.chmod(mode)
+
+
+def activate(journal, record):
+    host = journal.host
+    active = host.state / "active-release.json"
+    current = host.releases.parent / "current"
+    target = host.release(record["releaseId"])
+    allowed = {host.release(journal.state[key]["releaseId"]) for key in ("previousRelease", "targetRelease")}
+    require(current.is_symlink() and current.resolve() in allowed, "Unexpected active release link.")
+
+    def write_active():
+        durable_json(active, record)
+
+    def flip_current():
+        link = current.parent / f".current-{journal.op}-{phase}"
+        if present(link):
+            require(link.is_symlink() and link.readlink() == target, "Unexpected temporary release link.")
+        else:
+            link.symlink_to(target)
+        link.replace(current)
+        sync_path(current.parent)
+
+    phase = journal.state["phase"]
+    journal.effect(phase, phase + "-active-release", write_active)
+    journal.effect(phase, phase + "-current-link", flip_current)
+
+
+def prune(journal):
+    host, current = journal.host, journal.state
+    history = [(journal.op, current), *other_operations(host, journal.op)]
+    keep = {current[key]["releaseId"] for key in ("previousRelease", "targetRelease")}
+    for _, state in history:
+        if state.get("phase") not in TERMINAL_PHASES and state is not current and "targetRelease" in state:
+            keep.add(state["targetRelease"]["releaseId"])
+    for _, state in history:
+        if state.get("phase") not in TERMINAL_PHASES:
+            continue
+        for key in ("targetRelease", "previousRelease"):
+            record = state[key]
+            release_id = record["releaseId"]
+            if release_id in keep:
+                continue
+            path = host.releases / release_id
+            retired = host.releases / f".prune-{journal.op}-{release_id}"
+            if present(path):
+                release = host.release(release_id)
+                proof = release / STAGED_IDENTITY
+                expected = {field: record[field] for field in IDENTITY}
+                if present(proof):
+                    owned = object_file(proof) == expected
+                else:
+                    manifest = object_file(release / "release-manifest.json")
+                    owned = (key == "previousRelease" and
+                             identity(manifest, record["bundleSha256"], record["trust"]) == expected)
+                require(owned and not present(retired), "Retired release does not match the deployment journal.")
+                release.rename(retired)
+                sync_path(host.releases)
+            remove_release_stage(retired)
+    backups = [(state["backupCreatedAt"], op) for op, state in history
+               if "backupCreatedAt" in state and (state is current or state.get("phase") in TERMINAL_PHASES)
+               and regular(host.backup(op) / "backup-manifest.json")]
+    for _, op in sorted(backups, reverse=True)[3:]:
+        backup = host.backup(op)
+        if object_file(backup / "backup-manifest.json").get("operationId") == op:
+            shutil.rmtree(backup)
+
+
+def rollback_release(journal, key, *, manual=False, restore=False):
+    host, op, state, run = journal.host, journal.op, journal.state, journal.run
+    previous = state["previousRelease"]
+    release = host.release(previous["releaseId"])
+    target = host.release(state["targetRelease"]["releaseId"])
+    installation = state["installationId"]
+    if "rollbackMode" not in state:
+        journal.save(phase="rollback", rollbackMode="snapshot" if restore else "services",
+                     manualRollback=manual)
+    restore = state["rollbackMode"] == "snapshot"
+    if restore and "restore-snapshot" not in state["completedSteps"]:
+        backup, manifest = read_backup(host, op, previous)
+    guard_recovery(host, state, run)
+    journal.effect("rollback", "rollback-cleanup-jobs", lambda: operation_jobs(run, op))
+    # Recovery may itself have been interrupted while OpenBao was paused.
+    journal.effect("rollback", "rollback-unpause", lambda: ensure_unpaused(run, release))
+    if restore:
+        journal.effect("rollback", "rollback-stop-clients",
+                       lambda: stop_services(run, release, *CLIENTS, "openbao-agent", "openbao"))
+        if "restore-snapshot" not in state["completedSteps"]:
+            if state.get("workerResumed"):
+                journal.effect("rollback", "export-reconciliation",
+                               lambda: export_reconciliation(run, target, backup, manifest))
+            journal.effect("rollback", "rollback-postgres", lambda: start_services(run, release, "postgres"))
+            journal.effect("rollback", "restore-snapshot",
+                           lambda: restore_backup(host, op, previous, installation, release, run))
+    if restore or state.get("clientsMayHaveStopped"):
+        journal.effect("rollback", "rollback-openbao", lambda: start_openbao(run, release, key, recreate=restore))
+        journal.effect("rollback", "rollback-backend", lambda: start_services(run, release, *BACKEND, recreate=restore))
+        journal.effect("rollback", "rollback-readiness", lambda: ready_api(run, release))
+        journal.effect("rollback", "rollback-open", lambda: start_services(run, release, "caddy"))
+        journal.effect("rollback", "rollback-worker", lambda: start_services(run, release, "worker", recreate=restore))
+    journal.effect("rollback", "rollback-exit-maintenance",
+                   lambda: require(not maintain(run, release, "exit", op=op)["enabled"],
+                                   "Maintenance mode did not exit."))
+    if restore:
+        activate(journal, previous)
+    journal.save(phase="rolled-back", pendingStep=None)
+
+
+def prepare_apply(journal, plan, approval, streamed):
+    host, state, run = journal.host, journal.state, journal.run
+    prepared = {}
+    inspection = preflight(host, plan, run, prepared)
+    if inspection["blockers"]:
+        return {"blockers": inspection["blockers"]}
+    actual = hashlib.sha256(canonical(inspection["digestInputs"])).hexdigest()
+    if actual != approval:
+        return {"blockers": ["Approved deploy digest does not match live preflight."], "approvalDigest": actual}
+    require(inspection["targetRelease"] == state["targetRelease"],
+            "The staged release changed since approval.")
+    require(prepared["runningServices"] == SERVICES, "Unexpected running service in the Municode Compose project.")
+    previous = inspection["currentRelease"]
+    require(previous["releaseId"] != state["targetRelease"]["releaseId"], "The target release is already active.")
+    release = host.release(state["targetRelease"]["releaseId"])
+    unseal_key(host, streamed)
+    require(not present(host.backup(journal.op)), "Backup path already exists.")
+    journal.save(phase="prepare", approvalDigest=approval, previousRelease=previous,
+                 installationId=plan["installationId"], configHashes=prepared["configHashes"])
+    manifest = object_file(release / "release-manifest.json")
+    refs, local = allowed_images(release, manifest)
+    for ref in sorted(refs - local):
+        def pull(ref=ref):
+            run("pull pinned image", "docker", "image", "pull", ref, timeout=1800)
+        journal.effect("prepare", "pull-" + ref, pull)
+    # Rewrite on a prepare retry: recomputation above may reflect updated operator configuration.
+    journal.save(phase="prepare", pendingStep="render-env")
+    write_environment(release, prepared["values"])
+    journal.save(pendingStep=None)
+    require(host_config_hashes(host) == state["configHashes"], "Host configuration changed before drain.")
+    return {}
+
+
+def apply_release(journal, plan, approval, streamed, timeout):
+    state, run, host, op = journal.state, journal.run, journal.host, journal.op
+    require(state.get("approvalDigest", approval) == approval, "Approval does not match the host journal.")
+    if state["phase"] in TERMINAL_PHASES:
+        return ({"state": state, "blockers": ["This deploy rolled back; create a new plan to retry."]}
+                if state["phase"] == "rolled-back" else {"state": state})
+    key = None
+    try:
+        if state.get("rollbackMode") or (state.get("drainStarted") and not state.get("trafficMayHaveOpened")):
+            restore = bool(state.get("migrationsStarted"))
+            if restore or streamed is not None or present(host.secrets / "openbao-unseal-key"):
+                key = unseal_key(host, streamed)
+            rollback_release(journal, key, restore=restore)
+            return {"state": state, "blockers": ["Interrupted deploy rolled back; create a new plan to retry."]}
+        if state.get("trafficMayHaveOpened"):
+            guard_recovery(host, state, run)
+            if state.get("pendingStep") == "exit-maintenance":
+                operation_jobs(run, op)
+        else:
+            result = prepare_apply(journal, plan, approval, streamed)
+            if result:
+                return {"state": state, **result}
+
+            active = host.release(state["previousRelease"]["releaseId"])
+            release = host.release(state["targetRelease"]["releaseId"])
+            key = unseal_key(host, streamed)
+            journal.effect("drain", "enter-maintenance",
+                           lambda: require(maintain(run, active, "enter", op=op)["enabled"],
+                                           "Maintenance mode did not enter."), drainStarted=True)
+            journal.effect("drain", "drain-operations", lambda: await_drain(run, active, timeout, op))
+            journal.effect("drain", "stop-clients", lambda: stop_services(run, active, *CLIENTS, "openbao-agent"),
+                           clientsMayHaveStopped=True)
+            journal.effect("backup", "matched-snapshot", lambda: {
+                "backupCreatedAt": create_backup(host, op, state["previousRelease"], state["installationId"], active, run)})
+            require(host_config_hashes(host) == state["configHashes"], "Host configuration changed during drain or backup.")
+            journal.effect("migrate", "target-postgres", lambda: start_services(run, release, "postgres"),
+                           migrationsStarted=True)
+            for name in JOBS:
+                def migrate(name=name):
+                    compose_at(run, release, f"run {name}", "run", "--rm", "--no-deps", "-T", "--pull", "never",
+                               "--label", f"com.municode.deploy-operation={op}", name, timeout=1800)
+                journal.effect("migrate", name, migrate)
+            journal.effect("start", "target-openbao", lambda: start_openbao(run, release, key, recreate=True))
+            journal.effect("start", "target-backend", lambda: start_services(run, release, *BACKEND))
+            journal.effect("start", "target-readiness", lambda: ready_api(run, release))
+
+        release = host.release(state["targetRelease"]["releaseId"])
+        journal.effect("open", "open-traffic", lambda: start_services(run, release, "caddy"),
+                       trafficMayHaveOpened=True, openAt=state.get("openAt") or now())
+        journal.effect("resume", "resume-worker", lambda: start_services(run, release, "worker"), workerResumed=True)
+        journal.effect("resume", "exit-maintenance",
+                       lambda: require(not maintain(run, release, "exit", op=op)["enabled"],
+                                       "Maintenance mode did not exit."))
+        if "committedRelease" not in state:
+            journal.save(phase="commit", committedRelease=state["targetRelease"] | {
+                "activatedAt": now(), "previous": {key: state["previousRelease"][key] for key in (*IDENTITY, "activatedAt")},
+            })
+        activate(journal, state["committedRelease"])
+        journal.effect("commit", "prune", lambda: prune(journal))
+        journal.save(phase="committed", pendingStep=None)
+        return {"state": state}
+    except DEPLOY_ERRORS as error:
+        journal.save(lastError={"phase": state["phase"], "step": state.get("pendingStep"),
+                                "message": error_message(error)})
+        blockers = [error_message(error)]
+        if (state.get("drainStarted") and not state.get("trafficMayHaveOpened") and not state.get("rollbackMode")
+                and (key is not None or not state.get("migrationsStarted"))):
+            try:
+                rollback_release(journal, key, restore=bool(state.get("migrationsStarted")))
+            except DEPLOY_ERRORS as recovery:
+                blockers.append("Rollback incomplete: " + error_message(recovery))
+                journal.save(rollbackError=error_message(recovery))
+        return {"state": state, "blockers": blockers}
+
+
+def manual_rollback(journal, args, streamed):
+    state, host, op = journal.state, journal.host, journal.op
+    try:
+        if state["phase"] == "rolled-back":
+            return {"state": state}
+        require(state.get("drainStarted"), "This operation has not changed the running release.")
+        if state.get("trafficMayHaveOpened"):
+            require(args.restore_database and args.accept_data_loss_since == state["openAt"],
+                    "Rollback requires --restore-database and --accept-data-loss-since matching openAt.")
+        if state.get("workerResumed"):
+            require(args.accept_provider_reconciliation, "Rollback requires --accept-provider-reconciliation.")
+        guard_recovery(host, state, journal.run)
+        restore = bool(state.get("migrationsStarted"))
+        if restore and "restore-snapshot" not in state["completedSteps"]:
+            read_backup(host, op, state["previousRelease"])
+        key = (unseal_key(host, streamed) if restore or streamed is not None
+               or present(host.secrets / "openbao-unseal-key") else None)
+        rollback_release(journal, key, manual=True, restore=restore)
+        return {"state": state}
+    except DEPLOY_ERRORS as error:
+        return {"state": state, "blockers": [error_message(error)]}
+
+
+def deploy_status(host, op, run):
+    state = read_state(host, op)
+    require(state is not None, "Deploy operation not found.")
+    output = run("inspect deploy unit", "systemctl", "show", f"municode-deploy-{op}.service",
+                 "--property=ActiveState,SubState", allowed=(0, 1, 4))
+    fields = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
+    return {"state": state, "unit": {"activeState": fields.get("ActiveState", "unknown"),
+                                      "subState": fields.get("SubState", "unknown")}}
 
 
 def main(argv=None, run=None):
@@ -528,7 +1259,19 @@ def main(argv=None, run=None):
     staging.add_argument("--verified-release-tag")
     inspection = commands.add_parser("preflight")
     inspection.add_argument("--plan", type=Path, required=True)
-    for command in (staging, inspection):
+    apply = commands.add_parser("run")
+    apply.add_argument("--approve")
+    apply.add_argument("--drain-timeout", type=int, default=900)
+    rollback = commands.add_parser("rollback")
+    rollback.add_argument("--restore-database", action="store_true")
+    rollback.add_argument("--accept-data-loss-since")
+    rollback.add_argument("--accept-provider-reconciliation", action="store_true")
+    for action in (apply, rollback):
+        action.add_argument("--plan", type=Path, required=True)
+        action.add_argument("--unseal-key-stdin", action="store_true")
+    status = commands.add_parser("status")
+    status.add_argument("--operation", required=True)
+    for command in (staging, inspection, apply, rollback, status):
         command.add_argument("--json", action="store_true", help="Output JSON (the default).")
     args = parser.parse_args(argv)
     result = {}
@@ -540,23 +1283,37 @@ def main(argv=None, run=None):
                 and host.releases.is_dir() and host.releases.resolve() == host.releases
                 and host.config.is_dir() and host.config.resolve() == host.config,
                 "Municode deployable layout is missing or not canonical.")
-        with deploy_lock(host.state / "deploy.lock"):
-            run = run or Runner()
-            if args.command == "stage":
-                result = stage(host, args.operation, args.bundle, args.bundle_sha256,
-                               args.trust, args.verified_release_tag, run)
-            else:
-                result = preflight(host, object_file(args.plan), run)
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, EOFError, tarfile.TarError) as error:
-        if isinstance(error, (KeyError, TypeError, AttributeError, json.JSONDecodeError)):
-            message = "Malformed deploy input or probe response."
-        elif isinstance(error, OSError):
-            message = f"Deploy filesystem or command access failed (errno {error.errno})."
-        elif isinstance(error, (EOFError, tarfile.TarError)):
-            message = "Invalid or incomplete bundle archive."
+        run = run or Runner()
+        if args.command == "status":
+            result = deploy_status(host, args.operation, run)
         else:
-            message = str(error)
-        result = {"blockers": [message]}
+            streamed = sys.stdin.buffer.readline(1025) if getattr(args, "unseal_key_stdin", False) else None
+            if streamed is not None:
+                require(streamed.endswith(b"\n") and len(streamed) <= 1024, "Invalid streamed OpenBao unseal key.")
+            with deploy_lock(host.state / "deploy.lock"):
+                if args.command == "stage":
+                    result = stage(host, args.operation, args.bundle, args.bundle_sha256,
+                                   args.trust, args.verified_release_tag, run)
+                elif args.command == "preflight":
+                    result = preflight(host, object_file(args.plan), run)
+                else:
+                    plan = object_file(args.plan)
+                    op = plan["operationId"]
+                    state = read_state(host, op)
+                    require(state is not None and state["phase"] != "staging", "Deploy operation has not been staged.")
+                    guard_operation(host, op)
+                    state["operationId"] = op
+                    journal = Journal(host, op, state, run)
+                    if args.command == "run":
+                        approval = args.approve or plan.get("approvalDigest")
+                        require(isinstance(approval, str) and re.fullmatch(SHA256, approval),
+                                "A SHA-256 deploy approval digest is required.")
+                        require(args.drain_timeout > 0, "Drain timeout must be positive.")
+                        result = apply_release(journal, plan, approval, streamed, args.drain_timeout)
+                    else:
+                        result = manual_rollback(journal, args, streamed)
+    except DEPLOY_ERRORS as error:
+        result = {"blockers": [error_message(error)]}
     print(json.dumps(result, sort_keys=True))
     return 1 if result.get("blockers") else 0
 

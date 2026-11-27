@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MPL-2.0
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 import fcntl
 import hashlib
 import http.client
@@ -15,6 +15,7 @@ import tarfile
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,19 +37,46 @@ class FakeDeployDocker:
         self.wrong_installation = False
         self.wrong_loaded_id = False
         self.postgres_major = 16
+        self.fail_step = None
+        self.kill_step = None
+        self.steps = []
+        self.maintenance = False
+        self.paused = False
+        self.sealed = False
+        self.running = {}
+        self.volumes = {}
         self.container_ids = {name: f"{index:064x}" for index, name in enumerate(
             ("api", "caddy", "kratos", "openbao", "openbao-agent", "postgres", "worker", "workspace-gateway"), 1)}
 
     def __call__(self, step, *args, **options):
         self.calls.append(args)
+        self.steps.append(step)
+        if self.fail_step == step:
+            self.fail_step = None
+            raise ValueError(f"{step} failed (exit 42).")
+        result = self.command(step, args, options)
+        if self.kill_step == step:
+            self.kill_step = None
+            raise SystemExit(137)
+        return result
+
+    def command(self, step, args, options):
         if args[:2] == ("docker", "ps"):
-            return "\n".join(self.container_ids.values())
+            if any(arg.startswith("label=com.municode.deploy-operation=") for arg in args):
+                return ""
+            return "\n".join(id for name, id in self.container_ids.items()
+                             if args[2] == "-aq" or self.running.get(name, (self.current, True))[1])
         if args[:3] == ("docker", "container", "inspect"):
+            if args[3] == "--format":
+                return str(self.paused).lower()
             containers = []
             for name, id in self.container_ids.items():
+                if id not in args[3:]:
+                    continue
+                release, running = self.running.get(name, (self.current, True))
                 labels = {
                     "com.docker.compose.service": name,
-                    "com.docker.compose.project.working_dir": "/wrong" if self.wrong_working_dir else str(self.current),
+                    "com.docker.compose.project.working_dir": "/wrong" if self.wrong_working_dir else str(release),
                 }
                 if name in ("openbao", "openbao-agent"):
                     labels["com.municode.installation-id"] = (
@@ -58,8 +86,17 @@ class FakeDeployDocker:
                 mounts = [{"Type": "volume", "Name": f"municode_{volume}", "Source": f"/fake/{volume}"}] if volume else []
                 networks = {"municode_private": {"NetworkID": "f" * 64}}
                 containers.append({"Id": id, "Config": {"Labels": labels}, "Mounts": mounts,
-                                   "State": {"Running": True}, "NetworkSettings": {"Networks": networks}})
+                                   "State": {"Running": running}, "NetworkSettings": {"Networks": networks}})
             return json.dumps(containers)
+        if args[:3] == ("docker", "volume", "inspect"):
+            name = args[-1].removeprefix("municode_")
+            return json.dumps([{"Name": args[-1], "Driver": "local", "Mountpoint": str(self.volumes[name]),
+                                "Labels": {deploy_host.INSTALLATION_LABEL: "replace-with-stable-installation-id"}}])
+        if args[:2] == ("docker", "unpause"):
+            self.paused = False
+            return ""
+        if args[0] == "systemctl":
+            return "ActiveState=active\nSubState=running"
         if args[:3] == ("docker", "image", "pull") or args[:3] == ("docker", "image", "tag"):
             return ""
         if args[:4] == ("docker", "image", "load", "--input"):
@@ -90,7 +127,53 @@ class FakeDeployDocker:
                     services[name] = {"image": env["MUNICODE_OPENBAO_IMAGE"],
                                       "labels": {"com.municode.installation-id": env["MUNICODE_INSTALLATION_ID"]}}
                 return json.dumps({"services": services})
+            release = Path(args[5])
+            action = args[10]
+            if action == "run":
+                self.last_job = args
+                if "maintenance" in args:
+                    command = args[-2]
+                    if command != "status":
+                        self.maintenance = command == "enter"
+                    return json.dumps({"enabled": self.maintenance, "nonterminalOperations": 0})
+                assert args[-1] in deploy_host.JOBS and args[11:14] == ("--rm", "--no-deps", "-T"), args
+                return ""
+            if action == "stop":
+                for name in args[11:]:
+                    self.running[name] = (self.running.get(name, (self.current, True))[0], False)
+                return ""
+            if action == "up":
+                for name in (name for name in args[11:] if name in self.container_ids):
+                    self.running[name] = (release, True)
+                    if name == "openbao" and "--force-recreate" in args:
+                        self.sealed = True
+                return ""
+            if action == "pause":
+                self.paused = True
+                return ""
+            if action == "ps":
+                return self.container_ids["openbao"]
+            if action == "exec":
+                command = args[13]
+                if command.startswith("pg_dump"):
+                    options["output"].write(b"synthetic-dump\n")
+                    return ""
+                if command == "pg_restore":
+                    assert options["source"].read() == b"synthetic-dump\n"
+                    return ""
+                if command == "psql":
+                    if step == "export operations and VMs":
+                        return '{"operations":[{"id":"op-1"}],"vms":[{"id":"vm-1"}]}'
+                    return "[]" if step.startswith("inspect database role") else ""
+                if command == "bao":
+                    if args[14] == "write":
+                        assert options["data"] == b"synthetic-unseal-key"
+                        self.sealed = False
+                        return ""
+                    return json.dumps({"initialized": True, "sealed": self.sealed})
         if args[:2] == ("docker", "run"):
+            if step == "probe private API readiness":
+                return ""
             assert args[2:7] == ("--rm", "--pull=never", "--read-only", "--network", "f" * 64), args
             assert args[-4:] == ("/opt/municode/Municode.Api.dll", "migrations", "status", "--json"), args
             source = next(arg for arg in args if arg.endswith(",dst=/opt/municode,readonly"))
@@ -110,6 +193,10 @@ class FakeDeployDocker:
                 return ""
         if args[0] == "du":
             return "\n".join(f"100\t{path}" for path in args[5:])
+        if args[0] in ("tar", "sync"):
+            result = subprocess.run(args, stdout=options.get("output", subprocess.PIPE),
+                                    stderr=subprocess.PIPE, check=True)
+            return result.stdout.decode().strip() if result.stdout else ""
         raise AssertionError((step, args, options))
 
 
@@ -244,6 +331,33 @@ class PackageTests(unittest.TestCase):
         }))
         return deploy_command(host, fake, "preflight", "--json", "--plan", str(plan))
 
+    @contextmanager
+    def apply_fixture(self, subcase=None):
+        if subcase:
+            dotnet = self.root / "dotnet"
+            self.root = self.root / subcase
+            self.root.mkdir()
+            (self.root / "dotnet").symlink_to(dotnet)
+            self.output = self.root / "output"
+        host, fake, archive = self.deploy_fixture()
+        for name in deploy_host.VOLUMES:
+            path = host / name
+            path.mkdir()
+            (path / "data").write_text(f"synthetic {name}")
+            fake.volumes[name] = path
+        (host / "etc/municode/secrets/openbao-unseal-key").write_text("synthetic-unseal-key\n")
+        code, staged = self.stage_command(host, fake, archive)
+        self.assertEqual(code, 0, staged)
+        code, result = self.preflight_command(host, fake, staged)
+        self.assertEqual(code, 0, result)
+        plan = host / "var/lib/municode/deploys/test-op/plan.json"
+        request = json.loads(plan.read_text())
+        request["approvalDigest"] = hashlib.sha256(deploy_host.canonical(result["digestInputs"])).hexdigest()
+        plan.write_text(json.dumps(request))
+        fake.steps.clear()
+        with patch.object(deploy_host.time, "sleep"):
+            yield host, fake, str(plan)
+
     def test_deploy_stages_verified_archive_without_switching_current(self):
         host, fake, archive = self.deploy_fixture()
         code, staged = self.stage_command(host, fake, archive)
@@ -342,6 +456,122 @@ class PackageTests(unittest.TestCase):
         code, repeated = self.preflight_command(host, fake, staged)
         self.assertEqual(code, 0, repeated)
         self.assertEqual(repeated["digestInputs"], changed["digestInputs"])
+
+    def test_apply_recomputes_approval_before_maintenance(self):
+        with self.apply_fixture() as (host, fake, plan):
+            (host / "etc/municode/config/municode.json").write_text('{"operator":true}\n')
+            code, result = deploy_command(host, fake, "run", "--plan", plan)
+            self.assertEqual(code, 1, result)
+            self.assertNotEqual(result["approvalDigest"], json.loads(Path(plan).read_text())["approvalDigest"])
+            self.assertEqual(result["state"]["phase"], "staged")
+            self.assertNotIn("maintenance enter", fake.steps)
+
+    def test_apply_failure_paths_and_commit_retry(self):
+        cases = [
+            ("prepare", "pull pinned image", "prepare", False),
+            ("drain", "maintenance enter", "rolled-back", False),
+            ("backup", "archive openbao", "rolled-back", False),
+            ("migrate", "run kratos-migrate", "rolled-back", True),
+            ("start", "start openbao-agent, kratos, api, workspace-gateway", "rolled-back", True),
+            ("open", "start caddy", "open", False),
+            ("resume", "start worker", "resume", False),
+        ]
+        root = self.root
+        for phase, failure, expected, restored in cases:
+            with self.subTest(phase=phase), self.apply_fixture(phase) as (host, fake, plan):
+                fake.fail_step = failure
+                code, result = deploy_command(host, fake, "run", "--plan", plan)
+                self.assertEqual(code, 1, result)
+                state = result["state"]
+                self.assertEqual(state["lastError"]["phase"], phase)
+                self.assertEqual(state["phase"], expected)
+                self.assertEqual("restore municode" in fake.steps, restored)
+                self.assertFalse(fake.paused)
+                self.assertEqual((host / "opt/municode/current").resolve(), fake.current)
+                if expected == "rolled-back":
+                    self.assertFalse(fake.maintenance)
+                    self.assertTrue(all(release == fake.current and running for release, running in fake.running.values()))
+            self.root = root
+
+        with self.apply_fixture("commit") as (host, fake, plan):
+            with patch.object(deploy_host, "prune", side_effect=ValueError("injected prune failure")):
+                code, result = deploy_command(host, fake, "run", "--plan", plan)
+            self.assertEqual(code, 1, result)
+            self.assertEqual(result["state"]["phase"], "commit")
+            self.assertTrue(result["state"]["workerResumed"])
+            self.assertEqual(fake.steps.count("run api-migrate"), 1)
+            code, result = deploy_command(host, fake, "run", "--plan", plan)
+            self.assertEqual((code, result["state"]["phase"]), (0, "committed"), result)
+            self.assertEqual(fake.steps.count("run api-migrate"), 1)
+            active = json.loads((host / "var/lib/municode/active-release.json").read_text())
+            self.assertEqual(active["previous"]["releaseId"], fake.current.name)
+            self.assertEqual((host / "opt/municode/current").resolve().name, active["releaseId"])
+
+    def test_interrupted_pause_unpauses_and_interrupted_migration_restores(self):
+        root = self.root
+        for crash in ("pause", "migrate"):
+            with self.subTest(crash=crash), self.apply_fixture(crash) as (host, fake, plan):
+                if crash == "pause":
+                    # A process kill bypasses finally, leaving the Docker container paused.
+                    with patch.object(deploy_host, "ensure_unpaused", side_effect=SystemExit(137)):
+                        with self.assertRaises(SystemExit):
+                            deploy_command(host, fake, "run", "--plan", plan)
+                    self.assertTrue(fake.paused)
+                else:
+                    fake.kill_step = "run database-initialize"
+                    with self.assertRaises(SystemExit):
+                        deploy_command(host, fake, "run", "--plan", plan)
+                with deploy_host.deploy_lock(host / "var/lib/municode/deploy.lock"):
+                    code, status = deploy_command(host, fake, "status", "--operation", "test-op")
+                self.assertEqual(code, 0, status)
+                self.assertEqual(status["unit"], {"activeState": "active", "subState": "running"})
+                self.assertEqual(status["state"]["pendingStep"],
+                                 "matched-snapshot" if crash == "pause" else "database-initialize")
+                self.assertEqual(bool(status["state"].get("migrationsStarted")), crash == "migrate")
+                code, result = deploy_command(host, fake, "run", "--plan", plan)
+                self.assertEqual((code, result["state"]["phase"]), (1, "rolled-back"), result)
+                self.assertFalse(fake.paused)
+                self.assertEqual("restore kratos" in fake.steps, crash == "migrate")
+            self.root = root
+
+    def test_interrupted_worker_requires_confirmations_and_matched_snapshot(self):
+        with self.apply_fixture() as (host, fake, plan):
+            fake.kill_step = "start worker"
+            with self.assertRaises(SystemExit):
+                deploy_command(host, fake, "run", "--plan", plan)
+            _, status = deploy_command(host, fake, "status", "--operation", "test-op")
+            state = status["state"]
+            self.assertEqual(state["pendingStep"], "resume-worker")
+            self.assertTrue(state["trafficMayHaveOpened"] and state["workerResumed"])
+            rollback = ("rollback", "--plan", plan)
+            self.assertIn("openAt", deploy_command(host, fake, *rollback)[1]["blockers"][0])
+            rollback += ("--restore-database", "--accept-data-loss-since", state["openAt"])
+            self.assertIn("provider-reconciliation", deploy_command(host, fake, *rollback)[1]["blockers"][0])
+            rollback += ("--accept-provider-reconciliation",)
+            backup = host / "var/lib/municode/backups/test-op"
+            dump = backup / "municode.dump"
+            original = dump.read_bytes()
+            dump.write_bytes(b"corrupt")
+            code, result = deploy_command(host, fake, *rollback)
+            self.assertEqual(code, 1, result)
+            self.assertIn("SHA-256", result["blockers"][0])
+            self.assertNotIn("drop municode", fake.steps)
+            dump.write_bytes(original)
+            policy = host / "etc/municode/config/municode.json"
+            old_policy = policy.read_bytes()
+            policy.write_text("changed")
+            (fake.volumes["openbao"] / "new").write_text("post-open")
+            fake.kill_step = "restore municode"
+            with self.assertRaises(SystemExit):
+                deploy_command(host, fake, *rollback)
+            code, result = deploy_command(host, fake, *rollback)
+            self.assertEqual((code, result["state"]["phase"]), (0, "rolled-back"), result)
+            self.assertEqual(fake.steps.count("export operations and VMs"), 1)
+            self.assertLess(fake.steps.index("export operations and VMs"), fake.steps.index("drop municode"))
+            self.assertEqual(json.loads((backup / "post-open-operations.json").read_text()),
+                             {"operations": [{"id": "op-1"}], "vms": [{"id": "vm-1"}]})
+            self.assertEqual(policy.read_bytes(), old_policy)
+            self.assertFalse((fake.volumes["openbao"] / "new").exists())
 
     def test_manifest_records_component_digests_and_no_floating_dependencies(self):
         self.package()
