@@ -42,6 +42,9 @@ Seed never authenticates a workspace user or registers its bootstrap
 provider credential automatically. After first-owner setup, register a provider,
 image and plan in the dashboard before creating the first coding VM.
 
+For control-plane registration, use `municode instance add`, `list`, `show`,
+or `remove`. See [the operator command reference](operator.md#register-a-control-plane).
+
 Use the API URL and a short-lived or scoped key issued by your installation.
 Use `workspaces:read` for inspection and `workspaces:write` only for mutations.
 Do not enter provider credentials on the command line where process inspection

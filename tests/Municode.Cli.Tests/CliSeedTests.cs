@@ -74,11 +74,13 @@ public sealed class CliSeedTests
 
     }
 
-    [Fact]
-    public async Task ResumePinsSshThenInstallsVerifiesAndDoesNotRegisterProviderCredential()
+    [Theory]
+    [InlineData(null, "console.example.com")]
+    [InlineData("production", "production")]
+    public async Task ResumePinsSshThenInstallsVerifiesAndRegistersInstance(string? instanceName, string expectedName)
     {
         using var fixture = new SeedCliFixture();
-        var operation = await fixture.PlanAsync();
+        var operation = await fixture.PlanAsync(instanceName);
         Assert.Equal(CliExitCodes.ValidationError, await fixture.Application.RunAsync(
         [
             "seed", "apply", operation,
@@ -90,7 +92,7 @@ public sealed class CliSeedTests
         Assert.Equal(CliExitCodes.Success, await fixture.Application.RunAsync(
         [
             "seed", "resume", operation, "--credential-file", fixture.CredentialPath,
-            "--confirm-console-fingerprint", "SHA256:synthetic-fingerprint"
+            "--confirm-console-fingerprint", FakeInstanceSsh.Fingerprint
         ], CancellationToken.None));
         Assert.Equal(1, fixture.Providers.CreateCalls);
         Assert.Equal(1, fixture.Host.InstallCalls);
@@ -99,6 +101,35 @@ public sealed class CliSeedTests
         Assert.Contains("never", fixture.Console.Output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("created no coding VM", fixture.Console.Output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("https://console.example.com/setup", fixture.Console.Output);
+        Assert.Contains($"Registered instance '{expectedName}'.", fixture.Console.Output);
+        var registered = Assert.Single(fixture.Ssh.Calls);
+        Assert.Contains("StrictHostKeyChecking=yes", registered);
+        Assert.Contains("root@203.0.113.10", registered);
+        Assert.Contains(Path.Combine(fixture.Environment.ConfigHome, "seed", operation, "id_ed25519"), registered);
+        Assert.True(File.Exists(Path.Combine(fixture.Environment.ConfigHome, "instances", expectedName, "instance.json")));
+        Assert.Equal(CliExitCodes.Success, await fixture.Application.RunAsync(
+            ["seed", "resume", operation], CancellationToken.None));
+        Assert.Single(fixture.Ssh.Calls);
+    }
+
+    [Fact]
+    public async Task SeedRegistrationFailureCanBeRetriedWithoutInstallingAgain()
+    {
+        using var fixture = new SeedCliFixture();
+        var operation = await fixture.PlanAsync();
+        fixture.Ssh.Probe = (_, _) => Task.FromResult(new SeedProcessResult(41, ""));
+        Assert.Equal(CliExitCodes.ValidationError, await fixture.Application.RunAsync(
+        [
+            "seed", "apply", operation, "--credential-file", fixture.CredentialPath,
+            "--approve", fixture.Approval(), "--confirm-console-fingerprint", FakeInstanceSsh.Fingerprint
+        ], CancellationToken.None));
+        Assert.Contains("Seed installation completed, but local instance registration failed", fixture.Console.Error);
+        fixture.Ssh.Probe = null;
+        Assert.Equal(CliExitCodes.Success, await fixture.Application.RunAsync(
+            ["seed", "resume", operation], CancellationToken.None));
+        Assert.Equal(1, fixture.Providers.CreateCalls);
+        Assert.Equal(1, fixture.Host.InstallCalls);
+        Assert.Equal(2, fixture.Ssh.Calls.Count);
     }
 
     [Fact]
@@ -160,7 +191,7 @@ public sealed class CliSeedTests
             Client = new MunicodeApiClient(Environment, Tokens, new HttpClient(new RecordingHandler()));
             Providers = new ProviderFixture(Credential);
             Release = new ReleaseFixture();
-            Host = new HostFixture();
+            Host = new HostFixture(Ssh);
             Application = new CliApplication(Console, Environment, Tokens, Client, new SeedRuntime
             {
                 Providers = (_, credential, _) =>
@@ -170,7 +201,7 @@ public sealed class CliSeedTests
                 },
                 Release = () => Release,
                 Host = () => Host
-            });
+            }, Ssh);
         }
 
         public const string Credential = "synthetic-provider-token";
@@ -182,12 +213,15 @@ public sealed class CliSeedTests
         public ProviderFixture Providers { get; }
         public ReleaseFixture Release { get; }
         public HostFixture Host { get; }
+        public FakeInstanceSsh Ssh { get; } = new();
         public CliApplication Application { get; }
 
-        public async Task<string> PlanAsync()
+        public async Task<string> PlanAsync(string? instanceName = null)
         {
+            var args = SeedPlanArgs(CredentialPath);
+            if (instanceName is not null) args = [.. args, "--instance-name", instanceName];
             Assert.Equal(CliExitCodes.Success,
-                await Application.RunAsync(SeedPlanArgs(CredentialPath), CancellationToken.None));
+                await Application.RunAsync(args, CancellationToken.None));
             return Regex.Match(Console.Output, @"Seed operation: ([0-9a-f]{32})").Groups[1].Value;
         }
 
@@ -266,7 +300,7 @@ public sealed class CliSeedTests
             new string('b', 64), new string('c', 64), "github-sigstore");
     }
 
-    private sealed class HostFixture : ISeedHost
+    private sealed class HostFixture(FakeInstanceSsh ssh) : ISeedHost
     {
         public int InstallCalls { get; private set; }
         public int HealthCalls { get; private set; }
@@ -283,6 +317,8 @@ public sealed class CliSeedTests
             CancellationToken cancellationToken)
         {
             state.HostFingerprint = independentFingerprint;
+            SeedFiles.WriteNew(Path.Combine(directory, "known_hosts"),
+                Encoding.ASCII.GetBytes(FakeInstanceSsh.KnownHost(state.Server!.Address!)));
             return Task.CompletedTask;
         }
         public Task PrepareAsync(SeedState state, string directory, CancellationToken cancellationToken) =>
@@ -293,6 +329,7 @@ public sealed class CliSeedTests
             CancellationToken cancellationToken)
         {
             InstallCalls++;
+            ssh.InstallationId = state.InstallationId!;
             UploadedText = state.Plan.Selection.Provider + " " + state.Plan.Selection.ReleaseTag;
             SeedFiles.WriteNew(Path.Combine(directory, "setup-token"),
                 Encoding.UTF8.GetBytes("synthetic-first-owner-token"));

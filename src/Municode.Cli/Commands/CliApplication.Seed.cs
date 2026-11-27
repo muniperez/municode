@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 using System.Text.Json;
+using Municode.Cli.Instances;
 using Municode.Cli.Seed;
 
 namespace Municode.Cli.Commands;
@@ -11,7 +12,7 @@ public sealed partial class CliApplication
     [
         "--provider", "--region", "--size", "--dashboard-hostname", "--api-hostname",
         "--gateway-domain", "--release", "--credential-file", "--approve",
-        "--confirm-console-fingerprint"
+        "--confirm-console-fingerprint", "--instance-name"
     ];
 
     private async Task<int> RunSeedAsync(string[] args, CancellationToken cancellationToken)
@@ -55,12 +56,14 @@ public sealed partial class CliApplication
                 RequiredSeedOption(options, "--gateway-domain"),
                 RequiredSeedOption(options, "--release"));
             selection.Validate();
+            var instanceName = options.GetValueOrDefault("--instance-name");
+            InstanceRegistry.ValidateName(instanceName ?? selection.DashboardHostname);
             var credential = SeedFiles.ReadCredential(RequiredSeedOption(options, "--credential-file"));
             var release = await _seed.Release().VerifyAsync(
                 selection.ReleaseTag, Path.Combine(journal.DirectoryPath, "release"), cancellationToken);
             using var provider = _seed.Providers(selection.Provider, credential, null);
             var quote = await provider.QuoteAsync(selection, operationId, cancellationToken);
-            var state = new SeedState { Id = operationId, Plan = new(selection, quote, release.Identity) };
+            var state = new SeedState { Id = operationId, Plan = new(selection, quote, release.Identity, instanceName) };
             journal.Save(state);
             _console.WriteLine("Seed operation: " + operationId);
             foreach (var cost in quote.Costs)
@@ -84,6 +87,7 @@ public sealed partial class CliApplication
             var state = journal.Load();
             if (state.IsComplete)
             {
+                await RegisterCompletedSeedAsync(state, journal, cancellationToken);
                 _console.WriteLine("Seed infrastructure is already recorded complete. "
                     + "Run normal public HTTPS and server maintenance checks; do not provision another VPS.");
                 return CliExitCodes.Success;
@@ -101,7 +105,30 @@ public sealed partial class CliApplication
                 options.GetValueOrDefault("--approve"),
                 options.GetValueOrDefault("--confirm-console-fingerprint"),
                 cancellationToken);
+            if (state.IsComplete) await RegisterCompletedSeedAsync(state, journal, cancellationToken);
             return state.IsComplete ? CliExitCodes.Success : CliExitCodes.ValidationError;
+        }
+    }
+
+    private async Task RegisterCompletedSeedAsync(SeedState state, SeedJournal journal, CancellationToken ct)
+    {
+        if (state.InstanceRegistered) return;
+        try
+        {
+            var entry = await _instances.RegisterSeedAsync(state, journal.DirectoryPath, ct);
+            state.InstanceRegistered = true;
+            journal.Save(state);
+            _console.WriteLine($"Registered instance '{entry.Name}'.");
+        }
+        catch (CliCommandException error)
+        {
+            throw new CliCommandException(error.ExitCode, "Seed installation completed, but local instance "
+                + $"registration failed: {error.Message} To retry registration, run 'municode seed resume {state.Id}'.");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
+        {
+            throw new CliCommandException(CliExitCodes.ValidationError, "Seed installation completed, but local "
+                + $"instance registration could not be saved. Check protected files and retry 'municode seed resume {state.Id}'.");
         }
     }
 
@@ -136,6 +163,7 @@ public sealed partial class CliApplication
         _console.WriteLine("  municode seed plan --provider <hetzner|digitalocean|vultr> --region <id> --size <id>");
         _console.WriteLine("    --dashboard-hostname <name> --api-hostname <name> --gateway-domain <name>");
         _console.WriteLine("    --release <municode-vX.Y.Z> --credential-file <owner-only-path>");
+        _console.WriteLine("    [--instance-name <name>] (defaults to the dashboard hostname)");
         _console.WriteLine("  municode seed apply <operation> --credential-file <path> --approve <digest>");
         _console.WriteLine("  municode seed resume <operation> --credential-file <path> [--confirm-console-fingerprint <SHA256:...>]");
         _console.WriteLine("  municode seed status <operation>");

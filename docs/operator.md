@@ -250,6 +250,28 @@ output and the one-time token immediately after success. Test the private candid
 an isolated provider registration and plan before enabling user workspace admission. See
 [control-plane policy](setup/control-plane.md) and [runtime setup](setup/runtime.md).
 
+## Register a control plane
+
+Register any deploy-capable control plane reachable over SSH as root or as a
+user with passwordless `sudo -n`. Use a host, `user@host`, `host:port`, or an
+SSH config alias. Verify the SHA256 fingerprint independently before confirming
+it; non-interactive use requires the flag.
+
+```sh
+municode instance add production --ssh ops@control.example.com \
+  --confirm-host-fingerprint "$verified_fingerprint"
+municode instance list
+municode instance show production
+municode instance remove production
+```
+
+All four commands accept `--json`. `show` makes a live read-only SSH probe;
+`list` shows local registrations and `remove` never changes the host. The
+registry stores the pinned public host key and, if given, the path from
+`--identity-file`, not the private key. Seed registers automatically using its
+protected journal key. To override the default name (the dashboard hostname),
+pass `--instance-name <name>` to `municode seed plan`.
+
 ## Operate and upgrade
 
 Back up PostgreSQL, OpenBao, Caddy state, installation state and protected secrets

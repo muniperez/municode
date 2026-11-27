@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using Municode.Cli.Api;
 using Municode.Cli.Auth;
+using Municode.Cli.Instances;
 using Municode.Cli.Seed;
 
 namespace Municode.Cli.Commands;
@@ -17,6 +18,7 @@ public sealed partial class CliApplication
     private readonly TokenStore _tokenStore;
     private readonly MunicodeApiClient _apiClient;
     private readonly SeedRuntime _seed;
+    private readonly InstanceRegistry _instances;
 
     public CliApplication(
         IConsole console,
@@ -32,13 +34,15 @@ public sealed partial class CliApplication
         CliEnvironment environment,
         TokenStore tokenStore,
         MunicodeApiClient apiClient,
-        SeedRuntime seed)
+        SeedRuntime seed,
+        ISeedProcess? instanceSsh = null)
     {
         _console = console;
         _environment = environment;
         _tokenStore = tokenStore;
         _apiClient = apiClient;
         _seed = seed;
+        _instances = new InstanceRegistry(environment.ConfigHome, instanceSsh ?? SeedProcess.Default);
     }
 
     public async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
@@ -66,6 +70,7 @@ public sealed partial class CliApplication
             return args[0] switch
             {
                 "seed" => await RunSeedAsync(args.Skip(1).ToArray(), cancellationToken),
+                "instance" => await RunInstanceAsync(args.Skip(1).ToArray(), cancellationToken),
                 "config" => RunConfig(args.Skip(1).ToArray()),
                 "token" => await RunTokenAsync(args.Skip(1).ToArray(), cancellationToken),
                 "login" => await RunLoginAsync(args.Skip(1).ToArray(), cancellationToken),
@@ -174,6 +179,7 @@ public sealed partial class CliApplication
         _console.WriteLine("Commands:");
         _console.WriteLine("  workspaces  Create, inspect, start, stop, and delete workspaces");
         _console.WriteLine("  seed        Plan, apply, and safely resume control-plane provisioning");
+        _console.WriteLine("  instance    Manage locally registered control planes over pinned SSH");
         _console.WriteLine("  login       Log in through the browser or with an API token");
         _console.WriteLine("  token       Store an API authentication token");
         _console.WriteLine("  config      Show or update the Municode API URL");
@@ -209,6 +215,9 @@ public sealed partial class CliApplication
                 return CliExitCodes.Success;
             case "seed":
                 PrintSeedHelp();
+                return CliExitCodes.Success;
+            case "instance" or "instance add" or "instance list" or "instance show" or "instance remove":
+                PrintInstanceHelp();
                 return CliExitCodes.Success;
             case "version":
                 PrintVersion();
