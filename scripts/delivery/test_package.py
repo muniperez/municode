@@ -509,5 +509,157 @@ class PackageTests(unittest.TestCase):
         self.assertIn("Environment contract keys do not match", rejected.stderr)
 
 
+class LocalBuildTests(unittest.TestCase):
+    def setUp(self):
+        artifacts = ROOT / ".local" / "artifacts"
+        artifacts.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(prefix="local-release-test-", dir=artifacts)
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name) / "checkout"
+        self.root.mkdir()
+        self.git("init", "--quiet")
+        for directory in ("packaging", "scripts/delivery"):
+            shutil.copytree(ROOT / directory, self.root / directory, ignore=shutil.ignore_patterns("test_*.py"))
+        (self.root / "docs").mkdir()
+        for name in ("operator.md", "user.md"):
+            (self.root / "docs" / name).write_text("Selected source revision\n")
+        (self.root / ".gitignore").write_text(".local/\n")
+        self.git("add", ".")
+        self.commit("First tree")
+        self.revision = self.git("rev-parse", "HEAD").strip()
+        self.git("tag", "requested")
+        (self.root / "docs" / "operator.md").write_text("Wrong source revision\n")
+        self.git("add", ".")
+        self.commit("Second tree")
+
+        fake_bin = self.root.parent / "bin"
+        fake_bin.mkdir()
+        tool = fake_bin / "fake-tool"
+        tool.write_text(
+            "#!/usr/bin/env python3\n"
+            "from pathlib import Path\n"
+            "import sys\n"
+            "tool, *args = sys.argv\n"
+            "tool = Path(tool).name\n"
+            "if tool == 'dotnet' and args[0] == 'publish':\n"
+            "    out = Path(args[args.index('-o') + 1])\n"
+            "    out.mkdir(parents=True)\n"
+            "    name = Path(args[1]).stem\n"
+            "    filename = ('municode.exe' if out.name == 'win-x64' else 'municode') if name.endswith('.Cli') else name + '.dll'\n"
+            "    binary = out / filename\n"
+            "    binary.write_text('synthetic binary')\n"
+            "    binary.chmod(0o755)\n"
+            "elif tool == 'dotnet':\n"
+            "    assert args[1:] == ['migrations', 'list', '--json']\n"
+            f"    print({json.dumps(MIGRATIONS)!r})\n"
+            "elif tool == 'npm':\n"
+            "    if args[:2] == ['run', 'build']:\n"
+            "        out = Path('.local/artifacts/dashboard-dist')\n"
+            "        out.mkdir(parents=True)\n"
+            "        (out / 'index.html').write_text(Path('docs/operator.md').read_text())\n"
+            "    else:\n"
+            "        assert args == ['ci', '--prefix', 'modules/dashboard']\n"
+            "elif tool == 'docker':\n"
+            "    if args[:2] == ['buildx', 'build']:\n"
+            "        name = Path(args[args.index('--file') + 1]).parent.name\n"
+            "        assert name in ('Municode.Api', 'Municode.Worker', 'Municode.Gateway')\n"
+            "        assert args[2:5] == ['--platform', 'linux/arm64', '--load'] and args[-1] == '.'\n"
+            "        assert not Path('untracked').exists()\n"
+            "    elif args[:2] == ['image', 'inspect']:\n"
+            "        name = args[-1].split(':')[0]\n"
+            "        print('sha256:' + {'municode-api': 'a', 'municode-worker': 'b', 'municode-gateway': 'c'}[name] * 64)\n"
+            "    elif args[:2] == ['image', 'save']:\n"
+            "        assert args[2] == '--output' and args[-1].startswith('sha256:')\n"
+            "        Path(args[3]).write_text(args[-1])\n"
+            "    else:\n"
+            "        assert args[:2] == ['image', 'rm']\n"
+        )
+        tool.chmod(0o755)
+        for name in ("docker", "dotnet", "npm"):
+            (fake_bin / name).symlink_to(tool)
+        self.env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ["PATH"])
+
+    def git(self, *args):
+        return subprocess.check_output(["git", "-C", str(self.root), *args], text=True)
+
+    def commit(self, message):
+        self.git("-c", "user.name=Test", "-c", "user.email=test@example.test",
+                 "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", message)
+
+    def build(self, *args, check=True):
+        return subprocess.run([self.root / "scripts" / "delivery" / "build-release.sh", *args],
+                              cwd=self.root, env=self.env, check=check, capture_output=True, text=True)
+
+    def test_requires_ref_and_rejects_unsupported_platform(self):
+        for args, expected in (([], "required: --ref"),
+                               (["--ref", "HEAD", "--platform", "windows/amd64"], "invalid choice")):
+            with self.subTest(args=args):
+                result = self.build(*args, check=False)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(expected, result.stderr)
+
+    def test_dirty_tree_requires_override_and_records_it_without_building_dirty_files(self):
+        (self.root / "untracked").touch()
+        result = self.build("--ref", "requested", check=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Checkout is dirty", result.stderr)
+        self.assertFalse((self.root / ".local" / "artifacts" / "release").exists())
+        (self.root / "docs" / "operator.md").write_text("Uncommitted content\n")
+        output = Path(self.build("--ref", "HEAD", "--platform", "linux/arm64", "--allow-dirty")
+                      .stdout.splitlines()[-1])
+        manifest = json.loads((output / "release-manifest.json").read_text())
+        self.assertIs(manifest["sourceDirty"], True)
+        with tarfile.open(output / manifest["bundle"]) as archive:
+            entry = archive.extractfile("municode-0.0.0-local/dashboard/index.html")
+            self.assertEqual(entry.read(), b"Wrong source revision\n")
+
+    def test_build_uses_exact_ref_and_verifies_image_inventory(self):
+        output = Path(self.build("--ref", "requested", "--platform", "linux/arm64").stdout.splitlines()[-1])
+        manifest_path = output / "release-manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        archive = output / manifest["bundle"]
+        bundle_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        self.assertEqual(output.name, f"local-{self.revision[:12]}-{bundle_digest[:12]}")
+        self.assertEqual(list(output.parent.iterdir()), [output])
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assertEqual(self.git("worktree", "list", "--porcelain").count("worktree "), 1)
+        self.assertEqual(manifest["sourceRevision"], self.revision)
+        self.assertIs(manifest["sourceDirty"], False)
+        self.assertEqual(manifest["imagePlatform"], "linux/arm64")
+        self.assertEqual(manifest["deployProtocol"], 1)
+        self.assertEqual(manifest["migrations"], MIGRATIONS)
+        self.assertEqual((output / "checksums.txt").read_text().splitlines(), [
+            f"{bundle_digest}  {archive.name}",
+            f"{hashlib.sha256(manifest_path.read_bytes()).hexdigest()}  {manifest_path.name}",
+        ])
+        self.assertFalse((output / "checksums.txt.sigstore.json").exists())
+        extracted = self.root.parent / "unpacked"
+        with tarfile.open(archive) as bundle:
+            bundle.extractall(extracted, filter="data")
+        release = extracted / "municode-0.0.0-local"
+        self.assertEqual((release / "dashboard" / "index.html").read_text(), "Selected source revision\n")
+        self.assertEqual((release / manifest_path.name).read_bytes(), manifest_path.read_bytes())
+        env = (release / ".env.example").read_text()
+        self.assertIn("MUNICODE_RUNTIME_PULL_POLICY=never\n", env)
+        self.assertEqual(set(manifest["imageArchives"]), {"api", "worker", "gateway"})
+        for name, letter in (("api", "a"), ("worker", "b"), ("gateway", "c")):
+            config = letter * 64
+            image_id = f"sha256:{config}"
+            reference = f"municode-{name}:local-{config}"
+            path = f"images/{name}.tar"
+            self.assertEqual((release / path).read_text(), image_id)
+            self.assertEqual(manifest["imageArchives"][name], {
+                "path": path, "sha256": hashlib.sha256(image_id.encode()).hexdigest(),
+                "imageId": image_id, "reference": reference,
+            })
+            self.assertIn(f"MUNICODE_{name.upper()}_IMAGE={reference}\n", env)
+        command = [sys.executable, "-B", str(release / "verify_bundle.py")]
+        subprocess.run(command, check=True)
+        (release / "images" / "api.tar").write_text("corrupted")
+        result = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Local image archive digest mismatch: api", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

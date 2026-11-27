@@ -4,7 +4,8 @@ x-installation-labels: &installation-labels
   com.municode.installation-id: ${MUNICODE_INSTALLATION_ID:?set MUNICODE_INSTALLATION_ID}
 
 x-runtime: &runtime
-  image: ${MUNICODE_DOTNET_IMAGE:?set MUNICODE_DOTNET_IMAGE}
+  user: "0"
+  pull_policy: ${MUNICODE_RUNTIME_PULL_POLICY:-missing}
   entrypoint: ["/usr/bin/dotnet"]
   restart: unless-stopped
   read_only: true
@@ -215,6 +216,7 @@ services:
 
   api-migrate:
     <<: *runtime
+    image: ${MUNICODE_API_IMAGE:-${MUNICODE_DOTNET_IMAGE:?set MUNICODE_DOTNET_IMAGE}}
     restart: "no"
     command: ["/opt/municode/Municode.Api.dll", "migrate"]
     environment:
@@ -237,6 +239,7 @@ services:
 
   api-bootstrap:
     <<: *runtime
+    image: ${MUNICODE_API_IMAGE:-${MUNICODE_DOTNET_IMAGE:?set MUNICODE_DOTNET_IMAGE}}
     profiles: ["maintenance"]
     restart: "no"
     entrypoint: ["/usr/bin/dotnet", "/opt/municode/Municode.Api.dll", "bootstrap"]
@@ -260,6 +263,7 @@ services:
 
   api:
     <<: *runtime
+    image: ${MUNICODE_API_IMAGE:-${MUNICODE_DOTNET_IMAGE:?set MUNICODE_DOTNET_IMAGE}}
     command: ["/opt/municode/Municode.Api.dll"]
     environment:
       <<: *shared-environment
@@ -295,6 +299,7 @@ services:
 
   worker:
     <<: *runtime
+    image: ${MUNICODE_WORKER_IMAGE:-${MUNICODE_DOTNET_IMAGE:?set MUNICODE_DOTNET_IMAGE}}
     command: ["/opt/municode/Municode.Worker.dll"]
     environment:
       <<: *shared-environment
@@ -327,6 +332,7 @@ services:
 
   workspace-gateway:
     <<: *runtime
+    image: ${MUNICODE_GATEWAY_IMAGE:-${MUNICODE_DOTNET_IMAGE:?set MUNICODE_DOTNET_IMAGE}}
     command: ["/opt/municode/Municode.Gateway.dll"]
     environment:
       ASPNETCORE_URLS: http://+:8080
