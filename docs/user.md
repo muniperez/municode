@@ -42,7 +42,9 @@ Seed never authenticates a workspace user. By default it reuses its provider
 credential as `Default provider` with a default workspace plan on stock Ubuntu,
 so the first owner can create a coding VM right after setup. With
 `--workspace-provider no`, register a provider, image and plan in the dashboard
-before creating the first coding VM.
+before creating the first coding VM. Seed uses a signed `--release <tag>` by
+default; `--bundle-dir <dir> --trust local-build` seeds an unsigned local build
+instead (see [the operator guide](operator.md#seed-a-fresh-control-plane)).
 
 For control-plane registration, use `municode instance add`, `list`, `show`,
 or `remove`. See [the operator command reference](operator.md#register-a-control-plane).

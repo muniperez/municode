@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Municode.Cli.Commands;
+using Municode.Cli.Deploy;
 
 namespace Municode.Cli.Seed;
 
@@ -123,17 +124,18 @@ install -d -m 0700 __REMOTE__
         var remoteRelease = remote + "/release";
         await RequireSshAsync(state, directory,
             "install -d -m 0700 " + SeedGuard.SafeShellQuote(remoteRelease), cancellationToken);
-        var names = new[]
-        {
-            "release-manifest.json",
-            state.Plan.Release.BundleName,
-            "checksums.txt",
-            "checksums.txt.sigstore.json"
-        };
+        var localBuild = state.Plan.Release.Trust == DeployReleaseSource.LocalBuild;
+        string[] names = localBuild
+            ? ["release-manifest.json", state.Plan.Release.BundleName, "checksums.txt"]
+            : ["release-manifest.json", state.Plan.Release.BundleName, "checksums.txt", "checksums.txt.sigstore.json"];
         foreach (var name in names)
         {
             var local = Path.Combine(releaseDirectory, name);
-            SeedFiles.Check(local);
+            // A local build stays in its build output directory; its contents were re-verified against the plan.
+            if (localBuild)
+                SeedRelease.CheckLocalAsset(local, name.EndsWith(".tar.gz", StringComparison.Ordinal)
+                    ? 32L * 1024 * 1024 * 1024 : 128L * 1024 * 1024);
+            else SeedFiles.Check(local);
             await UploadAsync(state, directory, local, remoteRelease + "/" + name, cancellationToken);
         }
         var selection = state.Plan.Selection;
@@ -158,7 +160,8 @@ install -d -m 0700 __REMOTE__
              "--installation-id", Quote(state.InstallationId!),
              "--dashboard-hostname", Quote(selection.DashboardHostname),
              "--api-hostname", Quote(selection.ApiHostname),
-             "--gateway-domain", Quote(selection.GatewayDomain)]);
+             "--gateway-domain", Quote(selection.GatewayDomain),
+             .. (localBuild ? new[] { "--trust", DeployReleaseSource.LocalBuild } : [])]);
         var command = "cd " + Quote(remoteRelease)
             + " && sha256sum --check --strict --status checksums.txt"
             + " && if [ ! -f " + Quote(archiveRoot + "/.verified") + " ]; then "

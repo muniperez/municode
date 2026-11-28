@@ -7,7 +7,7 @@ usage() {
     echo "Usage: seed-start.sh --release-tag TAG --release-root PATH --installation-id ID" >&2
     echo "  --dashboard-hostname HOST --api-hostname HOST --gateway-domain DOMAIN" >&2
     echo "  --bundle-sha256 SHA --setup-token-output PATH [--host-root PATH] [--policy-file PATH]" >&2
-    echo "  [--management-address CIDR] [--workspace-defaults PATH]" >&2
+    echo "  [--management-address CIDR] [--workspace-defaults PATH] [--trust github-sigstore|local-build]" >&2
     exit 2
 }
 
@@ -23,6 +23,7 @@ policy_file=
 management_address=
 workspace_defaults=
 setup_token_output=
+trust=github-sigstore
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --release-tag) [ "$#" -ge 2 ] || usage; release_tag=$2; shift 2 ;;
@@ -37,12 +38,17 @@ while [ "$#" -gt 0 ]; do
         --management-address) [ "$#" -ge 2 ] || usage; management_address=$2; shift 2 ;;
         --workspace-defaults) [ "$#" -ge 2 ] || usage; workspace_defaults=$2; shift 2 ;;
         --setup-token-output) [ "$#" -ge 2 ] || usage; setup_token_output=$2; shift 2 ;;
+        --trust) [ "$#" -ge 2 ] || usage; trust=$2; shift 2 ;;
         *) usage ;;
     esac
 done
 [ -n "$release_tag" ] && [ -n "$release_root" ] && [ -n "$installation_id" ] &&
 [ -n "$dashboard_hostname" ] && [ -n "$api_hostname" ] && [ -n "$gateway_domain" ] &&
 [ -n "$bundle_sha256" ] && [ -n "$setup_token_output" ] || usage
+case "$trust" in
+    github-sigstore|local-build) ;;
+    *) usage ;;
+esac
 
 case "$release_root:$host_root:$setup_token_output" in
     /*:/*:/*) ;;
@@ -60,13 +66,40 @@ for command in docker python3; do
 done
 docker compose version >/dev/null
 
-set -- --host-root "$host_root" --bundle-sha256 "$bundle_sha256" --verified-release-tag "$release_tag" \
-    --installation-id "$installation_id" --dashboard-hostname "$dashboard_hostname" \
+# A local build has no signed tag; install_host.py then records trust local-build.
+set -- --host-root "$host_root" --bundle-sha256 "$bundle_sha256"
+if [ "$trust" = local-build ]; then
+    set -- "$@" --local-build
+else
+    set -- "$@" --verified-release-tag "$release_tag"
+fi
+set -- "$@" --installation-id "$installation_id" --dashboard-hostname "$dashboard_hostname" \
     --api-hostname "$api_hostname" --gateway-domain "$gateway_domain"
 [ -z "$policy_file" ] || set -- "$@" --policy-file "$policy_file"
 [ -z "$management_address" ] || set -- "$@" --management-address "$management_address"
 [ -z "$workspace_defaults" ] || set -- "$@" --workspace-defaults "$workspace_defaults"
 "$release_root/install.sh" "$@"
+
+if [ "$trust" = local-build ]; then
+    # Load and verify the bundled images with the deploy agent's checks before Compose needs them.
+    python3 -B - "$release_root" "$release_tag" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+try:
+    import deploy_host
+
+    manifest = json.loads((root / "release-manifest.json").read_text())
+    deploy_host.require("municode-v" + manifest["version"] == sys.argv[2],
+                        "The local build does not match the selected release tag.")
+    deploy_host.prime_images(deploy_host.Runner(), root, manifest)
+except (ImportError, OSError, ValueError, KeyError) as error:
+    sys.exit(f"Loading the local build's images failed: {error}")
+PY
+fi
 
 secrets_dir="${host_root%/}/etc/municode/secrets"
 compose() {

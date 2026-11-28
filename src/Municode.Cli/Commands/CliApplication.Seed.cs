@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 using System.Text.Json;
+using Municode.Cli.Deploy;
 using Municode.Cli.Instances;
 using Municode.Cli.Seed;
 
@@ -12,7 +13,8 @@ public sealed partial class CliApplication
     [
         "--provider", "--region", "--size", "--dashboard-hostname", "--api-hostname",
         "--gateway-domain", "--release", "--credential-file", "--approve",
-        "--confirm-console-fingerprint", "--instance-name", "--workspace-provider"
+        "--confirm-console-fingerprint", "--instance-name", "--workspace-provider",
+        "--bundle-dir", "--trust"
     ];
 
     private async Task<int> RunSeedAsync(string[] args, CancellationToken cancellationToken)
@@ -46,6 +48,16 @@ public sealed partial class CliApplication
         if (action == "plan")
         {
             operationId = Guid.NewGuid().ToString("N");
+            var tag = options.GetValueOrDefault("--release");
+            var bundleDirectory = options.GetValueOrDefault("--bundle-dir");
+            var trust = options.GetValueOrDefault("--trust");
+            SeedGuard.Require((tag is not null && bundleDirectory is null && trust is null)
+                || (tag is null && bundleDirectory is not null && trust == DeployReleaseSource.LocalBuild),
+                "Select exactly one release: --release <municode-vX.Y.Z>, or an unsigned local build with "
+                + "--bundle-dir <dir> --trust local-build.");
+            // Verify a local build before creating any journal so a rejected bundle leaves no state.
+            var localRelease = bundleDirectory is null ? null
+                : await _seed.Release().VerifyLocalAsync(bundleDirectory, cancellationToken);
             using var journal = new SeedJournal(_environment.ConfigHome, operationId, true);
             var selection = new SeedSelection(
                 RequiredSeedOption(options, "--provider"),
@@ -54,20 +66,21 @@ public sealed partial class CliApplication
                 RequiredSeedOption(options, "--dashboard-hostname"),
                 RequiredSeedOption(options, "--api-hostname"),
                 RequiredSeedOption(options, "--gateway-domain"),
-                RequiredSeedOption(options, "--release"));
+                localRelease?.Identity.Tag ?? tag!);
             selection.Validate();
             var instanceName = options.GetValueOrDefault("--instance-name");
             InstanceRegistry.ValidateName(instanceName ?? selection.DashboardHostname);
             var credential = SeedFiles.ReadCredential(RequiredSeedOption(options, "--credential-file"));
             var register = WorkspaceProviderChoice(options.GetValueOrDefault("--workspace-provider"), selection.Provider);
-            var release = await _seed.Release().VerifyAsync(
+            var release = localRelease ?? await _seed.Release().VerifyAsync(
                 selection.ReleaseTag, Path.Combine(journal.DirectoryPath, "release"), cancellationToken);
             using var provider = _seed.Providers(selection.Provider, credential, null);
             var quote = await provider.QuoteAsync(selection, operationId, register, cancellationToken);
             var state = new SeedState
             {
                 Id = operationId, Plan = new(selection, quote, release.Identity, instanceName),
-                RegisterWorkspaceProvider = register
+                RegisterWorkspaceProvider = register,
+                LocalBundleDirectory = localRelease?.Directory
             };
             journal.Save(state);
             _console.WriteLine("Seed operation: " + operationId);
@@ -87,6 +100,10 @@ public sealed partial class CliApplication
             }
             else
                 _console.WriteLine("Workspace provider: not registered. Add one in organization settings after setup.");
+            if (localRelease is not null)
+                _console.WriteLine("Unsigned local build (trust local-build, not a signed GitHub release): "
+                    + $"local-{release.Identity.SourceRevision[..12]}-{release.Identity.BundleSha256[..12]} from "
+                    + release.Directory);
             _console.WriteLine("Exact release: " + release.Identity.Tag
                 + " source " + release.Identity.SourceRevision
                 + " manifest " + release.Identity.ManifestSha256
@@ -108,9 +125,14 @@ public sealed partial class CliApplication
                 return CliExitCodes.Success;
             }
             var credential = SeedFiles.ReadCredential(RequiredSeedOption(options, "--credential-file"));
-            var release = await _seed.Release().VerifyAsync(
-                state.Plan.Selection.ReleaseTag, Path.Combine(journal.DirectoryPath, "release"),
-                cancellationToken);
+            SeedGuard.Require((state.LocalBundleDirectory is not null)
+                == (state.Plan.Release.Trust == DeployReleaseSource.LocalBuild),
+                "The seed journal's release trust and local bundle location disagree.");
+            var release = state.LocalBundleDirectory is { } localDirectory
+                ? await _seed.Release().VerifyLocalAsync(localDirectory, cancellationToken)
+                : await _seed.Release().VerifyAsync(
+                    state.Plan.Selection.ReleaseTag, Path.Combine(journal.DirectoryPath, "release"),
+                    cancellationToken);
             SeedGuard.Require(release.Identity == state.Plan.Release,
                 "The exact release identity changed. Refusing to resume or install another bundle.");
             using var provider = _seed.Providers(state.Plan.Selection.Provider, credential, null);
@@ -194,12 +216,15 @@ public sealed partial class CliApplication
         _console.WriteLine("Usage:");
         _console.WriteLine("  municode seed plan --provider <hetzner|digitalocean|vultr> --region <id> --size <id>");
         _console.WriteLine("    --dashboard-hostname <name> --api-hostname <name> --gateway-domain <name>");
-        _console.WriteLine("    --release <municode-vX.Y.Z> --credential-file <owner-only-path>");
+        _console.WriteLine("    (--release <municode-vX.Y.Z> | --bundle-dir <dir> --trust local-build)");
+        _console.WriteLine("    --credential-file <owner-only-path>");
         _console.WriteLine("    [--instance-name <name>] (defaults to the dashboard hostname) [--workspace-provider <yes|no>]");
         _console.WriteLine("  municode seed apply <operation> --credential-file <path> --approve <digest>");
         _console.WriteLine("  municode seed resume <operation> --credential-file <path> [--confirm-console-fingerprint <SHA256:...>]");
         _console.WriteLine("  municode seed status <operation>");
         _console.WriteLine("Plan is read-only except for protected local state and exact release verification.");
+        _console.WriteLine("--bundle-dir --trust local-build seeds an unsigned scripts/delivery/build-release.sh output");
+        _console.WriteLine("after the same manifest, checksum, image and archive checks as deploy; signed releases are the default.");
         _console.WriteLine("Seed provisions one control-plane VPS only and never creates coding VMs.");
         _console.WriteLine("Plan asks whether to reuse the same provider account for coding VMs (default yes); unattended plan keeps the default.");
         _console.WriteLine("On yes, the control plane registers it as 'Default provider' with a default stock-Ubuntu workspace plan");

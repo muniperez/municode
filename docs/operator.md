@@ -33,6 +33,16 @@ create a provider resource. Review the currency, hourly/monthly terms, taxes,
 traffic and optional-service exclusions. `municode` reports an approval digest;
 there is no `latest`, token-on-command-line or implicit-cost approval.
 
+To seed from an unsigned local build instead, build a clean bundle with
+[`build-release.sh`](../scripts/delivery/README.md) and replace `--release` with
+`--bundle-dir <dir> --trust local-build`. Plan requires exactly one of the two.
+It verifies the bundle's checksum inventory, archive component hashes and image
+archives, requires `sourceDirty: false` and the CLI's own source revision, and
+labels the plan as an unsigned local build. Apply and resume re-verify the same
+directory and refuse a changed bundle. The host loads and checks the bundle's
+image archives before starting Compose and records trust `local-build`, which
+is also reported by `/health/version`. Cosign is not needed for this path.
+
 Plan also decides whether to reuse the same provider account for coding VMs in
 the first organization. The default is yes: an interactive terminal asks
 `[Y/n]`, unattended plans choose yes, and `--workspace-provider no` opts out.

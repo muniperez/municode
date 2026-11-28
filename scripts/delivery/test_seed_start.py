@@ -37,8 +37,9 @@ import os
 from pathlib import Path
 import sys
 
-state = Path(os.environ["FAKE_STATE_DIR"])
-secrets = Path(os.environ["FAKE_SECRETS_DIR"])
+# deploy_host's runner passes only PATH and HOME; fall back to the fixture layout.
+state = Path(os.environ.get("FAKE_STATE_DIR") or Path(sys.argv[0]).resolve().parent.parent / "state")
+secrets = Path(os.environ.get("FAKE_SECRETS_DIR", state))
 args = sys.argv[1:]
 if args[:1] == ["compose"] and args != ["compose", "version"] and args[1] == "--project-name":
     release = Path(os.environ["FAKE_RELEASE_DIR"])
@@ -60,6 +61,12 @@ def exists(name):
     return (state / name).exists()
 
 if args == ["compose", "version"]:
+    raise SystemExit(0)
+if args[:3] == ["image", "load", "--input"]:
+    print("Loaded image ID: " + Path(args[3]).read_text().strip())
+    raise SystemExit(0)
+if args[:2] == ["image", "inspect"]:
+    print(args[-1])
     raise SystemExit(0)
 if args[:2] == ["compose", "exec"] and any(
         command in " ".join(args) for command in
@@ -318,6 +325,68 @@ class SeedStartTests(unittest.TestCase):
         rejected = subprocess.run([sys.executable, "-B", "-c", check, str(SEED_START.parent), str(source)],
                                   capture_output=True, text=True)
         self.assertIn("--workspace-defaults must hold", rejected.stderr)
+
+    def make_local_build(self, dirty=False):
+        # deploy_host imports digest from the (stubbed) bundle verifier.
+        (self.release / "verify_bundle.py").write_text(
+            "def main(root=None): pass\ndef digest(path): return '0' * 64\n")
+        manifest = json.loads((self.release / "release-manifest.json").read_text())
+        template = self.release / ".env.example"
+        dependencies = {key: value for key, value in (
+            line.split("=", 1) for line in template.read_text().splitlines()
+            if "=" in line and not line.startswith("#")) if key.endswith("_IMAGE")}
+        images, lines = {}, ["MUNICODE_RUNTIME_PULL_POLICY=never"]
+        (self.release / "images").mkdir()
+        for index, name in enumerate(("api", "worker", "gateway"), 1):
+            image_id = "sha256:" + str(index) * 64
+            (self.release / "images" / f"{name}.tar").write_text(image_id)
+            reference = f"municode-{name}:local-{image_id[7:]}"
+            images[name] = {"path": f"images/{name}.tar", "sha256": "0" * 64,
+                            "imageId": image_id, "reference": reference}
+            lines.append(f"MUNICODE_{name.upper()}_IMAGE={reference}")
+        with template.open("a") as stream:
+            stream.write("\n" + "\n".join(lines) + "\n")
+        contract = manifest["envContract"] | {line.split("=")[0]: {"owner": "release"} for line in lines}
+        (self.release / "env-contract.json").write_text(json.dumps(contract))
+        manifest.update(envContract=contract, version="0.0.0-local", sourceDirty=dirty, imagePlatform="linux/amd64",
+                        imageArchives=images, dependencies=dependencies)
+        (self.release / "release-manifest.json").write_text(json.dumps(manifest))
+        release_id = f"local-{'a' * 12}-{'b' * 12}"
+        self.install = self.host / "opt/municode/releases" / release_id
+        self.env["FAKE_RELEASE_DIR"] = str(self.install)
+        command = self.command()
+        command[command.index("--release-tag") + 1] = "municode-v0.0.0-local"
+        return command + ["--trust", "local-build"], release_id
+
+    def test_local_build_installs_with_local_trust_after_loading_bundled_images(self):
+        command, release_id = self.make_local_build()
+        completed = subprocess.run(command, env=self.env, capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        env = (self.install / ".env").read_text().splitlines()
+        self.assertIn("MUNICODE_RELEASE_TRUST=local-build", env)
+        self.assertEqual(json.loads(self.active.read_text())["releaseId"], release_id)
+        log = (self.state / "docker.log").read_text().splitlines()
+        loads = [index for index, line in enumerate(log) if line.startswith("image load --input")]
+        self.assertEqual([log[index].split()[3] for index in loads],
+                         [str(self.release / "images" / f"{name}.tar") for name in ("api", "worker", "gateway")])
+        self.assertIn("image tag " + "sha256:" + "1" * 64 + " municode-api:local-" + "1" * 64, log)
+        first_up = next(index for index, line in enumerate(log) if line.startswith("compose up"))
+        self.assertLess(max(loads), first_up)
+
+    def test_local_build_refuses_a_dirty_bundle_before_compose(self):
+        command, _ = self.make_local_build(dirty=True)
+        completed = subprocess.run(command, env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("clean local bundle", completed.stderr)
+        log = (self.state / "docker.log").read_text() if (self.state / "docker.log").exists() else ""
+        self.assertNotIn("compose up", log)
+        self.assertNotIn("image load", log)
+
+    def test_unknown_trust_is_rejected(self):
+        completed = subprocess.run(self.command() + ["--trust", "unsigned"], env=self.env,
+                                   capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 2)
+        self.assertFalse(self.host.exists())
 
     def test_openbao_commands_use_verified_internal_tls(self):
         completed = self.run_seed(

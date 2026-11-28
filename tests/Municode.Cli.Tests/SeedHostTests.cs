@@ -277,6 +277,41 @@ public sealed class SeedHostTests
         Assert.DoesNotContain(plain.Commands, command => command.Contains("workspace-defaults", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task LocalBuildUploadsItsOwnInventoryAndSelectsLocalTrustOnTheHost()
+    {
+        using var fixture = new HostFixture();
+        var signed = new DownloadProcess(Encoding.UTF8.GetBytes(new string('a', 64)));
+        var state = State();
+        state.HostFingerprint = "SHA256:" + new string('A', 43);
+        state.InstallationId = "workspaces-" + state.Id;
+        await new SeedHost(signed).InstallAsync(state, fixture.Root, ReleaseFiles(fixture.Root), CancellationToken.None);
+        Assert.Contains("checksums.txt.sigstore.json", signed.Uploads);
+        Assert.DoesNotContain(signed.Commands, command => command.Contains("--trust", StringComparison.Ordinal));
+
+        using var local = new HostFixture();
+        // Build output keeps ordinary file modes; the plan's verified identity is what is enforced.
+        var build = Path.Combine(local.Root, "local-build");
+        Directory.CreateDirectory(build);
+        string[] names = ["release-manifest.json", "municode-0.0.0-local-linux-any.tar.gz", "checksums.txt"];
+        foreach (var name in names) File.WriteAllText(Path.Combine(build, name), "fixture");
+        state.Plan = state.Plan with
+        {
+            Selection = state.Plan.Selection with { ReleaseTag = "municode-v0.0.0-local" },
+            Release = state.Plan.Release with
+            {
+                Tag = "municode-v0.0.0-local", BundleName = names[1], Trust = "local-build"
+            }
+        };
+        var process = new DownloadProcess(Encoding.UTF8.GetBytes(new string('a', 64)));
+        await new SeedHost(process).InstallAsync(state, local.Root, build, CancellationToken.None);
+        Assert.Equal(names, process.Uploads);
+        var extraction = Assert.Single(process.Commands, command =>
+            command.Contains("sha256sum --check --strict", StringComparison.Ordinal));
+        Assert.Contains("municode-v0.0.0-local", extraction);
+        Assert.Contains(" --trust local-build ", extraction);
+    }
+
     [Theory]
     [InlineData("127.0.0.1")]
     [InlineData("0.0.0.0")]
@@ -396,6 +431,7 @@ public sealed class SeedHostTests
         bool transferIsRaw = false) : ISeedProcess
     {
         public List<string> Commands { get; } = [];
+        public List<string> Uploads { get; } = [];
         public Dictionary<string, byte[]> Inputs { get; } = [];
 
         public Task<SeedProcessResult> RunAsync(
@@ -418,7 +454,9 @@ public sealed class SeedHostTests
             if (fileName == "scp")
             {
                 var destination = arguments[^1];
-                if (!destination.StartsWith("root@", StringComparison.Ordinal))
+                if (destination.StartsWith("root@", StringComparison.Ordinal))
+                    Uploads.Add(Path.GetFileName(arguments[^2]));
+                else
                 {
                     SeedFiles.WriteNew(destination,
                         transferIsRaw ? transfer!

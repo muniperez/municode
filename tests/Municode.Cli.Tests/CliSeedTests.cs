@@ -242,6 +242,67 @@ public sealed class CliSeedTests
     }
 
     [Fact]
+    public async Task LocalBuildSeedRecordsUnsignedTrustAndReverifiesTheSameBundleBeforeInstall()
+    {
+        using var fixture = new SeedCliFixture();
+        var bundle = Path.Combine(Path.GetTempPath(), "local-build");
+        var operation = await fixture.PlanLocalAsync(bundle);
+        Assert.Equal(0, fixture.Release.SignedCalls);
+        Assert.Contains("Unsigned local build (trust local-build", fixture.Console.Output);
+        Assert.Contains($"local-{new string('e', 12)}-{new string('d', 12)} from {bundle}", fixture.Console.Output);
+        using (var journal = new SeedJournal(fixture.Environment.ConfigHome, operation))
+        {
+            var state = journal.Load();
+            Assert.Equal("local-build", state.Plan.Release.Trust);
+            Assert.Equal("municode-v0.0.0-local", state.Plan.Selection.ReleaseTag);
+            Assert.Equal(bundle, state.LocalBundleDirectory);
+        }
+
+        Assert.Equal(CliExitCodes.ValidationError, await fixture.Application.RunAsync(
+            ["seed", "apply", operation, "--credential-file", fixture.CredentialPath, "--approve", fixture.Approval()],
+            CancellationToken.None));
+        Assert.Equal(CliExitCodes.Success, await fixture.Application.RunAsync(
+        [
+            "seed", "resume", operation, "--credential-file", fixture.CredentialPath,
+            "--confirm-console-fingerprint", FakeInstanceSsh.Fingerprint
+        ], CancellationToken.None));
+        Assert.Equal(0, fixture.Release.SignedCalls);
+        Assert.Equal([bundle, bundle, bundle], fixture.Release.LocalDirectories);
+        Assert.Equal(1, fixture.Host.InstallCalls);
+    }
+
+    [Fact]
+    public async Task ChangedLocalBuildIsRefusedBeforeAnyVpsIsCreated()
+    {
+        using var fixture = new SeedCliFixture();
+        var operation = await fixture.PlanLocalAsync(Path.Combine(Path.GetTempPath(), "local-build"));
+        fixture.Release.LocalBundleSha256 = new string('9', 64);
+        Assert.Equal(CliExitCodes.ValidationError, await fixture.Application.RunAsync(
+            ["seed", "apply", operation, "--credential-file", fixture.CredentialPath, "--approve", fixture.Approval()],
+            CancellationToken.None));
+        Assert.Contains("exact release identity changed", fixture.Console.Error);
+        Assert.Equal(0, fixture.Providers.CreateCalls);
+    }
+
+    [Theory]
+    [InlineData("--release", "municode-v1.2.3", "--bundle-dir", "/tmp/build", "--trust", "local-build")]
+    [InlineData("--bundle-dir", "/tmp/build")]
+    [InlineData("--bundle-dir", "/tmp/build", "--trust", "github-sigstore")]
+    [InlineData("--trust", "local-build")]
+    public async Task ReleaseSelectionRequiresExactlyOneSignedTagOrExplicitLocalBuild(params string[] release)
+    {
+        using var fixture = new SeedCliFixture();
+        var args = SeedPlanArgs(fixture.CredentialPath).Where((_, index) => index is not (14 or 15)).ToArray();
+        Assert.Equal("--credential-file", args[14]);
+        Assert.Equal(CliExitCodes.ValidationError, await fixture.Application.RunAsync(
+            [.. args, .. release], CancellationToken.None));
+        Assert.Contains("Select exactly one release", fixture.Console.Error);
+        Assert.Equal(0, fixture.Release.SignedCalls);
+        Assert.Empty(fixture.Release.LocalDirectories);
+        Assert.False(Directory.Exists(Path.Combine(fixture.Environment.ConfigHome, "seed")));
+    }
+
+    [Fact]
     public async Task WorkspaceProviderOptionAcceptsOnlyYesOrNo()
     {
         using var fixture = new SeedCliFixture();
@@ -319,6 +380,14 @@ public sealed class CliSeedTests
             return Regex.Match(Console.Output, @"Seed operation: ([0-9a-f]{32})").Groups[1].Value;
         }
 
+        public async Task<string> PlanLocalAsync(string bundle)
+        {
+            var args = SeedPlanArgs(CredentialPath).Where((_, index) => index is not (14 or 15)).ToArray();
+            Assert.Equal(CliExitCodes.Success, await Application.RunAsync(
+                [.. args, "--bundle-dir", bundle, "--trust", "local-build"], CancellationToken.None));
+            return Regex.Match(Console.Output, @"Seed operation: ([0-9a-f]{32})").Groups[1].Value;
+        }
+
         public string Approval() => ApprovalValue.Split(' ')
             .Last(value => Regex.IsMatch(value, "^[0-9a-f]{64}$"));
 
@@ -381,13 +450,27 @@ public sealed class CliSeedTests
 
     private sealed class ReleaseFixture : ISeedRelease
     {
+        public int SignedCalls { get; private set; }
+        public List<string> LocalDirectories { get; } = [];
+        public string LocalBundleSha256 { get; set; } = new('d', 64);
+
         public Task<SeedVerifiedRelease> VerifyAsync(
             string tag,
             string directory,
             CancellationToken cancellationToken)
         {
+            SignedCalls++;
             SeedFiles.CreateDirectory(directory);
             return Task.FromResult(new SeedVerifiedRelease(Identity(tag), directory));
+        }
+
+        public Task<SeedVerifiedRelease> VerifyLocalAsync(string directory, CancellationToken cancellationToken)
+        {
+            LocalDirectories.Add(directory);
+            return Task.FromResult(new SeedVerifiedRelease(new(
+                "municode-v0.0.0-local", "municode", "https://github.com/muniperez/municode",
+                new string('e', 40), "municode-0.0.0-local-linux-any.tar.gz",
+                LocalBundleSha256, new string('f', 64), "local-build"), directory));
         }
 
         public static SeedReleaseIdentity Identity(string tag) => new(

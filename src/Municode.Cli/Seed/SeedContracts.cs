@@ -192,6 +192,9 @@ internal sealed class SeedState
     public bool RegisterWorkspaceProvider { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool WorkspaceProviderStaged { get; set; }
+    // Directory of an explicitly trusted local build; apply and resume re-verify it against the approved identity.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LocalBundleDirectory { get; set; }
 
     [JsonIgnore]
     public bool IsComplete => Phase == "complete";
@@ -235,6 +238,8 @@ internal sealed record SeedVerifiedRelease(SeedReleaseIdentity Identity, string 
 internal interface ISeedRelease
 {
     Task<SeedVerifiedRelease> VerifyAsync(string tag, string directory, CancellationToken cancellationToken);
+    // Unsigned output of scripts/delivery/build-release.sh; selected only by an explicit --trust local-build.
+    Task<SeedVerifiedRelease> VerifyLocalAsync(string directory, CancellationToken cancellationToken);
 }
 
 internal sealed class SeedRuntime
