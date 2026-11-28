@@ -387,7 +387,7 @@ public sealed class CliDeployTests
             if (command.Contains("mktemp -d", StringComparison.Ordinal))
             {
                 Assert.DoesNotContain("sudo", command);
-                return Result("/tmp/municode-deploy.AbCd012345");
+                return Result("/var/tmp/municode-deploy.AbCd012345");
             }
             if (command.Contains("rmdir ", StringComparison.Ordinal))
             {
