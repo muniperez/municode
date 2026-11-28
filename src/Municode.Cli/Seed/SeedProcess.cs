@@ -51,7 +51,10 @@ internal sealed class SeedProcess : ISeedProcess
         string fileName, IReadOnlyList<string> arguments, Stream? input, CancellationToken cancellationToken,
         Stream? destination = null)
     {
-        var start = new ProcessStartInfo(fileName)
+        var resolved = ResolveTool(fileName, Environment.GetEnvironmentVariable("PATH"))
+            ?? throw new CliCommandException(CliExitCodes.ValidationError,
+                $"Required seed tool is unavailable: {fileName}.");
+        var start = new ProcessStartInfo(resolved)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -94,6 +97,48 @@ internal sealed class SeedProcess : ISeedProcess
         return new(process.ExitCode, (output + errorText).Length <= 4 * 1024 * 1024
             ? output
             : output[..Math.Min(output.Length, 4 * 1024 * 1024)]);
+    }
+
+    // Bare names are resolved against PATH only; .NET would otherwise try the executable's
+    // directory and the current directory first.
+    internal static string? ResolveTool(string fileName, string? searchPath)
+    {
+        if (fileName.Length == 0) return null;
+        if (fileName.Contains(Path.DirectorySeparatorChar) || fileName.Contains(Path.AltDirectorySeparatorChar))
+            return fileName;
+        if (string.IsNullOrEmpty(searchPath)) return null;
+        var candidates = new List<string> { fileName };
+        if (OperatingSystem.IsWindows() && !Path.HasExtension(fileName))
+        {
+            var extensions = Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD";
+            candidates.InsertRange(0, extensions.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(extension => fileName + extension));
+        }
+        foreach (var directory in searchPath.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!Path.IsPathFullyQualified(directory)) continue;
+            foreach (var candidate in candidates)
+            {
+                var path = Path.Combine(directory, candidate);
+                if (IsExecutableFile(path)) return path;
+            }
+        }
+        return null;
+    }
+
+    private static bool IsExecutableFile(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return false;
+            if (OperatingSystem.IsWindows()) return true;
+            const UnixFileMode execute = UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
+            return (File.GetUnixFileMode(path) & execute) != 0;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     public async Task<SeedProcessResult> RequireAsync(
