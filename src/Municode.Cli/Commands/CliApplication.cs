@@ -272,12 +272,16 @@ public sealed partial class CliApplication
     {
         try
         {
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-                Process.Start("open", url);
-            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
                 Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-            else
-                Process.Start("xdg-open", url);
+                return true;
+            }
+            var opener = SeedProcess.ResolveTool(
+                RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "open" : "xdg-open",
+                Environment.GetEnvironmentVariable("PATH"));
+            if (opener is null) return false;
+            Process.Start(opener, url);
             return true;
         }
         catch { return false; }
