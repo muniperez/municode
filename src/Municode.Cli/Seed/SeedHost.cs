@@ -119,6 +119,9 @@ if [ "__SMALL_VULTR__" = yes ] && ! docker compose run --help | grep -q -- '--pu
     trap - EXIT
     docker compose run --help | grep -q -- '--pull '
 fi
+if [ "__SMALL_VULTR__" = yes ]; then
+    apt-get clean
+fi
 systemctl enable --now docker
 install -d -m 0700 __REMOTE__
 """;
