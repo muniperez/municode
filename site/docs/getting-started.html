@@ -89,7 +89,7 @@
 
           <div class="callout">
             <p>
-              The bootstrap provider token is read only from a local owner-only file and is never copied to the control-plane server or stored as a workspace provider account. Seed does not create workspace VMs.
+              The bootstrap provider token is read only from a local owner-only file. By default, seed also registers it as the workspace provider account &ldquo;Default provider&rdquo;, sent over pinned SSH stdin and stored in OpenBao, never in logs or the seed journal. That lets the first owner launch a coding VM right after setup. Pass <code>--workspace-provider no</code> to keep it local; scripted runs never prompt. Seed itself does not create workspace VMs.
             </p>
           </div>
 

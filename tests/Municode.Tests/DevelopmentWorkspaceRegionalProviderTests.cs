@@ -298,6 +298,27 @@ public sealed class DevelopmentWorkspaceRegionalProviderTests
         Assert.Contains("muw:image=snap-owned", body.RootElement.GetProperty("tags").EnumerateArray().Select(x => x.GetString()));
     }
 
+    [Fact]
+    public async Task VultrStockUbuntuImageIsAnOperatingSystemIdNotASnapshot()
+    {
+        var handler = new TestHttpMessageHandler();
+        handler.QueueJsonResponse("""{"os":[{"id":1743,"family":"ubuntu","arch":"x64"},{"id":2284,"family":"ubuntu","arch":"x64"}],"meta":{"links":{"next":""}}}""");
+        handler.QueueJsonResponse(FirewallGroup());
+        handler.QueueJsonResponse($$$"""{"instance":{{{Instance(ComputeLabels(), "pending", "stopped")}}} }""", HttpStatusCode.Accepted);
+        var client = Vultr(handler);
+
+        var image = await client.GetWorkspaceImageAsync("2284", default);
+        await client.CreateWorkspaceServerAsync(
+            new("mc-devvm-test-g1", "vc2-4c-8gb", "fra", "2284", "#cloud-config\n", "fw-owned", ComputeLabels()), default);
+
+        Assert.Equal(("2284", "available", "system", "x86", "ubuntu"), (image!.Id, image.Status, image.Type, image.Architecture, image.OsFlavor));
+        Assert.Equal("/v2/os", new Uri(handler.RecordedRequests[0].Uri).AbsolutePath);
+        using var body = JsonDocument.Parse(handler.RecordedRequests[2].Body!);
+        Assert.Equal(2284, body.RootElement.GetProperty("os_id").GetInt32());
+        Assert.False(body.RootElement.TryGetProperty("snapshot_id", out _));
+        Assert.Contains("muw:image=2284", body.RootElement.GetProperty("tags").EnumerateArray().Select(x => x.GetString()));
+    }
+
     [Theory]
     [InlineData(1, "muw-foreign")]
     [InlineData(0, null)]

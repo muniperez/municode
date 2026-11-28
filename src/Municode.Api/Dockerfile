@@ -3,6 +3,7 @@ WORKDIR /src
 COPY Directory.Build.props ./
 COPY src/Municode.Api/ src/Municode.Api/
 COPY src/Municode.Common/ src/Municode.Common/
+COPY templates/development-workspaces/image/manifest.lock.json templates/development-workspaces/image/manifest.lock.json
 RUN dotnet publish src/Municode.Api -c Release -o /out --no-self-contained
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0

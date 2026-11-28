@@ -339,6 +339,79 @@ class BootstrapTests(unittest.TestCase):
                 build_info = value
                 builder.builder_guard("DESTROY-DISPOSABLE-IMAGE-BUILDER")
 
+    def test_stock_provision_guard_requires_acknowledgement_and_the_exact_uploaded_recipe(self):
+        recipe = hashlib.sha256((HERE / "image/manifest.lock.json").read_bytes()).hexdigest()
+        with patch.object(builder, "run") as process:
+            with self.assertRaisesRegex(runtime.Blocked, "acknowledgement"):
+                builder.provision_guard("DESTROY-DISPOSABLE-IMAGE-BUILDER", recipe)
+            with self.assertRaisesRegex(runtime.Blocked, "differs from the control plane"):
+                builder.provision_guard(builder.PROVISION_ACKNOWLEDGEMENT, "0" * 64)
+            process.assert_not_called()
+        original_read = Path.read_text
+        def read(path, *args, **kwargs):
+            if str(path) == "/etc/os-release":
+                return 'VERSION_ID="24.04"\n'
+            return original_read(path, *args, **kwargs)
+        def guard(enrolled=False, mounted=False):
+            with patch.object(builder.os, "geteuid", return_value=0), \
+                 patch.object(builder.os, "uname", return_value=SimpleNamespace(machine="x86_64")), \
+                 patch.object(builder.os.path, "ismount", return_value=mounted), \
+                 patch.object(Path, "exists", return_value=enrolled), \
+                 patch.object(Path, "read_text", read), patch.object(builder, "run", return_value="kvm"):
+                builder.provision_guard(builder.PROVISION_ACKNOWLEDGEMENT, recipe)
+        # Stock provider images carry no pinned cloud-image serial and need no builder marker.
+        guard()
+        with self.assertRaisesRegex(runtime.Blocked, "Already enrolled"):
+            guard(enrolled=True)
+        with self.assertRaisesRegex(runtime.Blocked, "precede the workspace volume"):
+            guard(mounted=True)
+
+    def test_stock_provision_is_idempotent_and_refuses_partial_state(self):
+        ARTIFACTS.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ARTIFACTS) as directory:
+            root = Path(directory)
+            recipe = hashlib.sha256((HERE / "image/manifest.lock.json").read_bytes()).hexdigest()
+            lock, codex, wrapper = root / "recipe.lock.json", root / "codex", root / "codex-device-auth"
+            wrapper.write_text("#!/bin/sh\n")
+            commands = []
+            def install(*args):
+                commands.append(("install", args[2]))
+                (root / "tools").mkdir()
+                codex.symlink_to("/opt/municode-tools/node_modules/.bin/codex")
+            tools = root / "tools"
+            with patch.object(builder, "RECIPE_LOCK", lock), patch.object(builder, "CODEX_DEVICE_AUTH_WRAPPER", wrapper), \
+                 patch.object(builder, "install", side_effect=install), patch.object(builder.os, "chown"), \
+                 patch.object(builder, "run", side_effect=lambda argv, **_: commands.append(argv[0]) or ""), \
+                 patch.object(builder.subprocess, "run"), \
+                 patch.object(builder, "Path", side_effect=lambda value, *rest: (
+                     tools if value == "/opt/municode-tools" else codex if value == "/usr/local/bin/codex"
+                     else Path(value, *rest))):
+                builder.provision(recipe, root / "state")
+                self.assertEqual(hashlib.sha256(lock.read_bytes()).hexdigest(), recipe)
+                self.assertEqual(os.readlink(codex), str(wrapper))
+                self.assertEqual(json.loads((root / "state/result.json").read_text()),
+                                 {"recipeSha256": recipe, "state": "Provisioned"})
+                commands.clear()
+                builder.provision(recipe, root / "state")
+                self.assertNotIn(("install", recipe), commands)
+                self.assertIn("systemctl", commands)
+                lock.unlink()
+                with self.assertRaisesRegex(runtime.Blocked, "partial state"):
+                    builder.provision(recipe, root / "state")
+
+    def test_enrollment_identity_is_the_recipe_lock_for_provisioned_vms(self):
+        ARTIFACTS.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ARTIFACTS) as directory:
+            lock = Path(directory) / "recipe.lock.json"
+            lock.write_bytes(b"pinned recipe")
+            recipe = hashlib.sha256(b"pinned recipe").hexdigest()
+            raw = b'{"provenance": {}}'
+            self.assertEqual(runtime.image_identity({"provenance": {}}, raw), hashlib.sha256(raw).hexdigest())
+            with patch.object(runtime, "RECIPE_LOCK", lock), patch.object(runtime.Linux, "verify_unit_file"):
+                self.assertEqual(runtime.image_identity({"provenance": {"recipeSha256": recipe}}, raw), recipe)
+                with self.assertRaisesRegex(runtime.Blocked, "recipe lock differs"):
+                    runtime.image_identity({"provenance": {"recipeSha256": "0" * 64}}, raw)
+
     def test_headless_auth_uses_verified_singular_scope_duration_and_sensitive_stdout(self):
         self.issue_session(["terminal:operate", "orchestration:operate", "terminal:read",
                             "orchestration:read", "source-control:write", "filesystem:read"])

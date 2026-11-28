@@ -90,6 +90,7 @@ internal sealed partial class SeedProvider : ISeedProvider
     public async Task<SeedQuote> QuoteAsync(
         SeedSelection selection,
         string operationId,
+        bool workspaceDefaults,
         CancellationToken cancellationToken)
     {
         selection.Validate();
@@ -107,6 +108,7 @@ internal sealed partial class SeedProvider : ISeedProvider
             "The provider did not return complete authoritative recurring pricing.");
         return quote with
         {
+            Workspace = workspaceDefaults ? await WorkspaceDefaultsAsync(selection, quote, cancellationToken) : null,
             CredentialScope = CredentialScope(operationId),
             RetrievedAt = DateTimeOffset.UtcNow
         };

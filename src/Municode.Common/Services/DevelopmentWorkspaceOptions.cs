@@ -4,7 +4,6 @@ public sealed class DevelopmentWorkspaceOptions
 {
     public const string SectionName = "DevelopmentWorkspaces";
 
-    public bool Enabled { get; set; }
     public int MaxActiveVms { get; set; } = 9;
     public int MaxVmsPerWorkspace { get; set; } = 3;
     public int MaxVmsPerOrganization { get; set; } = 3;
@@ -38,6 +37,11 @@ public sealed class DevelopmentWorkspaceProfile
 public sealed class DevelopmentWorkspaceImage
 {
     public string? DisplayName { get; set; }
+    /// <summary>
+    /// <c>snapshot</c>: a prepared provider snapshot. <c>ubuntu</c>: the provider's stock Ubuntu 24.04 image, which
+    /// the worker provisions over SSH from the release's pinned recipe on every start.
+    /// </summary>
+    public string Source { get; set; } = WorkspaceRecipe.SnapshotSource;
     public string ProviderImageId { get; set; } = string.Empty;
     public string Architecture { get; set; } = "linux/amd64";
     public string ManifestSha256 { get; set; } = string.Empty;

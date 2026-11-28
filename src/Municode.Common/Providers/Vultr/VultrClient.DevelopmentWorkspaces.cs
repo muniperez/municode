@@ -54,14 +54,18 @@ public sealed partial class VultrClient : IDevelopmentWorkspaceProvider
         if (firewall.Description != FirewallDescription(request.Labels))
             throw new InvalidOperationException("Workspace provider ownership does not match the recorded resource identity.");
         if (firewall.Rules < 1) throw new InvalidOperationException("Workspace firewall has no management rule.");
-        using var doc = await VultrRequestAsync(HttpMethod.Post, "instances", new
+        var body = new Dictionary<string, object>
         {
-            region = request.Region, plan = request.Sku, snapshot_id = VultrResourceId(request.ImageId),
-            label = request.Name, hostname = request.Name,
-            user_data = Convert.ToBase64String(Encoding.UTF8.GetBytes(request.UserData)),
-            firewall_group_id = VultrResourceId(request.FirewallId), enable_ipv6 = false, backups = "disabled",
-            activation_email = false, tags
-        }, ct);
+            ["region"] = request.Region, ["plan"] = request.Sku,
+            ["label"] = request.Name, ["hostname"] = request.Name,
+            ["user_data"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(request.UserData)),
+            ["firewall_group_id"] = VultrResourceId(request.FirewallId), ["enable_ipv6"] = false, ["backups"] = "disabled",
+            ["activation_email"] = false, ["tags"] = tags
+        };
+        // Stock operating systems have numeric IDs; snapshots are UUIDs.
+        if (StockOsId(request.ImageId) is { } osId) body["os_id"] = osId;
+        else body["snapshot_id"] = VultrResourceId(request.ImageId);
+        using var doc = await VultrRequestAsync(HttpMethod.Post, "instances", body, ct);
         var server = ReadInstance(doc!.RootElement.GetProperty("instance"));
         WorkspaceOwnership.Require(server.Labels, request.Labels);
         return new(server, new("instance-create", server.Id, "running"));
@@ -88,6 +92,17 @@ public sealed partial class VultrClient : IDevelopmentWorkspaceProvider
 
     public async Task<WorkspaceCloudImage?> GetWorkspaceImageAsync(string id, CancellationToken ct)
     {
+        if (StockOsId(id) is { } stock)
+        {
+            foreach (var os in await VultrListAsync("os", "os", ct))
+            {
+                if (os.GetProperty("id").GetInt32() != stock) continue;
+                var arch = os.TryGetProperty("arch", out var a) ? a.GetString() : null;
+                return new(id, "available", "system", arch == "x64" ? "x86" : arch ?? "",
+                    os.TryGetProperty("family", out var f) ? f.GetString() : null, new Dictionary<string, string>());
+            }
+            return null;
+        }
         using var doc = await VultrRequestAsync(HttpMethod.Get, "snapshots/" + VultrResourceId(id), null, ct);
         if (doc is null) return null;
         var snapshot = doc.RootElement.GetProperty("snapshot");
@@ -395,6 +410,9 @@ public sealed partial class VultrClient : IDevelopmentWorkspaceProvider
         await response.Content.LoadIntoBufferAsync(4 * 1024 * 1024, ct);
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
     }
+
+    private static int? StockOsId(string id) =>
+        id.Length is > 0 and <= 9 && id.All(char.IsAsciiDigit) ? int.Parse(id, System.Globalization.CultureInfo.InvariantCulture) : null;
 
     private static string VultrResourceId(string id) =>
         VultrId.IsMatch(id) ? id : throw new ArgumentException("Invalid provider resource identity.");

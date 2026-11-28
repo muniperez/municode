@@ -17,7 +17,8 @@ public sealed class DevelopmentWorkspaceException(string code, string message, b
 }
 
 public sealed partial class DevelopmentWorkspaceService(
-    WorkspaceDbContext db, IIdGenerator ids, TimeProvider clock, IOptions<DevelopmentWorkspaceOptions> options)
+    WorkspaceDbContext db, IIdGenerator ids, TimeProvider clock, IOptions<DevelopmentWorkspaceOptions> options,
+    IOptions<DevelopmentWorkspaceManagementOptions> management)
 {
     internal const long AdmissionLockId = 11020261117;
     private static readonly SemaphoreSlim AdmissionGate = new(1, 1);
@@ -367,6 +368,7 @@ public sealed partial class DevelopmentWorkspaceService(
     {
         if (vm.DesiredState == "running") return;
         await WorkspaceMaintenanceMode.RequireAdmissionAsync(db, ct);
+        ValidateManagementAddresses();
         if (vm.Kind == DevelopmentWorkspaceVmKinds.Ephemeral)
             vm.RepositoryCredentialRef = RepositoryCredential(ApprovedRepository(workspace.OrganizationId, vm.Repository, vm.BaseRef),
                 workspace.OrganizationId);
@@ -561,7 +563,7 @@ public sealed partial class DevelopmentWorkspaceService(
 
     private async Task<T> AtomicAsync<T>(Func<Task<T>> action, CancellationToken ct)
     {
-        EnsureEnabled();
+        ValidatePolicy();
         await AdmissionGate.WaitAsync(ct);
         try
         {
@@ -592,16 +594,47 @@ public sealed partial class DevelopmentWorkspaceService(
         finally { AdmissionGate.Release(); }
     }
 
-    private void EnsureEnabled()
+    private void ValidatePolicy()
     {
-        if (!Policy.Enabled) throw Conflict("workspaces_disabled", "Development workspaces are disabled by the operator.");
-        if (Policy.MaxActiveVms < 1 || Policy.MaxVmsPerWorkspace < 1
-            || Policy.MaxVmsPerOrganization < 1 || Policy.VolumeMonthlyRatePerGb <= 0
-            || Policy.MaxPricingAgeDays < 1 || Policy.PricingUpdatedAt is null || Policy.PricingUpdatedAt > Now
-            || Policy.PricingUpdatedAt < Now.AddDays(-Policy.MaxPricingAgeDays) || Policy.Currency.Length != 3
-            || Policy.IdleGraceMinutes < 1 || Policy.TaskLeaseSeconds is < 30 or > 900
+        var problems = PolicyProblems();
+        if (problems.Count > 0)
+            throw Invalid("workspace_policy_invalid",
+                "The deployment workspace policy is incomplete: " + string.Join("; ", problems) + ".");
+    }
+
+    // Names each missing or invalid deployment setting so an operator can fix the policy file directly.
+    private List<string> PolicyProblems()
+    {
+        const string section = DevelopmentWorkspaceOptions.SectionName + ":";
+        var problems = new List<string>();
+        if (Policy.MaxActiveVms < 1 || Policy.MaxVmsPerWorkspace < 1 || Policy.MaxVmsPerOrganization < 1)
+            problems.Add($"set {section}MaxActiveVms, MaxVmsPerWorkspace and MaxVmsPerOrganization quotas to at least 1");
+        if (Policy.VolumeMonthlyRatePerGb <= 0)
+            problems.Add($"set {section}VolumeMonthlyRatePerGb to the current volume pricing");
+        if (Policy.Currency.Length != 3)
+            problems.Add($"set {section}Currency to a three-letter pricing currency code");
+        if (Policy.MaxPricingAgeDays < 1)
+            problems.Add($"set {section}MaxPricingAgeDays to at least 1");
+        else if (Policy.PricingUpdatedAt is null)
+            problems.Add($"set {section}PricingUpdatedAt to when pricing was last reviewed");
+        else if (Policy.PricingUpdatedAt > Now)
+            problems.Add($"{section}PricingUpdatedAt is in the future; set it to when pricing was last reviewed");
+        else if (Policy.PricingUpdatedAt < Now.AddDays(-Policy.MaxPricingAgeDays))
+            problems.Add($"{section}PricingUpdatedAt is older than MaxPricingAgeDays; review pricing and update it");
+        if (Policy.IdleGraceMinutes < 1 || Policy.TaskLeaseSeconds is < 30 or > 900
             || Policy.HeartbeatTimeoutSeconds is < 15 or > 900 || Policy.OperationLeaseSeconds is < 30 or > 900)
-            throw Invalid("workspace_policy_invalid", "Explicit quota, current pricing and lease policy are required.");
+            problems.Add($"set {section}IdleGraceMinutes to at least 1, TaskLeaseSeconds and OperationLeaseSeconds to 30–900 and HeartbeatTimeoutSeconds to 15–900");
+        return problems;
+    }
+
+    private void ValidateManagementAddresses()
+    {
+        try { WorkspaceOwnership.RequireManagementAddresses(management.Value.ManagementAddresses); }
+        catch (ArgumentException)
+        {
+            throw Invalid("workspace_management_addresses_missing",
+                $"Set {DevelopmentWorkspaceManagementOptions.SectionName}:ManagementAddresses to the control-plane host's public address(es) as /32 or /128 CIDRs so workspace firewalls admit its SSH connections.");
+        }
     }
 
     private static void ValidateGitRequest(LaunchEphemeralDevelopmentWorkspaceVmRequest request)

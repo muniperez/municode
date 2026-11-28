@@ -91,6 +91,9 @@ describe("WorkspaceSelectionFields", () => {
     vi.mocked(getWorkspaceSelections).mockResolvedValueOnce({ available: true, options: [] });
     fireEvent.click(screen.getByRole("button", { name: "Reload options" }));
     expect(await screen.findByText(/No matching options/)).toBeInTheDocument();
+    vi.mocked(getWorkspaceSelections).mockResolvedValueOnce({ available: true, options: [], missingConfiguration: "Add a provider account." });
+    fireEvent.click(screen.getByRole("button", { name: "Reload options" }));
+    expect(await screen.findByText("Add a provider account.")).toBeInTheDocument();
   });
 
   it("ignores an old organization's response and scopes workspace eligibility", async () => {

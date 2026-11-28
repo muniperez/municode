@@ -22,7 +22,8 @@ public sealed class ProviderCatalogService(WorkspaceDbContext db, IIdGenerator i
         catch (ArgumentException) { throw new ProviderCatalogException("plan_name_invalid", "The plan name contains invalid Unicode."); }
     }
 
-    public async Task<ProviderPlan> CreateAsync(CreateProviderPlanRequest request, CancellationToken ct)
+    /// <param name="id">Seed registration only: a deterministic plan ID that the seeded policy references.</param>
+    public async Task<ProviderPlan> CreateAsync(CreateProviderPlanRequest request, CancellationToken ct, string? id = null)
     {
         var account = await LockAccountAsync(db, request.OrganizationId, request.ProviderAccountId, ct);
         if (!account.Enabled) throw new ProviderCatalogException("provider_disabled", "Enable the provider account before adding a plan.");
@@ -33,7 +34,7 @@ public sealed class ProviderCatalogService(WorkspaceDbContext db, IIdGenerator i
         var now = clock.GetUtcNow();
         var plan = new ProviderPlan
         {
-            Id = ids.NewId("plan"), OrganizationId = request.OrganizationId, ProviderAccountId = account.Id,
+            Id = id ?? ids.NewId("plan"), OrganizationId = request.OrganizationId, ProviderAccountId = account.Id,
             ProviderAccount = account, Name = name, NormalizedName = key, Region = request.Region.Trim(), Sku = request.Sku.Trim(),
             Image = string.IsNullOrWhiteSpace(request.Image) ? DefaultImage(account.ProviderType) : request.Image.Trim(),
             BuildPlatform = request.BuildPlatform, Enabled = request.Enabled, CreatedAt = now, UpdatedAt = now

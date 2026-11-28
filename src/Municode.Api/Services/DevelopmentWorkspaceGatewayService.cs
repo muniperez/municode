@@ -20,7 +20,7 @@ public sealed class DevelopmentWorkspaceGatewayService(
 
     public async Task<bool> AuthorizeCertificateAsync(string domain, CancellationToken ct)
     {
-        if (!workspaces.Value.Enabled || !Options.TryParseHost(domain, out var generation, out var service)) return false;
+        if (!Options.TryParseHost(domain, out var generation, out var service)) return false;
         var now = time.GetUtcNow();
         var heartbeatDeadline = now.AddSeconds(-Math.Clamp(workspaces.Value.HeartbeatTimeoutSeconds, 10, 300));
         var routes = db.DevelopmentWorkspaceGatewayRoutes.AsNoTracking()
@@ -48,7 +48,7 @@ public sealed class DevelopmentWorkspaceGatewayService(
         ControlPlanePrincipal principal, string workspaceId, string vmId,
         DevelopmentWorkspaceGatewayLaunchRequest request, CancellationToken ct)
     {
-        if (!Options.IsConfigured || !workspaces.Value.Enabled) return null;
+        if (!Options.IsConfigured) return null;
         var vm = await db.DevelopmentWorkspaceVms.AsNoTracking().SingleOrDefaultAsync(
             x => x.Id == vmId && x.WorkspaceId == workspaceId, ct);
         if (vm is null || !await authorization.CanAccessOrganizationAsync(
@@ -113,7 +113,7 @@ public sealed class DevelopmentWorkspaceGatewayService(
     }
 
     private bool ValidRequest(DevelopmentWorkspaceGatewayReceiptRequest request) =>
-        Options.IsConfigured && workspaces.Value.Enabled && request.Receipt.Length == 64 && Options.AcceptHost(request.Host);
+        Options.IsConfigured && request.Receipt.Length == 64 && Options.AcceptHost(request.Host);
 
     public async Task<(string WorkspaceId, string OrganizationId, string VmId, long Generation)?> AuthorizeActivityAsync(
         DevelopmentWorkspaceGatewayReceiptRequest request, CancellationToken ct)

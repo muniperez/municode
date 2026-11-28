@@ -250,10 +250,12 @@ services:
       ConnectionStrings__Municode: Host=postgres;Port=5432;Database=municode;Username=municode
       Kratos__AdminBaseUrl: http://kratos:4434/
       Bootstrap__InstallationId: ${MUNICODE_INSTALLATION_ID:?set MUNICODE_INSTALLATION_ID}
+      SeedProviderRegistration__StagingFile: /run/municode-seed-provider/provider.json
     secrets:
       - app-db-password
     volumes:
       - ./runtime/api:/opt/municode:ro
+      - seed-provider:/run/municode-seed-provider
       - type: bind
         source: ${MUNICODE_SECRETS_DIR:?set MUNICODE_SECRETS_DIR}/bootstrap
         target: /run/municode-bootstrap
@@ -280,6 +282,7 @@ services:
       MUNICODE_RELEASE_TAG: ${MUNICODE_RELEASE_TAG:-unknown}
       MUNICODE_RELEASE_SOURCE_REVISION: ${MUNICODE_RELEASE_SOURCE_REVISION:-unknown}
       MUNICODE_RELEASE_TRUST: ${MUNICODE_RELEASE_TRUST:-unknown}
+      SeedProviderRegistration__StagingFile: /run/municode-seed-provider/provider.json
     secrets:
       - app-db-password
       - workspace-gateway-credential
@@ -288,6 +291,7 @@ services:
       - ./runtime/api:/opt/municode:ro
       - *workspace-policy
       - openbao-agent-token:/run/municode-openbao:ro
+      - seed-provider:/run/municode-seed-provider
     depends_on:
       api-migrate:
         condition: service_completed_successfully
@@ -423,6 +427,9 @@ volumes:
   caddy-data:
     labels: *installation-labels
   caddy-config:
+    labels: *installation-labels
+  # Holds an opted-in seed provider credential only until the API registers it after first-owner setup.
+  seed-provider:
     labels: *installation-labels
 
 networks:

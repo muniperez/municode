@@ -2,7 +2,6 @@
 """One-shot prepared-image bootstrap. Never installs tools; formats only blank new raw volumes."""
 import argparse
 import errno
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,7 +12,7 @@ import time
 import urllib.error
 import urllib.request
 
-from runtime import (Blocked, atomic_json, canonical_remote, load_config, qualified_t3,
+from runtime import (Blocked, atomic_json, canonical_remote, image_identity, load_config, qualified_t3,
                      read_image_manifest, require, run, t3_descriptor_matches)
 
 
@@ -89,6 +88,7 @@ def bootstrap(config_path, enrollment_path, state_dir):
     intent = state / "enrollment-intent.json"
     require(not intent.exists(), "Enrollment already attempted; reconcile ambiguous result, do not replay")
     manifest, manifest_bytes = read_image_manifest()
+    image_digest = image_identity(manifest, manifest_bytes)
     t3 = qualified_t3(manifest)
     request = dict(vmId=c["vmId"], generation=c["generation"],
                    operationId=enrollment["operationId"], action="bootstrap")
@@ -121,7 +121,7 @@ def bootstrap(config_path, enrollment_path, state_dir):
     # Enrollment means runtime ready, not T3 gateway authenticated. Parent registers the gateway later.
     body = dict(schemaVersion=1, vmId=c["vmId"], generation=c["generation"], kind=c["kind"],
                 operationId=enrollment["operationId"],
-                imageManifestSha256=hashlib.sha256(manifest_bytes).hexdigest(),
+                imageManifestSha256=image_digest,
                 bootstrapReceipt=ready)
     atomic_json(intent, dict(vmId=c["vmId"], generation=c["generation"],
                              operationId=enrollment["operationId"], attemptedAt=time.time()))

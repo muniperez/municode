@@ -220,7 +220,7 @@ public sealed partial class DevelopmentWorkspaceProcessorTests
             Assert.Equal("https://control.example.test/api/development-workspaces/runtime/enroll",
                 enrollment.GetProperty("url").GetString());
             await using var enrollmentDb = Context();
-            var controller = new DevelopmentWorkspaceEnrollmentController(enrollmentDb, Options.Create(policy), clock)
+            var controller = new DevelopmentWorkspaceEnrollmentController(enrollmentDb, clock)
             {
                 ControllerContext = new() { HttpContext = new DefaultHttpContext() }
             };

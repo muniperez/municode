@@ -9,16 +9,26 @@ service credential and private network access to the API and worker.
 ## Configure a fresh installation
 
 1. Follow the [control-plane setup](control-plane.md), apply migrations and register the provider
-   account and plan. See [prepared images](../../templates/development-workspaces/README.md) for the
-   Ubuntu amd64 image builder, pinned inputs, and release procedure. Use the **installed** manifest's
-   SHA-256, matching provider snapshot ID, account, region, T3 version and protocol in the image
-   registration. Set current pricing before enabling workspace lifecycle requests.
+   account and plan. `municode seed` does this by default: it registers `Default provider`, a
+   default plan and a stock Ubuntu image, so no further step here is needed for a first coding VM.
+   A stock image (`Source: ubuntu`, the provider's Ubuntu 24.04 image ID) is provisioned over SSH by
+   the worker; see [stock Ubuntu provisioning](../../templates/development-workspaces/README.md#stock-ubuntu-provisioning-default).
+   For an optional [prepared image](../../templates/development-workspaces/README.md#prepared-image),
+   use the **installed** manifest's SHA-256, matching provider snapshot ID, account, region, T3
+   version and protocol in the image registration. Set current pricing before enabling workspace
+   lifecycle requests.
 2. Create a dedicated Municode worker SSH keypair, for example with
    `ssh-keygen -t ed25519 -f <protected-directory>/worker-ssh`. Set
    `WorkspaceSsh:PrivateKeyFile` to its absolute owner-only path and
    `WorkspaceSsh:PublicKey` to the OpenSSH public key. The worker uses port 22, one independently
    generated pinned server key per VM generation and provider firewall rules restricted to
    `DevelopmentWorkspaceWorker:ManagementAddresses` (the worker's exact egress host CIDRs).
+   Seed fills this with the control-plane VPS's public IPv4 `/32`. `install.sh --management-address`
+   does the same for a new policy. Until it is set, workspace creation is rejected with
+   `workspace_management_addresses_missing` and the worker provisions nothing.
+   Workspace provisioning has no global on/off switch. A legacy `DevelopmentWorkspaces:Enabled`
+   value is ignored. Availability follows current pricing, profiles, approved images and plans.
+   An empty catalog reports the first missing prerequisite.
    Set `ApiBaseUrl` to the HTTPS API base reachable from the guest for one-time enrollment.
 3. Set `DevelopmentWorkspaceGateway:ServiceCredentialFile` on API and gateway to protected files
    containing the same independently generated 32–512 character secret. Set the gateway's

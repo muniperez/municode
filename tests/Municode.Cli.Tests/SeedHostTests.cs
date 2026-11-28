@@ -2,6 +2,7 @@
 
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Municode.Cli.Commands;
 using Municode.Cli.Seed;
 
@@ -166,6 +167,9 @@ public sealed class SeedHostTests
         var digestArgument = SeedGuard.SafeShellQuote(state.Plan.Release.BundleSha256);
         Assert.Contains(SeedGuard.SafeShellQuote("--bundle-sha256 " + digestArgument)[1..^1], extraction);
         Assert.DoesNotContain("if [ -d ", extraction);
+        Assert.Contains(SeedGuard.SafeShellQuote("management_args="
+            + SeedGuard.SafeShellQuote("--management-address 203.0.113.10/32"))[1..^1], extraction);
+        Assert.Contains("grep -qF -e '\\''--management-address'\\''", extraction);
 
         using var malformed = new HostFixture();
         var badHost = new SeedHost(new DownloadProcess("partial"u8.ToArray()));
@@ -209,6 +213,81 @@ public sealed class SeedHostTests
         Assert.False(File.Exists(Path.Combine(fixture.Root, "setup-token")));
     }
 
+    [Fact]
+    public async Task WorkspaceProviderStagingSendsTheCredentialOnlyOnPinnedStdin()
+    {
+        var process = new StdinProcess();
+        var state = State();
+        state.HostFingerprint = "SHA256:" + new string('A', 43);
+        Assert.True(await new SeedHost(process).StageWorkspaceProviderAsync(
+            state, "unused", "synthetic-provider-token", CancellationToken.None));
+        Assert.DoesNotContain("synthetic-provider-token", string.Join(" ", process.Arguments), StringComparison.Ordinal);
+        Assert.Contains("api-bootstrap stage-provider --stdin", process.Arguments[^1]);
+        Assert.Contains("StrictHostKeyChecking=yes", process.Arguments);
+        using var input = System.Text.Json.JsonDocument.Parse(process.Input);
+        Assert.Equal("hetzner", input.RootElement.GetProperty("providerType").GetString());
+        Assert.Equal("synthetic-provider-token", input.RootElement.GetProperty("credential").GetString());
+
+        process.ExitCode = 1;
+        Assert.False(await new SeedHost(process).StageWorkspaceProviderAsync(
+            state, "unused", "synthetic-provider-token", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task DefaultWorkspacePolicyIsUploadedOnStdinAndPassedOnlyToBundlesThatAcceptIt()
+    {
+        using var fixture = new HostFixture();
+        var release = ReleaseFiles(fixture.Root);
+        var workspace = new SeedWorkspaceDefaults("cx32", 4, 8, "161547269", 0.0128m, 8m, 0.044m, "EUR", "fixture");
+        var state = State(workspace);
+        state.HostFingerprint = "SHA256:" + new string('A', 43);
+        state.InstallationId = "workspaces-" + state.Id;
+        state.RegisterWorkspaceProvider = true;
+        var process = new DownloadProcess(Encoding.UTF8.GetBytes(new string('a', 64)));
+        await new SeedHost(process).InstallAsync(state, fixture.Root, release, CancellationToken.None);
+
+        var upload = Assert.Single(process.Commands, command => command.Contains("workspace-defaults.json", StringComparison.Ordinal)
+            && command.Contains("umask 077 && cat >", StringComparison.Ordinal));
+        using var policy = JsonDocument.Parse(process.Inputs[upload]);
+        var image = policy.RootElement.GetProperty("Images").GetProperty("ubuntu-24-04");
+        Assert.Equal("ubuntu", image.GetProperty("Source").GetString());
+        Assert.Equal("161547269", image.GetProperty("ProviderImageId").GetString());
+        Assert.Equal("provider_seed", image.GetProperty("ProviderAccountId").GetString());
+        Assert.Equal(["plan_seed"], policy.RootElement.GetProperty("Profiles").GetProperty("standard")
+            .GetProperty("DefaultPlanIdsForNewWorkspaces").EnumerateArray().Select(value => value.GetString()));
+        var extraction = Assert.Single(process.Commands, command =>
+            command.Contains("sha256sum --check --strict", StringComparison.Ordinal));
+        Assert.Contains("grep -qF -e '\\''--workspace-defaults'\\''", extraction);
+        Assert.Contains("$management_args $defaults_args", extraction);
+
+        var staged = new StdinProcess();
+        Assert.True(await new SeedHost(staged).StageWorkspaceProviderAsync(
+            state, "unused", "synthetic-provider-token", CancellationToken.None));
+        using var input = JsonDocument.Parse(staged.Input);
+        var defaults = input.RootElement.GetProperty("workspaceDefaults");
+        Assert.Equal("provider_seed", defaults.GetProperty("providerAccountId").GetString());
+        Assert.Equal("plan_seed", defaults.GetProperty("planId").GetString());
+        Assert.Equal("nbg1", defaults.GetProperty("region").GetString());
+        Assert.Equal("cx32", defaults.GetProperty("sku").GetString());
+
+        state.RegisterWorkspaceProvider = false;
+        using var optedOut = new HostFixture();
+        var plain = new DownloadProcess(Encoding.UTF8.GetBytes(new string('a', 64)));
+        await new SeedHost(plain).InstallAsync(state, optedOut.Root, ReleaseFiles(optedOut.Root), CancellationToken.None);
+        Assert.DoesNotContain(plain.Commands, command => command.Contains("workspace-defaults", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("127.0.0.1")]
+    [InlineData("0.0.0.0")]
+    [InlineData("2001:db8::1")]
+    public void ManagementAddressRequiresOneUsableIpv4(string address)
+    {
+        var state = State();
+        state.Server = state.Server! with { Address = address };
+        Assert.Throws<CliCommandException>(() => SeedHost.ManagementAddress(state));
+    }
+
     private static string ReleaseFiles(string root)
     {
         var release = Path.Combine(root, "release");
@@ -234,7 +313,7 @@ public sealed class SeedHostTests
         return Convert.ToBase64String(key);
     }
 
-    private static SeedState State() => new()
+    private static SeedState State(SeedWorkspaceDefaults? workspace = null) => new()
     {
         Id = new string('a', 32),
         Plan = new(
@@ -242,7 +321,7 @@ public sealed class SeedHostTests
                 "workspaces.example.net", "municode-v1.2.3"),
             new("account", "scope", "image", "linux/amd64", 2, 4096, 40,
                 [new("vps", 10m, 0.01m, "EUR", "hourly", "none", "fixture")],
-                DateTimeOffset.UtcNow, "fixture"),
+                DateTimeOffset.UtcNow, "fixture", Workspace: workspace),
             new("municode-v1.2.3", "municode", "https://github.com/muniperez/municode",
                 new string('a', 40), "municode-1.2.3-linux-any.tar.gz",
                 new string('b', 64), new string('c', 64), "github-sigstore")),
@@ -292,12 +371,32 @@ public sealed class SeedHostTests
         }
     }
 
+    private sealed class StdinProcess : ISeedProcess
+    {
+        public IReadOnlyList<string> Arguments { get; private set; } = [];
+        public byte[] Input { get; private set; } = [];
+        public int ExitCode { get; set; }
+
+        public Task<SeedProcessResult> RunAsync(
+            string fileName,
+            IReadOnlyList<string> arguments,
+            byte[]? input,
+            CancellationToken cancellationToken)
+        {
+            Assert.Equal("ssh", fileName);
+            Arguments = arguments;
+            Input = input!.ToArray();
+            return Task.FromResult(new SeedProcessResult(ExitCode, ""));
+        }
+    }
+
     private sealed class DownloadProcess(
         byte[] token,
         byte[]? transfer = null,
         bool transferIsRaw = false) : ISeedProcess
     {
         public List<string> Commands { get; } = [];
+        public Dictionary<string, byte[]> Inputs { get; } = [];
 
         public Task<SeedProcessResult> RunAsync(
             string fileName,
@@ -306,7 +405,10 @@ public sealed class SeedHostTests
             CancellationToken cancellationToken)
         {
             if (fileName == "ssh")
+            {
                 Commands.Add(arguments[^1]);
+                if (input is not null) Inputs[arguments[^1]] = input.ToArray();
+            }
             if (fileName == "ssh" && arguments[^1].Contains("sha256sum ", StringComparison.Ordinal))
             {
                 var remoteBytes = token.Concat("\n"u8.ToArray()).ToArray();

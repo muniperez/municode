@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Install ONLY inside an explicitly marked disposable Ubuntu image builder VM."""
+"""Install ONLY inside an explicitly marked disposable Ubuntu image builder VM, or provision a
+fresh stock Ubuntu 24.04 workspace VM in place on the control plane's explicit request."""
 import argparse
 import hashlib
 import json
@@ -83,8 +84,13 @@ PINNED_EXECUTABLE_FILES = (
     "/opt/municode-antigravity/agy_acp_server.par",
     "/opt/municode-antigravity/localharness_external",
     "/usr/local/bin/cloudflared", "/usr/local/bin/gh", "/usr/local/bin/glab",
-    "/usr/local/bin/copilot", "/usr/local/bin/claude", "/usr/local/bin/muse",
+    "/usr/local/bin/copilot", "/usr/local/bin/claude", "/usr/local/bin/gemini", "/usr/local/bin/muse",
 )
+PROVISION_ACKNOWLEDGEMENT = "PROVISION-FRESH-STOCK-WORKSPACE-VM"
+PROVISION_STATE = Path("/var/lib/municode-provision")
+# The control plane binds a provisioned VM to the pinned recipe through this installed lock copy.
+RECIPE_LOCK = Path("/opt/municode-workspace/recipe.lock.json")
+CODEX_DEVICE_AUTH_WRAPPER = Path("/opt/municode-workspace/codex-device-auth")
 
 
 def install_systemd_units(source_directory, destination_directory):
@@ -139,6 +145,7 @@ def write_image_manifest(lock, source_directory=HERE.parent, root=Path("/")):
         record(root / target.lstrip("/"), source)
     for target in (*PINNED_EXECUTABLE_FILES,
                    "/opt/municode-tools/" + lock["claude"]["executable"],
+                   "/opt/municode-tools/" + lock["gemini"]["executable"], lock["gemini"]["systemSettings"],
                    "/opt/municode-t3/" + lock["t3"]["resourceMonitor"]["path"]):
         record(root / target.lstrip("/"))
     # The release's T3 directory is discovered during installation; record the real file,
@@ -189,6 +196,25 @@ def install_claude(lock, tools, wrapper=Path("/usr/local/bin/claude")):
     output = run([str(wrapper), "--version"],
                  env={"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(tools), "LC_ALL": "C"})
     require(re.match(re.escape(item["version"]) + r"(?:\s|$)", output), "Wrong Claude Code version")
+
+
+def install_gemini(lock, tools, cache, wrapper=Path("/usr/local/bin/gemini"), root=Path("/")):
+    item = lock["gemini"]
+    script = tools / item["executable"]
+    require(script.is_file() and not script.is_symlink(), "Unexpected Gemini CLI package layout")
+    # System settings take precedence over user settings, so the pinned build never self-updates.
+    settings = root / item["systemSettings"].lstrip("/")
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.parent.chmod(0o755)
+    settings.write_text(json.dumps({"general": {"enableAutoUpdate": False,
+                                                "enableAutoUpdateNotification": False}}) + "\n")
+    os.chown(settings, 0, 0)
+    settings.chmod(0o644)
+    write_wrapper(wrapper, "GEMINI_CLI_SYSTEM_SETTINGS_PATH=" + item["systemSettings"],
+                  "/usr/local/bin/node " + str(script))
+    output = run([str(wrapper), "--version"],
+                 env={"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(cache), "LC_ALL": "C"})
+    require(re.match(re.escape(item["version"]) + r"(?:\s|$)", output), "Wrong Gemini CLI version")
 
 
 def install_antigravity(lock, cache, destination=Path("/opt/municode-antigravity")):
@@ -248,31 +274,36 @@ def install_source_control_clis(lock, cache):
                 "Wrong source-control CLI version")
 
 
-def install(source_revision, builder):
-    require(re.fullmatch(r"[a-f0-9]{40}", source_revision), "Exact source commit required")
+def install(source_revision, builder, recipe_sha256=None):
+    """Builds the image; with a recipe digest, provisions a stock VM from its current Ubuntu archive."""
+    stock = recipe_sha256 is not None
+    require(stock or re.fullmatch(r"[a-f0-9]{40}", source_revision or ""), "Exact source commit required")
     require(builder, "Builder provenance identity required")
     lock = json.loads((HERE / "manifest.lock.json").read_text())
     cache = Path.cwd() / ".local/artifacts/runtime/image-build"
     cache.mkdir(mode=0o700, parents=True, exist_ok=True)
-    snapshot = lock["os"]["aptSnapshot"]
-    sources = Path("/etc/apt/sources.list.d")
-    for path in sources.iterdir():
-        if path.suffix in (".sources", ".list"):
-            path.unlink()
-    Path("/etc/apt/sources.list").write_text(
-        "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/" + snapshot +
-        "/ noble main universe\n"
-        "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/" + snapshot +
-        "/ noble-updates main universe\n"
-        "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/" + snapshot +
-        "/ noble-security main universe\n")
+    apt = ["apt-get", "-o", "DPkg::Lock::Timeout=900"]
+    if not stock:
+        # The snapshot only matches the pinned cloud image; a newer stock image keeps its own archive.
+        snapshot = lock["os"]["aptSnapshot"]
+        sources = Path("/etc/apt/sources.list.d")
+        for path in sources.iterdir():
+            if path.suffix in (".sources", ".list"):
+                path.unlink()
+        Path("/etc/apt/sources.list").write_text(
+            "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/" + snapshot +
+            "/ noble main universe\n"
+            "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/" + snapshot +
+            "/ noble-updates main universe\n"
+            "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/" + snapshot +
+            "/ noble-security main universe\n")
     env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
-    run(["apt-get", "-qq", "update"], env=env, timeout=1800)
+    run([*apt, "-qq", "update"], env=env, timeout=1800)
     packages = ["python3", "git", "curl", "ca-certificates", "openssh-server", "openssh-client",
                 "age", "util-linux", "e2fsprogs",
                 "libicu74", "libssl3t64", "xz-utils", "build-essential", "pkg-config",
                 "unzip", "zip", "jq", "ripgrep", "sqlite3", *lock["browserLibraries"]]
-    run(["apt-get", "-y", "-qq", "install", "--no-install-recommends", *packages], env=env, timeout=1800)
+    run([*apt, "-y", "-qq", "install", "--no-install-recommends", *packages], env=env, timeout=1800)
     for name in ("node", "dotnet", "t3"):
         artifact = cache / (name + ".tar")
         download(lock[name], artifact)
@@ -306,6 +337,7 @@ def install(source_revision, builder):
         env=dict(os.environ, HOME=str(cache), npm_config_cache=str(cache / "npm")), timeout=600)
     Path("/usr/local/bin/codex").symlink_to(tools / "node_modules/.bin/codex")
     install_claude(lock, tools)
+    install_gemini(lock, tools, cache)
     install_antigravity(lock, cache)
     install_muse(lock, cache)
     # ACP initialize needs no credentials and never creates a coding thread.
@@ -344,6 +376,9 @@ def install(source_revision, builder):
     connect_help = run(["t3", "connect", "link", "--help"])
     require(all(option in connect_help for option in ("--headless", "--base-dir")),
             "Installed T3 lacks supported non-service-installing Connect enrollment")
+    if stock:
+        lock["provenance"].update(recipeSha256=recipe_sha256,
+                                  provisionedFrom="stock Ubuntu 24.04 provider image")
     lock["provenance"].update(sourceRevision=source_revision, builderIdentity=builder,
                               installedPackages=run(["dpkg-query", "-W", "-f=${Package}=${Version}\n"]),
                               toolArtifactsVerified=True, headlessAuthOptionsChecked=True)
@@ -351,6 +386,57 @@ def install(source_revision, builder):
     lock["provenance"]["agentArtifactsVerified"] = [agent["id"] for agent in lock["agents"]]
     write_image_manifest(lock)
     shutil.rmtree(cache)
+
+
+def recipe_digest():
+    return hashlib.sha256((HERE / "manifest.lock.json").read_bytes()).hexdigest()
+
+
+def provision_guard(acknowledgement, recipe_sha256):
+    require(acknowledgement == PROVISION_ACKNOWLEDGEMENT,
+            "Explicit fresh stock workspace VM provisioning acknowledgement required")
+    require(re.fullmatch(r"[0-9a-f]{64}", recipe_sha256 or "") and recipe_digest() == recipe_sha256,
+            "Uploaded recipe differs from the control plane's pinned recipe")
+    require(os.geteuid() == 0 and os.uname().machine == "x86_64", "Root linux/amd64 VM required")
+    require('VERSION_ID="24.04"' in Path("/etc/os-release").read_text(), "Ubuntu 24.04 required")
+    require(not Path("/etc/municode-workspace/runtime.json").exists(), "Already enrolled runtime")
+    require(not os.path.ismount("/workspace"), "Provisioning must precede the workspace volume mount")
+    require(run(["systemd-detect-virt", "--vm"]) not in ("", "none"), "A workspace VM is required")
+
+
+def provisioned(recipe_sha256):
+    try:
+        return hashlib.sha256(RECIPE_LOCK.read_bytes()).hexdigest() == recipe_sha256
+    except FileNotFoundError:
+        return False
+
+
+def provision(recipe_sha256, state=PROVISION_STATE):
+    """Installs the pinned runtime on a fresh stock VM, then applies what a snapshot boot would."""
+    state.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not provisioned(recipe_sha256):
+        require(not Path("/opt/municode-tools").exists(),
+                "A previous provisioning attempt left partial state; replace this VM")
+        # Wait for first-boot configuration (host key, management key) and the provider's own apt runs.
+        subprocess.run(["cloud-init", "status", "--wait"], capture_output=True, timeout=1800, check=False)
+        subprocess.run(["systemctl", "stop", "unattended-upgrades.service", "apt-daily.service",
+                        "apt-daily-upgrade.service", "apt-daily.timer", "apt-daily-upgrade.timer"],
+                       capture_output=True, timeout=300, check=False)
+        install(None, "municode-worker stock provisioning", recipe_sha256)
+        shutil.copy2(HERE / "manifest.lock.json", RECIPE_LOCK)
+        os.chown(RECIPE_LOCK, 0, 0)
+        RECIPE_LOCK.chmod(0o644)
+    run(["systemctl", "daemon-reload"])
+    run(["systemd-tmpfiles", "--create", "/etc/tmpfiles.d/municode-scratch.conf"])
+    # Cloud-init's first boot ran before Codex existed; apply its device-auth launcher now.
+    codex = Path("/usr/local/bin/codex")
+    if CODEX_DEVICE_AUTH_WRAPPER.is_file() and codex.is_symlink() and os.readlink(codex) == "/opt/municode-tools/node_modules/.bin/codex":
+        temporary = codex.with_name(".codex-device-auth")
+        temporary.unlink(missing_ok=True)
+        temporary.symlink_to(CODEX_DEVICE_AUTH_WRAPPER)
+        os.replace(temporary, codex)
+    run(["systemctl", "reload-or-restart", "ssh"])
+    atomic_json(state / "result.json", {"state": "Provisioned", "recipeSha256": recipe_sha256})
 
 
 def generalize():
@@ -422,11 +508,23 @@ def generalize():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("install", "generalize"))
+    parser.add_argument("action", choices=("install", "generalize", "provision"))
     parser.add_argument("--acknowledgement", required=True)
     parser.add_argument("--source-revision")
     parser.add_argument("--builder-identity")
+    parser.add_argument("--recipe-sha256")
     args = parser.parse_args()
+    if args.action == "provision":
+        try:
+            provision_guard(args.acknowledgement, args.recipe_sha256)
+            provision(args.recipe_sha256)
+        except Exception as error:
+            PROVISION_STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+            atomic_json(PROVISION_STATE / "result.json",
+                        {"state": "Failed", "error": (str(error) if isinstance(error, Blocked)
+                                                      else type(error).__name__)[:400]})
+            raise
+        return
     builder_guard(args.acknowledgement)
     if args.action == "install":
         install(args.source_revision or "", args.builder_identity)

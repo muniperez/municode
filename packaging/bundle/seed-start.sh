@@ -7,6 +7,7 @@ usage() {
     echo "Usage: seed-start.sh --release-tag TAG --release-root PATH --installation-id ID" >&2
     echo "  --dashboard-hostname HOST --api-hostname HOST --gateway-domain DOMAIN" >&2
     echo "  --bundle-sha256 SHA --setup-token-output PATH [--host-root PATH] [--policy-file PATH]" >&2
+    echo "  [--management-address CIDR] [--workspace-defaults PATH]" >&2
     exit 2
 }
 
@@ -19,6 +20,8 @@ gateway_domain=
 bundle_sha256=
 host_root=/
 policy_file=
+management_address=
+workspace_defaults=
 setup_token_output=
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -31,6 +34,8 @@ while [ "$#" -gt 0 ]; do
         --bundle-sha256) [ "$#" -ge 2 ] || usage; bundle_sha256=$2; shift 2 ;;
         --host-root) [ "$#" -ge 2 ] || usage; host_root=$2; shift 2 ;;
         --policy-file) [ "$#" -ge 2 ] || usage; policy_file=$2; shift 2 ;;
+        --management-address) [ "$#" -ge 2 ] || usage; management_address=$2; shift 2 ;;
+        --workspace-defaults) [ "$#" -ge 2 ] || usage; workspace_defaults=$2; shift 2 ;;
         --setup-token-output) [ "$#" -ge 2 ] || usage; setup_token_output=$2; shift 2 ;;
         *) usage ;;
     esac
@@ -59,6 +64,8 @@ set -- --host-root "$host_root" --bundle-sha256 "$bundle_sha256" --verified-rele
     --installation-id "$installation_id" --dashboard-hostname "$dashboard_hostname" \
     --api-hostname "$api_hostname" --gateway-domain "$gateway_domain"
 [ -z "$policy_file" ] || set -- "$@" --policy-file "$policy_file"
+[ -z "$management_address" ] || set -- "$@" --management-address "$management_address"
+[ -z "$workspace_defaults" ] || set -- "$@" --workspace-defaults "$workspace_defaults"
 "$release_root/install.sh" "$@"
 
 secrets_dir="${host_root%/}/etc/municode/secrets"

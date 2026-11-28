@@ -202,7 +202,7 @@ public sealed partial class DevelopmentWorkspaceService
     public async Task<DevelopmentWorkspaceFilesystemJob> GetFilesystemJobAsync(string workspaceId, string organizationId,
         string vmId, string jobId, CancellationToken ct)
     {
-        EnsureEnabled();
+        ValidatePolicy();
         return await db.DevelopmentWorkspaceFilesystemJobs.AsNoTracking().SingleOrDefaultAsync(x => x.Id == jobId
                    && x.OrganizationId == organizationId && x.WorkspaceId == workspaceId && x.VmId == vmId, ct)
                ?? throw Invalid("workspace_filesystem_job_not_found", "Folder job was not found.");

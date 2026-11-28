@@ -6,6 +6,7 @@ import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -180,6 +181,53 @@ def remove_release_stage(stage):
         raise ValueError(f"Invalid release staging directory: {stage}")
 
 
+def management_address(value):
+    try:
+        network = ipaddress.ip_network(value, strict=True)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("--management-address must be one exact /32 or /128 CIDR.") from error
+    if (network.prefixlen != network.max_prefixlen or network.network_address.is_loopback
+            or network.network_address.is_unspecified):
+        raise argparse.ArgumentTypeError("--management-address must be one host /32 or /128 CIDR.")
+    return str(network)
+
+
+WORKSPACE_DEFAULT_KEYS = {"Currency", "VolumeMonthlyRatePerGb", "MaxPricingAgeDays", "Profiles", "Images"}
+
+
+def workspace_defaults(path):
+    """Read seed's default Ubuntu workspace policy: one stock image and the profiles that use its default plan."""
+    value = json.loads(path.read_text())
+    if (not isinstance(value, dict) or set(value) != WORKSPACE_DEFAULT_KEYS
+            or not all(isinstance(value[k], dict) and value[k] for k in ("Profiles", "Images"))
+            or not all(isinstance(v, dict) for k in ("Profiles", "Images") for v in value[k].values())
+            or any(image.get("Source") != "ubuntu" for image in value["Images"].values())):
+        raise ValueError("--workspace-defaults must hold seed's stock Ubuntu image, profiles and pricing.")
+    return value
+
+
+def initial_policy(source, args):
+    """Seed the bundled policy with the control-plane management address and seed's default workspace path;
+    operator policies are copied as-is."""
+    content = source.read_bytes()
+    if args.policy_file or not (args.management_address or args.workspace_defaults):
+        return content
+    value = json.loads(content)
+    if args.management_address:
+        worker = value.setdefault("DevelopmentWorkspaceWorker", {})
+        if not worker.get("ManagementAddresses"):
+            worker["ManagementAddresses"] = [args.management_address]
+    if args.workspace_defaults:
+        defaults = workspace_defaults(args.workspace_defaults)
+        # Stamped with the host clock that the API compares against, so the image is eligible immediately.
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        for image in defaults["Images"].values():
+            image["QualifiedAt"] = now
+        workspaces = value.setdefault("DevelopmentWorkspaces", {})
+        workspaces.update(defaults, PricingUpdatedAt=now)
+    return (json.dumps(value, indent=2) + "\n").encode()
+
+
 def validate_secrets(root):
     for name in ("postgres-admin-password", "app-db-password", "kratos-db-password",
                  "workspace-gateway-credential", "kratos.env", "ssh/worker-key", "ssh/worker-key.pub",
@@ -270,7 +318,7 @@ def install(args, identity, manifest, required):
                 policy_source = args.policy_file or SOURCE / "municode.json"
                 if not regular(policy_source):
                     raise ValueError("Input policy must be a regular file.")
-                atomic_write(policy, policy_source.read_bytes(), 0o644)
+                atomic_write(policy, initial_policy(policy_source, args), 0o644)
             elif not regular(policy):
                 raise ValueError("Existing policy must be a regular file.")
             elif args.policy_file and args.policy_file.read_bytes() != policy.read_bytes():
@@ -327,6 +375,10 @@ def main():
     parser.add_argument("--host-root", type=Path, default=Path("/"))
     parser.add_argument("--policy-file", type=Path, help="Input policy to copy into /etc/municode/config")
     parser.add_argument("--verified-release-tag", help="Tag whose Sigstore provenance was already verified")
+    parser.add_argument("--management-address", type=management_address,
+                        help="Control-plane public /32 or /128 added to a newly created bundled policy")
+    parser.add_argument("--workspace-defaults", type=Path,
+                        help="Seed's default Ubuntu workspace image, profile and pricing for a newly created bundled policy")
     for option in ("installation-id", "dashboard-hostname", "api-hostname", "gateway-domain"):
         parser.add_argument("--" + option, help=argparse.SUPPRESS)
     args = parser.parse_args()

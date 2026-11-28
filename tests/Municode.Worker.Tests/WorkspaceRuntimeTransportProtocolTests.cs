@@ -120,3 +120,32 @@ public sealed class WorkspaceRuntimeTransportProtocolTests
             Assert.Equal(text, request.RootElement.GetProperty("text").GetString());
     }
 }
+
+public sealed class WorkspaceProvisionProtocolTests
+{
+    private static readonly string Recipe = new('a', 64);
+
+    [Theory]
+    [InlineData("""{"result":{"state":"Provisioned","recipeSha256":"RECIPE"},"unit":"inactive"}""", "Provisioned")]
+    [InlineData("""{"result":{"state":"Provisioned","recipeSha256":"other"},"unit":"inactive"}""", "Failed")]
+    [InlineData("""{"result":{"state":"Failed","error":"Ubuntu 24.04 required"},"unit":"failed"}""", "Failed")]
+    [InlineData("""{"result":null,"unit":"failed"}""", "Failed")]
+    [InlineData("""{"result":null,"unit":"activating"}""", "Running")]
+    [InlineData("""{"result":null,"unit":"active"}""", "Running")]
+    [InlineData("""{"result":null,"unit":"inactive"}""", "NotStarted")]
+    [InlineData("""{"result":null,"unit":""}""", "NotStarted")]
+    public void ProvisionStatusTrustsOnlyAResultForTheReservedRecipe(string json, string expected)
+    {
+        using var document = JsonDocument.Parse(json.Replace("RECIPE", Recipe));
+        Assert.Equal(expected, WorkspaceRuntimeTransport.ReadProvisionStatus(document.RootElement, Recipe).State);
+    }
+
+    [Fact]
+    public void ProvisioningRunsTheUploadedRecipeAsADetachedUnitWithTheReservedDigest()
+    {
+        Assert.Equal("systemd-run --quiet --unit=municode-provision.service --property=WorkingDirectory=/opt/municode-image-source " +
+            "/usr/bin/python3 -I -B /opt/municode-image-source/image/build.py provision " +
+            "--acknowledgement PROVISION-FRESH-STOCK-WORKSPACE-VM --recipe-sha256 " + Recipe + " && echo '{\"started\":true}'",
+            WorkspaceRuntimeTransport.StartProvisionCommand(Recipe));
+    }
+}

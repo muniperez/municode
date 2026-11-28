@@ -60,6 +60,25 @@ resolve the image's pinned cloudflared executable. Its updated native probe and
 hosted cross-device/lifecycle acceptance remain unqualified; never run the
 upstream service installer or show device approval in T3 terminal history.
 
+## Stock Ubuntu provisioning (default)
+
+A workspace image whose `Source` is `ubuntu` is the provider's stock Ubuntu 24.04
+amd64 image, not a snapshot. Its manifest digest, T3 version and protocol and agent
+list come from the recipe pinned in this worker build (`image/manifest.lock.json`),
+so an operator registers only the provider image ID (Hetzner image ID, DigitalOcean
+slug or Vultr `os_id`). Seed registers one by default.
+
+After the server is created and before the volume is attached, the worker uploads
+this template to `/opt/municode-image-source` over the pinned SSH connection and
+starts `build.py provision` in the detached `municode-provision.service` unit. It
+verifies the uploaded recipe digest, waits for cloud-init, runs the same pinned
+`install` as a prepared image and records `/var/lib/municode-provision/result.json`.
+The worker polls that result with a 45-minute deadline (typically about 15 minutes),
+then attaches the volume and enrolls the runtime as usual. A failure or a VM left
+half-provisioned is reported on the VM and never retried in place; replace the VM.
+No builder VPS or snapshot is required. A prepared image (below) is optional and
+only makes later launches faster.
+
 ## Prepared image
 
 `image/manifest.lock.json` pins the Ubuntu cloud-image **serial and SHA256**, immutable
@@ -395,6 +414,7 @@ records the IDs, names and versions shown by the API, CLI and dashboard.
 | --- | --- | --- | --- |
 | Codex | 0.169.0 | npm lockfile integrity (`tools/package-lock.json`) | built-in `codex` |
 | GitHub Copilot CLI | 1.0.114 | release archive SHA-256 | `municode-copilot` (local ACP, above) |
+| Gemini CLI | 0.71.1 | npm lockfile integrity (`tools/package-lock.json`); system settings at `/etc/gemini-cli/settings.json` disable auto-update | — (terminal) |
 | Claude Code | 2.1.328 | native `@anthropic-ai/claude-code-linux-x64` package, npm lockfile integrity; `/usr/local/bin/claude` sets `DISABLE_AUTOUPDATER=1` | built-in `claudeAgent` (enabled by default, uses `claude` from `PATH`) |
 | Antigravity | 1.4.5 | ACP server zip SHA-256 and size; only `agy_acp_server.par` and `localharness_external` are copied to `/opt/municode-antigravity` | `municode-antigravity` (`antigravity` driver, `binaryPath` set) |
 | Muse Code | 1.4.24-R9131.1 | release binary SHA-256 and size at `/opt/municode-muse/muse`; `/usr/local/bin/muse` sets `MUSE_NO_AUTO_UPDATE=1` | `municode-muse` (`muse` driver, `binaryPath` set) |

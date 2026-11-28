@@ -371,8 +371,8 @@ public sealed class GatewayAuthorizationTests
         var lifecycle = new DevelopmentWorkspaceService(fixture.Db, new IdGenerator(), fixture.Clock,
             Microsoft.Extensions.Options.Options.Create(new DevelopmentWorkspaceOptions
             {
-                Enabled = true, VolumeMonthlyRatePerGb = 1, PricingUpdatedAt = fixture.Clock.Now
-            }));
+                VolumeMonthlyRatePerGb = 1, PricingUpdatedAt = fixture.Clock.Now
+            }), Microsoft.Extensions.Options.Options.Create(new DevelopmentWorkspaceManagementOptions()));
         var context = new DefaultHttpContext();
         var controller = new DevelopmentWorkspaceGatewayController { ControllerContext = new() { HttpContext = context } };
         var options = Microsoft.Extensions.Options.Options.Create(fixture.Options);
@@ -502,9 +502,10 @@ public sealed class GatewayAuthorizationTests
             await fixture.Db.SaveChangesAsync();
             fixture.Service = new(fixture.Db, new ControlPlaneAuthorization(fixture.Db), new Secrets(),
                 Microsoft.Extensions.Options.Options.Create(fixture.Options),
-                Microsoft.Extensions.Options.Options.Create(new DevelopmentWorkspaceOptions { Enabled = true }), fixture.Clock,
+                Microsoft.Extensions.Options.Options.Create(new DevelopmentWorkspaceOptions()), fixture.Clock,
                 new DevelopmentWorkspaceService(fixture.Db, new IdGenerator(), fixture.Clock,
-                    Microsoft.Extensions.Options.Options.Create(new DevelopmentWorkspaceOptions { Enabled = true })));
+                    Microsoft.Extensions.Options.Options.Create(new DevelopmentWorkspaceOptions()),
+                    Microsoft.Extensions.Options.Options.Create(new DevelopmentWorkspaceManagementOptions())));
             return fixture;
         }
 

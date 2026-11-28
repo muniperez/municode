@@ -182,10 +182,11 @@ function AuthorizedCreateWorkspaceDialog({ organizationId, onCreated }: Omit<Pro
             <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => setRevision(value => value + 1)}>Retry</Button>
           </div>}
           {ready && !ready.available && <p role="status" className="text-sm text-muted-foreground">
-            You can't create workspaces right now. {ready.unavailableReason || "Ask an administrator to turn them on."}
+            You can't create workspaces right now. {ready.unavailableReason || "Ask an administrator to check workspace provisioning settings."}
           </p>}
           {ready?.available && !options.length && <div role="status" className="space-y-2 text-sm text-muted-foreground">
-            <p>No approved setup is available for new workspaces. Ask an administrator to approve a T3 Connect image and a matching plan.</p>
+            <p>{ready.missingConfiguration
+              || "No approved setup is available for new workspaces. Ask an administrator to approve a T3 Connect image and a matching plan."}</p>
             <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => setRevision(value => value + 1)}>Retry</Button>
           </div>}
           {choiceRequired && !customizing && choiceField}

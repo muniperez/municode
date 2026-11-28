@@ -24,11 +24,16 @@ function Destination() {
   return <p>Ordinary sign in, next: {(location.state as { from: string }).from}</p>;
 }
 
-function mount() {
+function Address() {
+  const location = useLocation();
+  return <span data-testid="address">{location.pathname + location.search + location.hash}</span>;
+}
+
+function mount(entry = "/setup") {
   const auth = authFixture({ status: "setup_required", profile: null });
-  render(<AuthContext.Provider value={auth}><MemoryRouter initialEntries={["/setup"]}>
+  render(<AuthContext.Provider value={auth}><MemoryRouter initialEntries={[entry]}>
     <Routes>
-      <Route path="/setup" element={<SetupModule />} />
+      <Route path="/setup" element={<><SetupModule /><Address /></>} />
       <Route path="/sign-in" element={<Destination />} />
     </Routes>
   </MemoryRouter></AuthContext.Provider>);
@@ -116,6 +121,36 @@ describe("first operator screen", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("already complete");
     expect(screen.queryByLabelText("Setup token")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Continue to sign in" })).toBeInTheDocument();
+  });
+
+  it("prefills a setup-link token from the fragment, strips it from the address and keeps manual entry", async () => {
+    vi.mocked(getSetupStatus).mockResolvedValue({ state: "required" });
+    vi.mocked(completeSetup).mockResolvedValue({ installationId: "installation", operationId: "operation", state: "ready" });
+    mount("/setup?next=1#token=linked%2Ftoken");
+    expect(screen.getByTestId("address")).toHaveTextContent(/^\/setup\?next=1$/);
+    expect(await screen.findByLabelText("Setup token")).toHaveValue("linked/token");
+    for (const [label, value] of [
+      ["Email", "operator@example.test"], ["Display name", "Operator"],
+      ["Workspace name", "Workspace"], ["Workspace slug", "workspace"],
+      ["Operator password", "synthetic-password"]
+    ]) fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    fireEvent.click(screen.getByRole("button", { name: "Complete setup" }));
+    await screen.findByText(/No browser session was created/);
+    expect(completeSetup).toHaveBeenCalledWith(expect.objectContaining({ setupToken: "linked/token" }));
+  });
+
+  it("does not reuse a linked token after a status check and ignores links when setup is not open", async () => {
+    vi.mocked(getSetupStatus).mockResolvedValue({ state: "required" });
+    mount("/setup#token=linked-token");
+    expect(await screen.findByLabelText("Setup token")).toHaveValue("linked-token");
+    fireEvent.click(screen.getByRole("button", { name: "Check status" }));
+    await waitFor(() => expect(screen.getByLabelText("Setup token")).toHaveValue(""));
+    cleanup();
+    vi.mocked(getSetupStatus).mockResolvedValue({ state: "ready" });
+    mount("/setup#token=linked-token");
+    expect(await screen.findByText(/Setup is complete/)).toBeInTheDocument();
+    expect(screen.getByTestId("address")).toHaveTextContent(/^\/setup$/);
+    expect(document.body.textContent).not.toContain("linked-token");
   });
 
   it.each(["ready", "blocked"] as const)("never renders admission for %s", async (state) => {

@@ -853,18 +853,24 @@ assert.throws(() => sourceControlEvidence({ sourceControlProviders:
 
         def run(argv, **kwargs):
             calls.append(argv)
-            if argv[:2] == ["apt-get", "-y"]:
+            if argv[0] == "apt-get" and "install" in argv:
                 raise PackagesObserved()
             return ""
 
-        with patch.object(builder.Path, "mkdir"), patch.object(builder.Path, "iterdir", return_value=[]), \
-                patch.object(builder.Path, "write_text"), patch.object(builder, "run", side_effect=run):
-            with self.assertRaises(PackagesObserved):
-                builder.install("a" * 40, "synthetic-disposable-builder")
-        install = calls[-1]
-        self.assertIn("age", install)
-        self.assertIn("git", install)
-        self.assertFalse(any(value.startswith(("postgresql", "libpq")) for value in install))
+        for recipe in (None, "b" * 64):
+            calls.clear()
+            with self.subTest(stock=recipe is not None), patch.object(builder.Path, "mkdir"), \
+                    patch.object(builder.Path, "iterdir", return_value=[]), \
+                    patch.object(builder.Path, "write_text") as written, patch.object(builder, "run", side_effect=run):
+                with self.assertRaises(PackagesObserved):
+                    builder.install("a" * 40 if recipe is None else None, "synthetic-builder", recipe)
+                install = calls[-1]
+                self.assertIn("age", install)
+                self.assertIn("git", install)
+                self.assertIn("DPkg::Lock::Timeout=900", install)
+                self.assertFalse(any(value.startswith(("postgresql", "libpq")) for value in install))
+                # Only the pinned builder image matches the dated apt snapshot.
+                self.assertEqual(written.called, recipe is None)
 
 
 class NativeRestoreTests(unittest.TestCase):
@@ -1081,6 +1087,8 @@ class InstalledManifestTests(unittest.TestCase):
             (tools / name).chmod(0o644)
         for target in (*builder.PINNED_EXECUTABLE_FILES,
                        "/opt/municode-tools/" + self.lock["claude"]["executable"],
+                       "/opt/municode-tools/" + self.lock["gemini"]["executable"],
+                       self.lock["gemini"]["systemSettings"],
                        "/opt/municode-t3/" + self.lock["t3"]["resourceMonitor"]["path"],
                        "/opt/municode-t3/release/t3"):
             path = self.root / target.lstrip("/")
@@ -1253,9 +1261,13 @@ class AgentInstallTests(unittest.TestCase):
         self.assertEqual(package["dependencies"]["@anthropic-ai/claude-code-linux-x64"], self.lock["claude"]["version"])
         self.assertEqual((claude["version"], claude["integrity"]),
                          (self.lock["claude"]["version"], self.lock["claude"]["integrity"]))
+        gemini = npm_lock["packages"]["node_modules/@google/gemini-cli"]
+        self.assertEqual(package["dependencies"]["@google/gemini-cli"], self.lock["gemini"]["version"])
+        self.assertEqual((gemini["version"], gemini["integrity"]),
+                         (self.lock["gemini"]["version"], self.lock["gemini"]["integrity"]))
         self.assertEqual({agent["id"]: agent["version"] for agent in self.lock["agents"]},
                          {name: self.lock[name]["version"]
-                          for name in ("codex", "copilot", "claude", "antigravity", "muse")})
+                          for name in ("codex", "copilot", "claude", "gemini", "antigravity", "muse")})
         for name in ("antigravity", "muse"):
             self.assertRegex(self.lock[name]["sha256"], "^[0-9a-f]{64}$")
             self.assertTrue(self.lock[name]["url"].startswith("https://"))
@@ -1276,6 +1288,22 @@ class AgentInstallTests(unittest.TestCase):
         binary.unlink()
         with self.assertRaisesRegex(builder.Blocked, "package layout"):
             builder.install_claude(self.lock, self.root, wrapper)
+
+    def test_gemini_wrapper_pins_system_settings_without_self_update(self):
+        script = self.root / self.lock["gemini"]["executable"]
+        script.parent.mkdir(parents=True)
+        script.write_text("// bundle")
+        wrapper = self.root / "gemini"
+        with patch.object(builder, "run", return_value=self.lock["gemini"]["version"]) as run:
+            builder.install_gemini(self.lock, self.root, self.root, wrapper, self.root)
+        self.assertEqual(run.call_args.args[0], [str(wrapper), "--version"])
+        self.assertIn("GEMINI_CLI_SYSTEM_SETTINGS_PATH=/etc/gemini-cli/settings.json", wrapper.read_text())
+        self.assertIn("exec /usr/local/bin/node " + str(script) + ' "$@"', wrapper.read_text())
+        settings = json.loads((self.root / "etc/gemini-cli/settings.json").read_text())
+        self.assertEqual(settings["general"], {"enableAutoUpdate": False, "enableAutoUpdateNotification": False})
+        with patch.object(builder, "run", return_value="0.7.1"), \
+                self.assertRaisesRegex(builder.Blocked, "Wrong Gemini CLI version"):
+            builder.install_gemini(self.lock, self.root, self.root, wrapper, self.root)
 
     def antigravity(self, members, size_matches=True):
         lock = json.loads(json.dumps(self.lock))

@@ -4,7 +4,6 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 using Municode.Common.Data;
 using Municode.Common.Services;
 
@@ -18,14 +17,13 @@ public sealed record DevelopmentWorkspaceEnrollmentRequest(
 [AllowAnonymous]
 [Route("api/development-workspaces/runtime/enroll")]
 public sealed class DevelopmentWorkspaceEnrollmentController(
-    WorkspaceDbContext db, IOptions<DevelopmentWorkspaceOptions> options, TimeProvider clock) : ControllerBase
+    WorkspaceDbContext db, TimeProvider clock) : ControllerBase
 {
     [HttpPost]
     [RequestSizeLimit(64 * 1024)]
     public async Task<IActionResult> Enroll(DevelopmentWorkspaceEnrollmentRequest request, CancellationToken ct)
     {
         Response.Headers.CacheControl = "no-store";
-        if (!options.Value.Enabled) return NotFound();
         var authorization = Request.Headers.Authorization.ToString();
         if (!authorization.StartsWith("Bearer ", StringComparison.Ordinal) || authorization.Length is < 40 or > 256)
             return Unauthorized();

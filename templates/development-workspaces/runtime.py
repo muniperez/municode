@@ -23,6 +23,7 @@ import time
 import uuid
 
 IMAGE_MANIFEST = Path("/opt/municode-workspace/image-manifest.json")
+RECIPE_LOCK = Path("/opt/municode-workspace/recipe.lock.json")
 T3_ROOT = Path("/opt/municode-t3")
 T3_RELAY_CLIENT = "/usr/local/bin/cloudflared"
 T3_ENVIRONMENT_PROTOCOL = 2
@@ -102,6 +103,19 @@ def read_image_manifest():
     require(not IMAGE_MANIFEST.is_symlink(), "Installed image manifest must be a regular file")
     raw = IMAGE_MANIFEST.read_bytes()
     return json.loads(raw), raw
+
+
+def image_identity(manifest, raw):
+    """Digest the control plane binds at enrollment: the exact snapshot manifest, or the pinned
+    recipe lock a stock VM was provisioned from (its manifest records nondeterministic packages)."""
+    recipe = manifest.get("provenance", {}).get("recipeSha256") if isinstance(manifest, dict) else None
+    if recipe is None:
+        return hashlib.sha256(raw).hexdigest()
+    Linux.verify_unit_file(str(RECIPE_LOCK))
+    require(not RECIPE_LOCK.is_symlink() and isinstance(recipe, str) and
+            hashlib.sha256(RECIPE_LOCK.read_bytes()).hexdigest() == recipe,
+            "Provisioned recipe lock differs from the installed manifest")
+    return recipe
 
 
 def qualified_t3(manifest):

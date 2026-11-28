@@ -38,9 +38,11 @@ and exact help; run `municode --help` from its released
 binary for the accepted commands.
 
 Operators use `municode seed` before ordinary authenticated workspace commands.
-Seed never authenticates a workspace user or registers its bootstrap
-provider credential automatically. After first-owner setup, register a provider,
-image and plan in the dashboard before creating the first coding VM.
+Seed never authenticates a workspace user. By default it reuses its provider
+credential as `Default provider` with a default workspace plan on stock Ubuntu,
+so the first owner can create a coding VM right after setup. With
+`--workspace-provider no`, register a provider, image and plan in the dashboard
+before creating the first coding VM.
 
 For control-plane registration, use `municode instance add`, `list`, `show`,
 or `remove`. See [the operator command reference](operator.md#register-a-control-plane).

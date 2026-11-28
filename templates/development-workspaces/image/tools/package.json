@@ -4,6 +4,7 @@
   "private": true,
   "dependencies": {
     "@anthropic-ai/claude-code-linux-x64": "2.1.328",
+    "@google/gemini-cli": "0.71.1",
     "@openai/codex": "0.169.0"
   }
 }

@@ -23,7 +23,7 @@ public sealed record WorkspaceSelectionOption(
 public sealed record DevelopmentWorkspaceAgentResponse(string Id, string Name, string Version);
 public sealed record WorkspaceSelections(
     bool Available, string? UnavailableReason, IReadOnlyList<WorkspaceSelectionOption> Options,
-    string? Currency = null, decimal? VolumeMonthlyRatePerGb = null);
+    string? Currency = null, decimal? VolumeMonthlyRatePerGb = null, string? MissingConfiguration = null);
 
 public sealed record CreateDevelopmentWorkspaceRequest(
     string OrganizationId, string Name, string ImageId, string Profile, string PlanId,

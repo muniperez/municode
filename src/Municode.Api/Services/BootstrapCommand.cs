@@ -26,6 +26,13 @@ public static class BootstrapCommand
             var builder = WebApplication.CreateBuilder(Array.Empty<string>());
             builder.Logging.ClearProviders();
             builder.Configuration.AddDevelopmentWorkspaceConfiguration();
+            if (parsed.Operation == "stage-provider")
+            {
+                var staged = await StageProviderAsync(input,
+                    builder.Configuration[$"{SeedProviderRegistrationOptions.SectionName}:StagingFile"], CancellationToken.None);
+                await Console.Out.WriteLineAsync(JsonSerializer.Serialize(staged, Json));
+                return 0;
+            }
             builder.Services.AddMunicodeDatabase();
             builder.Services.Configure<KratosOptions>(builder.Configuration.GetSection(KratosOptions.SectionName));
             builder.Services.AddSingleton(TimeProvider.System);
@@ -66,6 +73,25 @@ public static class BootstrapCommand
         public string? UserId { get; set; }
         public string? OrganizationId { get; set; }
         public string? KratosIdentityId { get; set; }
+        public string? ProviderType { get; set; }
+        public string? Credential { get; set; }
+        public SeedWorkspaceDefaults? WorkspaceDefaults { get; set; }
+    }
+
+    /// <summary>
+    /// Stages the seed provider credential for registration after first-owner setup. Only the provider type is
+    /// returned; the credential is never echoed.
+    /// </summary>
+    public static async Task<object> StageProviderAsync(Input input, string? stagingFile, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(stagingFile) || !Path.IsPathFullyQualified(stagingFile))
+            throw new BootstrapException("seed_provider_unavailable", 409, "Seed provider staging is not configured for this release.");
+        var value = new SeedProviderCredential(input.ProviderType ?? "", input.Credential ?? "", input.WorkspaceDefaults);
+        string type;
+        try { type = ProviderAccountService.WireType(SeedProviderStaging.Validate(value)); }
+        catch (InvalidDataException ex) { throw new BootstrapException("seed_provider_invalid", 400, ex.Message); }
+        await SeedProviderStaging.WriteAsync(stagingFile, value, ct);
+        return new { staged = true, providerType = type };
     }
 
     public static async Task<object> ExecuteAsync(string operation, Input input, BootstrapService service,
@@ -96,7 +122,8 @@ public static class BootstrapCommand
 
     private static (string Operation, string? InputFile, string? OutputFile) Parse(string[] args)
     {
-        if (args.Length < 2 || args[0] is not ("status" or "prepare" or "complete" or "rotate-token" or "bind-operator" or "recover-operator"))
+        if (args.Length < 2 || args[0] is not ("status" or "prepare" or "complete" or "rotate-token" or "bind-operator" or "recover-operator"
+            or "stage-provider"))
             throw BootstrapException.Conflict();
         string? input = null, output = null;
         var stdin = false;

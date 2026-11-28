@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MPL-2.0
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -267,6 +267,57 @@ class SeedStartTests(unittest.TestCase):
             },
         })
         self.assertEqual(json.loads(self.active.read_text()), release | {"previous": None})
+
+    def test_seed_adds_management_address_only_to_the_bundled_policy(self):
+        command = [value for value in self.command()]
+        policy_index = command.index("--policy-file")
+        del command[policy_index:policy_index + 2]
+        completed = subprocess.run(command + ["--management-address", "198.51.100.7/32"],
+                                   env=self.env, capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        policy = json.loads(self.policy.read_text())
+        bundled = json.loads((SEED_START.parent / "municode.json").read_text())
+        self.assertEqual(policy["DevelopmentWorkspaceWorker"]["ManagementAddresses"], ["198.51.100.7/32"])
+        policy["DevelopmentWorkspaceWorker"]["ManagementAddresses"] = []
+        self.assertEqual(policy, bundled)
+
+        rejected = subprocess.run(self.command() + ["--management-address", "127.0.0.1/32"],
+                                  env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(rejected.returncode, 0)
+
+    def test_seed_adds_workspace_defaults_only_to_the_bundled_policy(self):
+        command = [value for value in self.command()]
+        policy_index = command.index("--policy-file")
+        del command[policy_index:policy_index + 2]
+        defaults = {
+            "Currency": "USD", "VolumeMonthlyRatePerGb": 0.1, "MaxPricingAgeDays": 365,
+            "Profiles": {"standard": {"MemoryGiB": 8, "AllowedPlanIds": ["plan_seed"]}},
+            "Images": {"ubuntu-24-04": {"Source": "ubuntu", "ProviderImageId": "2284",
+                                        "ProviderAccountId": "provider_seed"}},
+        }
+        source = self.root / "workspace-defaults.json"
+        source.write_text(json.dumps(defaults))
+        before = datetime.now(timezone.utc).replace(microsecond=0)
+        completed = subprocess.run(command + ["--workspace-defaults", str(source)],
+                                   env=self.env, capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        policy = json.loads(self.policy.read_text())
+        bundled = json.loads((SEED_START.parent / "municode.json").read_text())
+        workspaces = policy["DevelopmentWorkspaces"]
+        stamped = datetime.fromisoformat(workspaces.pop("PricingUpdatedAt").replace("Z", "+00:00"))
+        self.assertGreaterEqual(stamped, before)
+        image = workspaces["Images"]["ubuntu-24-04"]
+        self.assertEqual(datetime.fromisoformat(image.pop("QualifiedAt").replace("Z", "+00:00")), stamped)
+        self.assertEqual(workspaces, bundled["DevelopmentWorkspaces"] | defaults)
+        policy["DevelopmentWorkspaces"] = bundled["DevelopmentWorkspaces"]
+        self.assertEqual(policy, bundled)
+
+        source.write_text(json.dumps(defaults | {"Images": {"snap": {"Source": "snapshot"}}}))
+        check = ("import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); "
+                 "import install_host; install_host.workspace_defaults(Path(sys.argv[2]))")
+        rejected = subprocess.run([sys.executable, "-B", "-c", check, str(SEED_START.parent), str(source)],
+                                  capture_output=True, text=True)
+        self.assertIn("--workspace-defaults must hold", rejected.stderr)
 
     def test_openbao_commands_use_verified_internal_tls(self):
         completed = self.run_seed(
