@@ -13,4 +13,8 @@
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.14" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../../templates/development-workspaces/image/manifest.lock.json"
+                      LogicalName="Municode.WorkspaceRecipe.lock.json" />
+  </ItemGroup>
 </Project>

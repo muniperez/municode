@@ -192,15 +192,39 @@ def management_address(value):
     return str(network)
 
 
+WORKSPACE_DEFAULT_KEYS = {"Currency", "VolumeMonthlyRatePerGb", "MaxPricingAgeDays", "Profiles", "Images"}
+
+
+def workspace_defaults(path):
+    """Read seed's default Ubuntu workspace policy: one stock image and the profiles that use its default plan."""
+    value = json.loads(path.read_text())
+    if (not isinstance(value, dict) or set(value) != WORKSPACE_DEFAULT_KEYS
+            or not all(isinstance(value[k], dict) and value[k] for k in ("Profiles", "Images"))
+            or not all(isinstance(v, dict) for k in ("Profiles", "Images") for v in value[k].values())
+            or any(image.get("Source") != "ubuntu" for image in value["Images"].values())):
+        raise ValueError("--workspace-defaults must hold seed's stock Ubuntu image, profiles and pricing.")
+    return value
+
+
 def initial_policy(source, args):
-    """Seed the bundled policy with the control-plane management address; operator policies are copied as-is."""
+    """Seed the bundled policy with the control-plane management address and seed's default workspace path;
+    operator policies are copied as-is."""
     content = source.read_bytes()
-    if args.policy_file or not args.management_address:
+    if args.policy_file or not (args.management_address or args.workspace_defaults):
         return content
     value = json.loads(content)
-    worker = value.setdefault("DevelopmentWorkspaceWorker", {})
-    if not worker.get("ManagementAddresses"):
-        worker["ManagementAddresses"] = [args.management_address]
+    if args.management_address:
+        worker = value.setdefault("DevelopmentWorkspaceWorker", {})
+        if not worker.get("ManagementAddresses"):
+            worker["ManagementAddresses"] = [args.management_address]
+    if args.workspace_defaults:
+        defaults = workspace_defaults(args.workspace_defaults)
+        # Stamped with the host clock that the API compares against, so the image is eligible immediately.
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        for image in defaults["Images"].values():
+            image["QualifiedAt"] = now
+        workspaces = value.setdefault("DevelopmentWorkspaces", {})
+        workspaces.update(defaults, PricingUpdatedAt=now)
     return (json.dumps(value, indent=2) + "\n").encode()
 
 
@@ -353,6 +377,8 @@ def main():
     parser.add_argument("--verified-release-tag", help="Tag whose Sigstore provenance was already verified")
     parser.add_argument("--management-address", type=management_address,
                         help="Control-plane public /32 or /128 added to a newly created bundled policy")
+    parser.add_argument("--workspace-defaults", type=Path,
+                        help="Seed's default Ubuntu workspace image, profile and pricing for a newly created bundled policy")
     for option in ("installation-id", "dashboard-hostname", "api-hostname", "gateway-domain"):
         parser.add_argument("--" + option, help=argparse.SUPPRESS)
     args = parser.parse_args()

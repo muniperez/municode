@@ -33,6 +33,8 @@ public sealed partial class DevelopmentWorkspaceProcessor(
         public bool AllocationAttempted { get; set; }
         public DateTimeOffset? SshReadinessDeadline { get; set; }
         public DateTimeOffset? SshReadyAt { get; set; }
+        public DateTimeOffset? ProvisionDeadline { get; set; }
+        public bool ProvisionStarted { get; set; }
         public List<WorkspaceCloudAction> Actions { get; set; } = [];
         public DateTimeOffset? GatewayRevokedAt { get; set; }
         public string? ReceiptId { get; set; }
@@ -106,6 +108,8 @@ public sealed partial class DevelopmentWorkspaceProcessor(
                         : "The saved Git remote source changed or could not be verified. Recovery remains reserved and billed; no original-base fallback was performed.";
                     if (operationEvidence?.LastRuntimeRejection is { } rejection)
                         vm.ErrorMessage += " Last recorded rejection: " + rejection.Summary;
+                    if (error is WorkspaceProvisionException provisioning)
+                        vm.ErrorMessage += " Stock VM provisioning: " + provisioning.Message;
                     op.ErrorCode = vm.ErrorCode; op.ErrorMessage = vm.ErrorMessage;
                     Release(op);
                     if (op.Kind == "start" && op.Step == "ssh-ready") op.Status = "failed";
@@ -192,8 +196,12 @@ public sealed partial class DevelopmentWorkspaceProcessor(
                     break;
                 }
                 var image = await cloud.GetWorkspaceImageAsync(op.ProviderImage, ct);
-                if (image is null || image.Status != "available" || image.Type != "snapshot" || image.Architecture != "x86" || image.OsFlavor != "ubuntu")
-                    throw new InvalidOperationException("The exact qualified Ubuntu amd64 workspace snapshot is unavailable.");
+                var stockImage = StockImage(vm, op);
+                if (image is null || image.Status != "available" || image.Architecture != "x86" || image.OsFlavor != "ubuntu"
+                    || (stockImage ? image.Type is not ("system" or "base") : image.Type != "snapshot"))
+                    throw new InvalidOperationException(stockImage
+                        ? "The provider's stock Ubuntu amd64 image is unavailable."
+                        : "The exact qualified Ubuntu amd64 workspace snapshot is unavailable.");
                 await SaveAsync(op, evidence, "bootstrap-secret", null, ct); break;
             case "bootstrap-secret":
                 var bootstrap = WorkspaceBootstrap.Generate();
@@ -204,7 +212,8 @@ public sealed partial class DevelopmentWorkspaceProcessor(
                     fresh.SshHostKey = bootstrap.HostPublicKey; fresh.SshHostKeyFingerprint = bootstrap.HostFingerprint;
                     fresh.SshHostKeyGeneration = fresh.Generation;
                     fresh.EnrollmentTokenDigest = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(bootstrap.EnrollmentToken)));
-                    fresh.EnrollmentTokenExpiresAt = Now.AddMinutes(30);
+                    // Stock VMs install the pinned toolchain before enrolling.
+                    fresh.EnrollmentTokenExpiresAt = Now.AddMinutes(StockImage(vm, op) ? 30 + ProvisionMinutes : 30);
                 }, ct); break;
             case "volume":
                 if (vm.Kind == DevelopmentWorkspaceVmKinds.Ephemeral) { await SaveAsync(op, evidence, "firewall", null, ct); break; }
@@ -286,10 +295,18 @@ public sealed partial class DevelopmentWorkspaceProcessor(
                 if (running.Status != "running" || !running.FirewallsApplied || !running.FirewallIds!.Contains(vm.ProviderFirewallId!))
                 { await SaveAsync(op, evidence, op.Step, null, ct); break; }
                 await cloud.SecureWorkspacePrimaryIpAsync(running, ComputeLabels(workspace, vm), ct);
+                if (StockImage(vm, op))
+                {
+                    evidence.ProvisionDeadline ??= Now.AddMinutes(ProvisionMinutes);
+                    await SaveAsync(op, evidence, "provision", (_, fresh, _) =>
+                    { fresh.ProviderIpId = running.PrimaryIpId; fresh.IpAddress = running.Ipv4; }, ct); break;
+                }
                 if (vm.Kind == DevelopmentWorkspaceVmKinds.Ephemeral)
                     evidence.SshReadinessDeadline ??= Now.AddMinutes(2);
                 await SaveAsync(op, evidence, vm.Kind == "primary" ? "attach" : "ssh-ready", (_, fresh, _) =>
                 { fresh.ProviderIpId = running.PrimaryIpId; fresh.IpAddress = running.Ipv4; }, ct); break;
+            case "provision":
+                await ProvisionStepAsync(vm, op, evidence, ct); break;
             case "ssh-ready":
                 if (vm.Kind != DevelopmentWorkspaceVmKinds.Ephemeral || evidence.SshReadinessDeadline is null)
                     throw new InvalidOperationException("Ephemeral SSH readiness deadline is missing.");
@@ -378,6 +395,54 @@ public sealed partial class DevelopmentWorkspaceProcessor(
                 }, ct); break;
             default: throw new InvalidOperationException("Unknown workspace start stage.");
         }
+    }
+
+    internal const int ProvisionMinutes = 45;
+
+    // Policy images keep their source; a stock image is only trusted for the exact provider image it names.
+    private bool StockImage(DevelopmentWorkspaceVm vm, DevelopmentWorkspaceOperation op) =>
+        policy.Value.Images.TryGetValue(vm.ImageId, out var image) && image.IsStockUbuntu()
+        && image.ProviderImageId == op.ProviderImage;
+
+    private async Task ProvisionStepAsync(DevelopmentWorkspaceVm vm, DevelopmentWorkspaceOperation op, Evidence evidence, CancellationToken ct)
+    {
+        if (!StockImage(vm, op) || evidence.ProvisionDeadline is null)
+            throw new InvalidOperationException("Stock workspace provisioning has no reserved recipe or deadline.");
+        if (Now >= evidence.ProvisionDeadline)
+            throw new WorkspaceProvisionException($"did not finish within {ProvisionMinutes} minutes.");
+        var recipe = WorkspaceRecipe.Sha256;
+        var status = await runtime.GetProvisionStatusAsync(Target(vm), recipe, ct);
+        switch (status.State)
+        {
+            case "Provisioned":
+                logger?.LogInformation("Workspace operation {OperationId} provisioned its stock VM from the pinned recipe.", op.Id);
+                if (vm.Kind == DevelopmentWorkspaceVmKinds.Ephemeral) evidence.SshReadyAt = Now;
+                await SaveAsync(op, evidence, vm.Kind == "primary" ? "attach" : "bootstrap", null, ct);
+                return;
+            case "Failed":
+                throw new WorkspaceProvisionException("failed: " + (status.Error ?? "no detail was reported") + ".");
+            case "NotStarted" when evidence.ProvisionStarted:
+                throw new WorkspaceProvisionException("stopped without a result; replace this VM.");
+            case "NotStarted":
+                evidence.ProvisionStarted = true;
+                await SaveAsync(op, evidence, op.Step, null, ct, release: false);
+                await runtime.StartProvisioningAsync(Target(vm), RecipeDirectory(), recipe, ct);
+                logger?.LogInformation("Workspace operation {OperationId} started stock VM provisioning.", op.Id);
+                break;
+        }
+        await SaveAsync(op, evidence, op.Step, null, ct);
+    }
+
+    // Messages carry only the guest's bounded, output-free recipe failure reason.
+    private sealed class WorkspaceProvisionException(string message) : Exception(message);
+
+    private static string RecipeDirectory()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "development-workspaces");
+        var shipped = Path.Combine(directory, "image", "manifest.lock.json");
+        if (!File.Exists(shipped) || Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(shipped))) != WorkspaceRecipe.Sha256)
+            throw new InvalidOperationException("The worker's provisioning recipe differs from its pinned workspace recipe.");
+        return directory;
     }
 
     private void FinishBootstrap(DevelopmentWorkspaceVm vm, DevelopmentWorkspace workspace, Evidence evidence)

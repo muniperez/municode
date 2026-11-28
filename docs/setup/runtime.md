@@ -9,10 +9,14 @@ service credential and private network access to the API and worker.
 ## Configure a fresh installation
 
 1. Follow the [control-plane setup](control-plane.md), apply migrations and register the provider
-   account and plan. See [prepared images](../../templates/development-workspaces/README.md) for the
-   Ubuntu amd64 image builder, pinned inputs, and release procedure. Use the **installed** manifest's
-   SHA-256, matching provider snapshot ID, account, region, T3 version and protocol in the image
-   registration. Set current pricing before enabling workspace lifecycle requests.
+   account and plan. `municode seed` does this by default: it registers `Default provider`, a
+   default plan and a stock Ubuntu image, so no further step here is needed for a first coding VM.
+   A stock image (`Source: ubuntu`, the provider's Ubuntu 24.04 image ID) is provisioned over SSH by
+   the worker; see [stock Ubuntu provisioning](../../templates/development-workspaces/README.md#stock-ubuntu-provisioning-default).
+   For an optional [prepared image](../../templates/development-workspaces/README.md#prepared-image),
+   use the **installed** manifest's SHA-256, matching provider snapshot ID, account, region, T3
+   version and protocol in the image registration. Set current pricing before enabling workspace
+   lifecycle requests.
 2. Create a dedicated Municode worker SSH keypair, for example with
    `ssh-keygen -t ed25519 -f <protected-directory>/worker-ssh`. Set
    `WorkspaceSsh:PrivateKeyFile` to its absolute owner-only path and

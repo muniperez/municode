@@ -8,7 +8,8 @@ internal sealed class SeedLifecycle(
     SeedJournal journal,
     string releaseDirectory,
     Action<string> write,
-    string? workspaceProviderCredential = null)
+    string? workspaceProviderCredential = null,
+    bool interactive = false)
 {
     public async Task ResumeAsync(
         SeedState state,
@@ -45,7 +46,8 @@ internal sealed class SeedLifecycle(
             "Resume requires the exact provider credential/account scope approved by the plan.");
         if (!state.ServerCreateStarted)
         {
-            var fresh = await provider.QuoteAsync(state.Plan.Selection, state.Id, cancellationToken);
+            var fresh = await provider.QuoteAsync(
+                state.Plan.Selection, state.Id, state.RegisterWorkspaceProvider, cancellationToken);
             var updated = state.Plan with { Quote = fresh };
             if (updated.Approval != state.Plan.Approval)
             {
@@ -150,15 +152,36 @@ internal sealed class SeedLifecycle(
         state.Phase = "complete";
         journal.Save(state);
         var setup = state.Plan.Selection.DashboardHostname;
+        var tokenFile = Path.Combine(journal.DirectoryPath, "setup-token");
         write($"HTTPS and API health verified for https://{setup}/ and https://{state.Plan.Selection.ApiHostname}/health.");
-        write($"First owner: read the protected one-time token from {Path.Combine(journal.DirectoryPath, "setup-token")} "
-            + $"and enter it at https://{setup}/setup. Never place it in a URL or paste it into support output.");
-        if (state.WorkspaceProviderStaged)
-            write($"After setup, the control plane registers this {state.Plan.Selection.Provider} account as a workspace "
-                + "provider in the first organization. Then qualify an image and plan. Seed created no coding VM.");
+        // The link carries the token in the fragment, which browsers never send in requests or referrers. It is
+        // printed only to an interactive terminal and never journaled; automated runs get the protected file path.
+        if (interactive && SetupLink(setup, tokenFile) is { } link)
+            write($"First owner: open {link} to finish setup. Treat this link like a password; it works once. "
+                + $"Or enter the token from {tokenFile} at https://{setup}/setup.");
         else
-            write("After sign-in, explicitly register a provider, then qualify an image and plan. "
+            write($"First owner: read the protected one-time token from {tokenFile} and enter it at https://{setup}/setup. "
+                + "Do not paste it into support output.");
+        if (state.WorkspaceProviderStaged && state.Plan.Quote.Workspace is { } workspace)
+            write($"After setup, the control plane registers this {state.Plan.Selection.Provider} account as 'Default provider' "
+                + $"with a default {workspace.Sku} workspace plan on stock Ubuntu 24.04. Coding VMs can be launched right away; "
+                + "seed itself created no coding VM.");
+        else if (state.WorkspaceProviderStaged)
+            write($"After setup, the control plane registers this {state.Plan.Selection.Provider} account as 'Default provider' "
+                + "in the first organization. Then add a workspace plan. Seed created no coding VM.");
+        else
+            write("After sign-in, register a provider and workspace plan under Providers. "
                 + "The bootstrap credential remains local; seed did not register it and created no coding VM.");
+    }
+
+    internal static string? SetupLink(string dashboardHostname, string tokenFile)
+    {
+        try
+        {
+            var token = File.ReadAllText(tokenFile).Trim();
+            return token.Length == 0 ? null : $"https://{dashboardHostname}/setup#token={Uri.EscapeDataString(token)}";
+        }
+        catch (IOException) { return null; }
     }
 
     private void WriteCost(SeedPlan plan)

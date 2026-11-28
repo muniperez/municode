@@ -43,6 +43,7 @@ internal sealed class TestConsole : IConsole
 {
     public bool SupportsAnsi => false;
     public bool IsInteractive { get; set; }
+    public bool IsOutputTerminal { get; set; }
     public string? Input { get; set; }
     public string? ReadLine() => Input;
     public List<string> Messages { get; } = [];

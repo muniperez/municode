@@ -175,24 +175,34 @@ public sealed class CliSeedTests
     ];
 
     [Theory]
-    [InlineData(false, null, false)]
-    [InlineData(true, "", false)]
-    [InlineData(true, "n", false)]
-    [InlineData(true, "Yes", true)]
-    public async Task WorkspaceProviderOptInIsInteractiveDefaultsNoAndJournalsOnlyTheChoice(
-        bool interactive, string? answer, bool expected)
+    [InlineData(false, null, null, true)]
+    [InlineData(false, null, "no", false)]
+    [InlineData(true, "", null, true)]
+    [InlineData(true, "n", null, false)]
+    [InlineData(true, "Yes", null, true)]
+    [InlineData(true, null, "no", false)]
+    public async Task WorkspaceProviderReuseDefaultsYesWithAnOptOutAndJournalsOnlyTheChoice(
+        bool interactive, string? answer, string? option, bool expected)
     {
         using var fixture = new SeedCliFixture();
         fixture.Console.IsInteractive = interactive;
         fixture.Console.Input = answer;
-        var operation = await fixture.PlanAsync();
-        Assert.Equal(interactive, fixture.Console.Error.Contains("[y/N]", StringComparison.Ordinal));
+        var operation = option is null
+            ? await fixture.PlanAsync()
+            : await fixture.PlanAsync(null, "--workspace-provider", option);
+        Assert.Equal(interactive && option is null, fixture.Console.Error.Contains("[Y/n]", StringComparison.Ordinal));
         var journalPath = Path.Combine(fixture.Environment.ConfigHome, "seed", operation, "operation.json");
         Assert.DoesNotContain(SeedCliFixture.Credential, File.ReadAllText(journalPath), StringComparison.Ordinal);
         using (var journal = new SeedJournal(fixture.Environment.ConfigHome, operation))
-            Assert.Equal(expected, journal.Load().RegisterWorkspaceProvider);
-        Assert.Contains(expected ? "will be registered in the first organization" : "Workspace provider: not registered",
+        {
+            var state = journal.Load();
+            Assert.Equal(expected, state.RegisterWorkspaceProvider);
+            Assert.Equal(expected, state.Plan.Quote.Workspace is not null);
+        }
+        Assert.Contains(expected ? "registered as 'Default provider'" : "Workspace provider: not registered",
             fixture.Console.Output);
+        Assert.Equal(expected, fixture.Console.Output.Contains(
+            "each default coding VM (cx32, 4 vCPU, 8 GiB)", StringComparison.Ordinal));
 
         Assert.Equal(CliExitCodes.Success, await fixture.Application.RunAsync(
         [
@@ -204,7 +214,39 @@ public sealed class CliSeedTests
         var output = File.ReadAllText(journalPath);
         Assert.DoesNotContain(SeedCliFixture.Credential, output, StringComparison.Ordinal);
         Assert.Equal(expected, fixture.Console.Output.Contains(
-            "the control plane registers this hetzner account", StringComparison.Ordinal));
+            "registers this hetzner account as 'Default provider' with a default cx32 workspace plan", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    public async Task SetupLinkCarriesTheTokenInTheFragmentOnlyOnAnInteractiveTerminal(
+        bool interactive, bool terminal, bool printed)
+    {
+        using var fixture = new SeedCliFixture();
+        fixture.Console.IsInteractive = interactive;
+        fixture.Console.IsOutputTerminal = terminal;
+        var operation = await fixture.PlanAsync(null, "--workspace-provider", "yes");
+        Assert.Equal(CliExitCodes.Success, await fixture.Application.RunAsync(
+        [
+            "seed", "apply", operation, "--credential-file", fixture.CredentialPath,
+            "--approve", fixture.Approval(), "--confirm-console-fingerprint", FakeInstanceSsh.Fingerprint
+        ], CancellationToken.None));
+        Assert.Equal(printed, fixture.Console.Output.Contains(
+            "https://console.example.com/setup#token=synthetic-first-owner-token", StringComparison.Ordinal));
+        Assert.Equal(printed ? 1 : 0, Regex.Matches(fixture.Console.Output, "synthetic-first-owner-token").Count);
+        Assert.Contains("https://console.example.com/setup", fixture.Console.Output);
+        var journal = Path.Combine(fixture.Environment.ConfigHome, "seed", operation, "operation.json");
+        Assert.DoesNotContain("synthetic-first-owner-token", File.ReadAllText(journal), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WorkspaceProviderOptionAcceptsOnlyYesOrNo()
+    {
+        using var fixture = new SeedCliFixture();
+        Assert.Equal(CliExitCodes.ValidationError, await fixture.Application.RunAsync(
+            [.. SeedPlanArgs(fixture.CredentialPath), "--workspace-provider", "maybe"], CancellationToken.None));
     }
 
     [Fact]
@@ -267,10 +309,11 @@ public sealed class CliSeedTests
         public FakeInstanceSsh Ssh { get; } = new();
         public CliApplication Application { get; }
 
-        public async Task<string> PlanAsync(string? instanceName = null)
+        public async Task<string> PlanAsync(string? instanceName = null, params string[] extra)
         {
             var args = SeedPlanArgs(CredentialPath);
             if (instanceName is not null) args = [.. args, "--instance-name", instanceName];
+            args = [.. args, .. extra];
             Assert.Equal(CliExitCodes.Success,
                 await Application.RunAsync(args, CancellationToken.None));
             return Regex.Match(Console.Output, @"Seed operation: ([0-9a-f]{32})").Groups[1].Value;
@@ -310,11 +353,12 @@ public sealed class CliSeedTests
         public string Scope(string operation) => SeedGuard.CredentialScope(credential, operation);
         public string Identity() { IdentityCalls++; return "synthetic-account"; }
 
-        public SeedQuote Quote(string operation) => new(
+        public SeedQuote Quote(string operation, bool workspace) => new(
             "synthetic-account", Scope(operation), "ubuntu-24.04", "linux/amd64",
             2, 4096, 40,
             [new("one control-plane VPS", Monthly, 0.02m, "EUR", "hourly", "tax excluded", "fixture://pricing")],
-            DateTimeOffset.UtcNow, "synthetic");
+            DateTimeOffset.UtcNow, "synthetic",
+            Workspace: workspace ? new("cx32", 4, 8, "161547269", 0.0128m, 8m, 0.044m, "EUR", "fixture://pricing") : null);
     }
 
     private sealed class FakeProvider(ProviderFixture fixture) : ISeedProvider
@@ -322,8 +366,9 @@ public sealed class CliSeedTests
         public string CredentialScope(string operationId) => fixture.Scope(operationId);
         public Task<string> GetAccountIdentityAsync(CancellationToken cancellationToken) =>
             Task.FromResult(fixture.Identity());
-        public Task<SeedQuote> QuoteAsync(SeedSelection selection, string operationId, CancellationToken cancellationToken) =>
-            Task.FromResult(fixture.Quote(operationId));
+        public Task<SeedQuote> QuoteAsync(SeedSelection selection, string operationId, bool workspaceDefaults,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(fixture.Quote(operationId, workspaceDefaults));
         public Task<SeedServer?> FindServerAsync(string operationId, CancellationToken cancellationToken) =>
             Task.FromResult(fixture.Find(operationId));
         public Task<SeedServer> CreateServerAsync(SeedState state, string publicKey, CancellationToken cancellationToken)

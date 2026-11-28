@@ -92,6 +92,7 @@ public static class MunicodeApiServiceCollectionExtensions
         services.Configure<BudgetEmailOptions>(configuration.GetSection(BudgetEmailOptions.SectionName));
         services.AddDevelopmentWorkspaceGateway(configuration);
         services.Configure<DevelopmentWorkspaceOptions>(configuration.GetSection(DevelopmentWorkspaceOptions.SectionName));
+        services.PostConfigure<DevelopmentWorkspaceOptions>(WorkspaceRecipe.Apply);
         services.Configure<DevelopmentWorkspaceManagementOptions>(configuration.GetSection(DevelopmentWorkspaceManagementOptions.SectionName));
         services.Configure<SeedProviderRegistrationOptions>(configuration.GetSection(SeedProviderRegistrationOptions.SectionName));
         services.AddScoped<SeedProviderRegistrar>();

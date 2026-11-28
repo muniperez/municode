@@ -75,6 +75,7 @@ public static class BootstrapCommand
         public string? KratosIdentityId { get; set; }
         public string? ProviderType { get; set; }
         public string? Credential { get; set; }
+        public SeedWorkspaceDefaults? WorkspaceDefaults { get; set; }
     }
 
     /// <summary>
@@ -85,7 +86,7 @@ public static class BootstrapCommand
     {
         if (string.IsNullOrWhiteSpace(stagingFile) || !Path.IsPathFullyQualified(stagingFile))
             throw new BootstrapException("seed_provider_unavailable", 409, "Seed provider staging is not configured for this release.");
-        var value = new SeedProviderCredential(input.ProviderType ?? "", input.Credential ?? "");
+        var value = new SeedProviderCredential(input.ProviderType ?? "", input.Credential ?? "", input.WorkspaceDefaults);
         string type;
         try { type = ProviderAccountService.WireType(SeedProviderStaging.Validate(value)); }
         catch (InvalidDataException ex) { throw new BootstrapException("seed_provider_invalid", 400, ex.Message); }

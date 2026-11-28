@@ -101,6 +101,22 @@ public sealed class DevelopmentWorkspaceServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task StockUbuntuImageTakesItsIdentityFromThePinnedRecipeAndUnknownSourcesAreHidden()
+    {
+        var image = policy.Images["qualified"];
+        image.Source = WorkspaceRecipe.UbuntuSource; image.ManifestSha256 = ""; image.T3Version = "0.0.1"; image.Agents = [];
+        WorkspaceRecipe.Apply(policy);
+        Assert.Equal(WorkspaceRecipe.Sha256, image.ManifestSha256);
+        Assert.Equal(WorkspaceRecipe.T3Version, image.T3Version);
+        Assert.Contains(image.Agents, x => x.Id == "gemini");
+        var vm = Primary(await Workspace());
+        Assert.Equal(WorkspaceRecipe.Sha256, vm.ImageManifestSha256);
+
+        image.Source = "builder";
+        Assert.Empty((await Service().GetSelectionsAsync("org", null, default)).Options);
+    }
+
+    [Fact]
     public async Task DiscoveryMarksConfiguredDefaultOnlyForNewWorkspaces()
     {
         policy.Profiles["standard"].DefaultPlanIdsForNewWorkspaces = ["plan", "missing-plan"];

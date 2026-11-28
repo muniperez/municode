@@ -13,7 +13,7 @@
     <PackageReference Include="SSH.NET" Version="2026.0.0" />
     <InternalsVisibleTo Include="Municode.Worker.Tests" />
     <Content Include="../../templates/development-workspaces/**/*"
-             Exclude="../../templates/development-workspaces/image/**;../../templates/development-workspaces/tests/**;../../templates/development-workspaces/README.md;../../templates/development-workspaces/test.sh;../../templates/development-workspaces/**/__pycache__/**"
+             Exclude="../../templates/development-workspaces/image/test-*;../../templates/development-workspaces/tests/**;../../templates/development-workspaces/README.md;../../templates/development-workspaces/test.sh;../../templates/development-workspaces/**/__pycache__/**"
              Link="development-workspaces/%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>

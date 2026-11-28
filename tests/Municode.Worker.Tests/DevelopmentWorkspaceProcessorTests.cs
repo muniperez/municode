@@ -1958,6 +1958,12 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
 
     private sealed class FakeRuntime : IWorkspaceRuntimeTransport
     {
+        public Queue<WorkspaceProvisionStatus> ProvisionStatuses { get; } = [];
+        public List<(string Directory, string Recipe)> ProvisionStarts { get; } = [];
+        public Task<WorkspaceProvisionStatus> GetProvisionStatusAsync(WorkspaceRuntimeTarget target, string recipeSha256, CancellationToken ct) =>
+            Task.FromResult(ProvisionStatuses.Dequeue());
+        public Task StartProvisioningAsync(WorkspaceRuntimeTarget target, string payloadDirectory, string recipeSha256, CancellationToken ct)
+        { ProvisionStarts.Add((payloadDirectory, recipeSha256)); return Task.CompletedTask; }
         public Queue<Exception?> SshConnectResults { get; } = [];
         public List<WorkspaceRuntimeTarget> SshReadinessTargets { get; } = [];
         public Task<bool> CheckSshReadinessAsync(WorkspaceRuntimeTarget target, CancellationToken ct)
@@ -2265,8 +2271,9 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         public Task SecureWorkspacePrimaryIpAsync(WorkspaceCloudServer server, IReadOnlyDictionary<string, string> labels, CancellationToken ct) => Task.CompletedTask;
         public Task DeleteWorkspacePrimaryIpAsync(string id, IReadOnlyDictionary<string, string> labels, CancellationToken ct)
         { DeletedIps.Add(id); return Task.CompletedTask; }
+        public string ImageType { get; set; } = "snapshot";
         public Task<WorkspaceCloudImage?> GetWorkspaceImageAsync(string id, CancellationToken ct) =>
-            Task.FromResult<WorkspaceCloudImage?>(new(id, "available", "snapshot", "x86", "ubuntu", new Dictionary<string, string>()));
+            Task.FromResult<WorkspaceCloudImage?>(new(id, "available", ImageType, "x86", "ubuntu", new Dictionary<string, string>()));
         public Task<WorkspaceCloudAction> GetWorkspaceActionAsync(string resource, string id, CancellationToken ct) =>
             Task.FromResult(new WorkspaceCloudAction(resource, id, "success"));
         public Task<IReadOnlyList<WorkspaceCloudVolume>> FindWorkspaceVolumesAsync(IReadOnlyDictionary<string, string> labels, CancellationToken ct) =>

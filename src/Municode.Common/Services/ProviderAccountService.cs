@@ -10,7 +10,8 @@ namespace Municode.Common.Services;
 public sealed class ProviderAccountService(WorkspaceDbContext db, ISecretStore secrets,
     ProviderAccountClientFactory clients, IIdGenerator ids, TimeProvider clock, IOptions<OpenBaoSecretStoreOptions> options)
 {
-    public async Task<ProviderAccount> CreateAsync(CreateProviderRequest request, CancellationToken ct)
+    /// <param name="id">Seed registration only: a deterministic account ID that the seeded policy references.</param>
+    public async Task<ProviderAccount> CreateAsync(CreateProviderRequest request, CancellationToken ct, string? id = null)
     {
         ValidateName(request.Name);
         if (!TryParseType(request.ProviderType, out var type))
@@ -20,7 +21,7 @@ public sealed class ProviderAccountService(WorkspaceDbContext db, ISecretStore s
         var now = clock.GetUtcNow();
         var account = new ProviderAccount
         {
-            Id = ids.NewId("provider"), OrganizationId = request.OrganizationId, Name = request.Name.Trim(), ProviderType = type,
+            Id = id ?? ids.NewId("provider"), OrganizationId = request.OrganizationId, Name = request.Name.Trim(), ProviderType = type,
             ProjectId = request.ProjectId, DefaultOsId = request.DefaultOsId ?? (type == CloudProvider.Vultr ? 2284 : null),
             CreatedAt = now, UpdatedAt = now
         };

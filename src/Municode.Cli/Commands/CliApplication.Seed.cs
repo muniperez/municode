@@ -12,7 +12,7 @@ public sealed partial class CliApplication
     [
         "--provider", "--region", "--size", "--dashboard-hostname", "--api-hostname",
         "--gateway-domain", "--release", "--credential-file", "--approve",
-        "--confirm-console-fingerprint", "--instance-name"
+        "--confirm-console-fingerprint", "--instance-name", "--workspace-provider"
     ];
 
     private async Task<int> RunSeedAsync(string[] args, CancellationToken cancellationToken)
@@ -59,14 +59,15 @@ public sealed partial class CliApplication
             var instanceName = options.GetValueOrDefault("--instance-name");
             InstanceRegistry.ValidateName(instanceName ?? selection.DashboardHostname);
             var credential = SeedFiles.ReadCredential(RequiredSeedOption(options, "--credential-file"));
+            var register = WorkspaceProviderChoice(options.GetValueOrDefault("--workspace-provider"), selection.Provider);
             var release = await _seed.Release().VerifyAsync(
                 selection.ReleaseTag, Path.Combine(journal.DirectoryPath, "release"), cancellationToken);
             using var provider = _seed.Providers(selection.Provider, credential, null);
-            var quote = await provider.QuoteAsync(selection, operationId, cancellationToken);
+            var quote = await provider.QuoteAsync(selection, operationId, register, cancellationToken);
             var state = new SeedState
             {
                 Id = operationId, Plan = new(selection, quote, release.Identity, instanceName),
-                RegisterWorkspaceProvider = AskToRegisterWorkspaceProvider(selection.Provider)
+                RegisterWorkspaceProvider = register
             };
             journal.Save(state);
             _console.WriteLine("Seed operation: " + operationId);
@@ -76,9 +77,16 @@ public sealed partial class CliApplication
                 _console.WriteLine("  " + cost.Exclusions + " Source: " + cost.Source);
             }
             _console.WriteLine("One control-plane VPS only; no coding VM.");
-            _console.WriteLine(state.RegisterWorkspaceProvider
-                ? $"Workspace provider: this {selection.Provider} account will be registered in the first organization after first-owner setup."
-                : "Workspace provider: not registered. Add one in organization settings after setup.");
+            if (quote.Workspace is { } workspace)
+            {
+                _console.WriteLine($"Workspace provider: this {selection.Provider} account is registered as "
+                    + "'Default provider' in the first organization after first-owner setup, with a default "
+                    + $"{workspace.Sku} plan in {selection.Region} on stock Ubuntu 24.04. Users can launch coding VMs immediately.");
+                _console.WriteLine("Cost: " + SeedGuard.FormatCost(workspace.Cost));
+                _console.WriteLine("  " + workspace.Cost.Exclusions + " Source: " + workspace.Cost.Source);
+            }
+            else
+                _console.WriteLine("Workspace provider: not registered. Add one in organization settings after setup.");
             _console.WriteLine("Exact release: " + release.Identity.Tag
                 + " source " + release.Identity.SourceRevision
                 + " manifest " + release.Identity.ManifestSha256
@@ -107,7 +115,8 @@ public sealed partial class CliApplication
                 "The exact release identity changed. Refusing to resume or install another bundle.");
             using var provider = _seed.Providers(state.Plan.Selection.Provider, credential, null);
             var lifecycle = new SeedLifecycle(provider, _seed.Host(), journal, release.Directory,
-                _console.WriteLine, state.RegisterWorkspaceProvider ? credential : null);
+                _console.WriteLine, state.RegisterWorkspaceProvider ? credential : null,
+                _console.IsInteractive && _console.IsOutputTerminal);
             await lifecycle.ResumeAsync(state,
                 options.GetValueOrDefault("--approve"),
                 options.GetValueOrDefault("--confirm-console-fingerprint"),
@@ -117,13 +126,20 @@ public sealed partial class CliApplication
         }
     }
 
-    private bool AskToRegisterWorkspaceProvider(string provider)
+    private bool WorkspaceProviderChoice(string? option, string provider)
     {
-        // Unattended seed never prompts and never registers a workspace provider.
-        if (!_console.IsInteractive) return false;
-        _console.WriteError($"Also add this {provider} account as a workspace provider in the first organization "
-            + "after first-owner setup? Seed creates no coding VM either way. [y/N]");
-        return _console.ReadLine()?.Trim().ToLowerInvariant() is "y" or "yes";
+        if (option is not null)
+            return option switch
+            {
+                "yes" => true,
+                "no" => false,
+                _ => throw new CliCommandException(CliExitCodes.ValidationError, "Use --workspace-provider yes or no.")
+            };
+        // Unattended seed never prompts and keeps the default.
+        if (!_console.IsInteractive) return true;
+        _console.WriteError($"Also use this {provider} account as the workspace provider, with a default plan so users "
+            + "can launch coding VMs right after first-owner setup? Seed creates no coding VM either way. [Y/n]");
+        return _console.ReadLine()?.Trim().ToLowerInvariant() is not ("n" or "no");
     }
 
     private async Task RegisterCompletedSeedAsync(SeedState state, SeedJournal journal, CancellationToken ct)
@@ -179,13 +195,14 @@ public sealed partial class CliApplication
         _console.WriteLine("  municode seed plan --provider <hetzner|digitalocean|vultr> --region <id> --size <id>");
         _console.WriteLine("    --dashboard-hostname <name> --api-hostname <name> --gateway-domain <name>");
         _console.WriteLine("    --release <municode-vX.Y.Z> --credential-file <owner-only-path>");
-        _console.WriteLine("    [--instance-name <name>] (defaults to the dashboard hostname)");
+        _console.WriteLine("    [--instance-name <name>] (defaults to the dashboard hostname) [--workspace-provider <yes|no>]");
         _console.WriteLine("  municode seed apply <operation> --credential-file <path> --approve <digest>");
         _console.WriteLine("  municode seed resume <operation> --credential-file <path> [--confirm-console-fingerprint <SHA256:...>]");
         _console.WriteLine("  municode seed status <operation>");
         _console.WriteLine("Plan is read-only except for protected local state and exact release verification.");
         _console.WriteLine("Seed provisions one control-plane VPS only and never creates coding VMs.");
-        _console.WriteLine("Interactive plan asks whether to add the same provider account as a workspace provider (default no).");
-        _console.WriteLine("On yes, the control plane registers it in the first organization after first-owner setup. Unattended plan never prompts or registers it.");
+        _console.WriteLine("Plan asks whether to reuse the same provider account for coding VMs (default yes); unattended plan keeps the default.");
+        _console.WriteLine("On yes, the control plane registers it as 'Default provider' with a default stock-Ubuntu workspace plan");
+        _console.WriteLine("after first-owner setup, so users can launch coding VMs immediately. --workspace-provider no opts out.");
     }
 }

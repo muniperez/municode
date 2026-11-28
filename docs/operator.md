@@ -33,18 +33,36 @@ create a provider resource. Review the currency, hourly/monthly terms, taxes,
 traffic and optional-service exclusions. `municode` reports an approval digest;
 there is no `latest`, token-on-command-line or implicit-cost approval.
 
-In an interactive terminal, plan also asks whether to add the same provider
-account as a workspace provider in the first organization (default no). Only
-the yes/no choice is journaled. On yes, apply or resume re-reads
-`--credential-file` and stages it over the pinned SSH connection's stdin into
-an owner-only file on a Compose-managed volume (`api-bootstrap stage-provider`).
-After first-owner setup completes, the API validates it with the provider,
-stores it through the normal OpenBao provider-account path, records a
-`provider.created` audit event from `system:seed` and deletes the staged file.
-Retries never create a second account of the same type. A rejected credential is
-discarded and logged without its value. Unattended (non-interactive) plans never
-prompt and never register a provider. Releases without `stage-provider` print a
-warning and continue. Seed still creates no coding VM.
+Plan also decides whether to reuse the same provider account for coding VMs in
+the first organization. The default is yes: an interactive terminal asks
+`[Y/n]`, unattended plans choose yes, and `--workspace-provider no` opts out.
+On yes, plan also quotes a default workspace plan: the cheapest available x64
+size in the seed region with 8 GiB of memory and at least 2 vCPUs (for example
+Vultr `vc2-4c-8gb`), on the provider's stock Ubuntu 24.04 image. Only the
+choice and the quote are journaled. Apply or resume then:
+
+- writes a default `DevelopmentWorkspaces` policy into the initial host policy:
+  the `standard` profile, the `ubuntu-24-04` stock image (`Source: ubuntu`),
+  provider pricing and a fixed volume rate (Hetzner's published net rate;
+  0.10 USD/GB-month for DigitalOcean and Vultr). The installer stamps
+  `PricingUpdatedAt` and `QualifiedAt` with the host clock and sets
+  `MaxPricingAgeDays` to 365; review prices under `DevelopmentWorkspaces`.
+- re-reads `--credential-file` and stages it over the pinned SSH connection's
+  stdin into an owner-only file on a Compose-managed volume
+  (`api-bootstrap stage-provider`).
+
+After first-owner setup completes, the API validates the credential with the
+provider, stores it through the normal OpenBao provider-account path as
+`Default provider` (`provider_seed`), creates `Default workspace plan`
+(`plan_seed`) for the quoted size and region, records `provider.created` and
+`plan.created` audit events from `system:seed` and deletes the staged file. A
+coding VM can be launched immediately: the worker provisions stock Ubuntu over
+SSH with the pinned T3, Codex, Claude, Gemini and GitHub Copilot CLIs (about
+15 minutes), so no builder VPS or snapshot is needed. A prepared image is
+optional and only speeds later launches. Retries never create a second account
+of the same type. A rejected credential is discarded and logged without its
+value. Releases without `stage-provider` or `--workspace-defaults` print a
+warning or skip the defaults and continue. Seed itself creates no coding VM.
 
 ```sh
 municode seed apply <operation> \
@@ -121,15 +139,23 @@ gateway certificate is acquired on demand only for valid workspace hosts after a
 workspace exists.
 
 The protected one-time owner token is downloaded to
-`<config-home>/seed/<operation>/setup-token` with owner-only permissions and is
-never printed. Open `https://console.example.com/setup`, enter the token manually
-and complete first-owner sign-in. Unless you opted in during plan, register the provider
-account explicitly. Then use a test plan to run [image release acceptance](setup/runtime.md#release-a-workspace-image)
-before admitting the image for users. The seed token remains on the
-operator workstation. The provider credential is copied to OpenBao only if you
-opted in. Seed also sets `DevelopmentWorkspaceWorker:ManagementAddresses` in
-the initial host policy to the VPS's public IPv4 `/32`. No coding VM is
-created by this flow.
+`<config-home>/seed/<operation>/setup-token` with owner-only permissions. In an
+interactive terminal, seed prints a setup link,
+`https://console.example.com/setup#token=<token>`. The token is in the URL
+fragment, which browsers never send to the server; the setup page reads it,
+removes it from the address bar and history entry, and prefills the form. Treat
+the link like a password: it works once. Redirected or unattended output never
+contains the token or link, and the journal never stores them; open
+`https://console.example.com/setup` and enter the token from the file instead.
+Manual entry always remains available.
+
+If you opted out of provider reuse, register a provider, image and plan
+explicitly; use a test plan to run [image release acceptance](setup/runtime.md#release-a-workspace-image)
+before admitting a prepared image. The seed token remains on the operator
+workstation. The provider credential is copied to OpenBao only if reuse is on.
+Seed also sets `DevelopmentWorkspaceWorker:ManagementAddresses` in the initial
+host policy to the VPS's public IPv4 `/32`. No coding VM is created by this
+flow.
 
 OpenBao is initialized with one protected recovery record at
 `/etc/municode/secrets/openbao-seed-init.json`. Move an independent

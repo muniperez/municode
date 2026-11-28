@@ -21,9 +21,19 @@ public sealed class SeedProviderTests
         var handler = new ProviderHandler(provider);
         using var subject = new SeedProvider(provider, "synthetic-credential", handler);
         var selection = Selection(provider);
-        var quote = await subject.QuoteAsync(selection, new string('a', 32), CancellationToken.None);
+        var quote = await subject.QuoteAsync(selection, new string('a', 32), true, CancellationToken.None);
 
         Assert.Equal("linux/amd64", quote.Architecture);
+        // The default workspace plan is the cheapest 8 GiB x64 plan with 2+ vCPUs on the stock Ubuntu image.
+        Assert.Equal(provider switch
+        {
+            "hetzner" => new SeedWorkspaceDefaults("cx32", 4, 8, "101", 0.0109m, 6.80m, 0.044m, "EUR",
+                "https://api.hetzner.cloud/v1/pricing"),
+            "digitalocean" => new SeedWorkspaceDefaults("s-4vcpu-8gb", 4, 8, "101", 0.07143m, 48m, 0.10m, "USD",
+                "https://api.digitalocean.com/v2/sizes; volumes https://www.digitalocean.com/pricing/volumes"),
+            _ => new SeedWorkspaceDefaults("vc2-4c-8gb", 4, 8, "2284", 0.055m, 40m, 0.10m, "USD",
+                "https://api.vultr.com/v2/plans; block storage https://www.vultr.com/pricing/#block-storage")
+        }, quote.Workspace);
         Assert.All(quote.Costs, cost => Assert.True(cost.Monthly > 0));
         var state = State(provider, quote);
         var server = await subject.CreateServerAsync(
@@ -50,7 +60,7 @@ public sealed class SeedProviderTests
     {
         var handler = new ProviderHandler("vultr") { VultrAcls = [acl] };
         using var subject = new SeedProvider("vultr", "synthetic-credential", handler);
-        var quote = () => subject.QuoteAsync(Selection("vultr"), new string('a', 32), CancellationToken.None);
+        var quote = () => subject.QuoteAsync(Selection("vultr"), new string('a', 32), false, CancellationToken.None);
 
         if (accepted) Assert.Equal("linux/amd64", (await quote()).Architecture);
         else Assert.Contains("provisioning ACL", (await Assert.ThrowsAnyAsync<Exception>(quote)).Message);
@@ -62,7 +72,7 @@ public sealed class SeedProviderTests
         var handler = new ProviderHandler("hetzner");
         using var subject = new SeedProvider("hetzner", "synthetic-credential", handler);
         var state = State("hetzner", await subject.QuoteAsync(
-            Selection("hetzner"), new string('a', 32), CancellationToken.None));
+            Selection("hetzner"), new string('a', 32), false, CancellationToken.None));
         var created = await subject.CreateServerAsync(
             state, "ssh-ed25519 AAAAsynthetic municode-seed", CancellationToken.None);
         var found = await subject.FindServerAsync(state.Id, CancellationToken.None);
@@ -84,7 +94,7 @@ public sealed class SeedProviderTests
         if (create)
         {
             var state = State("hetzner", await subject.QuoteAsync(
-                Selection("hetzner"), new string('a', 32), CancellationToken.None));
+                Selection("hetzner"), new string('a', 32), false, CancellationToken.None));
             var error = await Assert.ThrowsAsync<CliCommandException>(() => subject.CreateServerAsync(
                 state, "ssh-ed25519 AAAAsynthetic municode-seed", CancellationToken.None));
             Assert.Contains("exact seed ownership marker", error.Message);
@@ -137,7 +147,7 @@ public sealed class SeedProviderTests
         if (create)
         {
             var state = State("hetzner", await subject.QuoteAsync(
-                Selection("hetzner"), new string('a', 32), CancellationToken.None));
+                Selection("hetzner"), new string('a', 32), false, CancellationToken.None));
             error = await Assert.ThrowsAsync<CliCommandException>(() => subject.CreateServerAsync(
                 state, "ssh-ed25519 AAAAsynthetic municode-seed", CancellationToken.None));
             Assert.Single(handler.CreateBodies);
@@ -164,7 +174,7 @@ public sealed class SeedProviderTests
         var handler = new ProviderHandler("hetzner");
         using var subject = new SeedProvider("hetzner", "synthetic-credential", handler);
         var state = State("hetzner", await subject.QuoteAsync(
-            Selection("hetzner"), new string('a', 32), CancellationToken.None));
+            Selection("hetzner"), new string('a', 32), false, CancellationToken.None));
         state.ServerCreateStarted = true;
         state.Server = await subject.CreateServerAsync(
             state, "ssh-ed25519 AAAAsynthetic municode-seed", CancellationToken.None);
@@ -258,7 +268,13 @@ public sealed class SeedProviderTests
                             server_types = new[]
                             {
                                 new { id = 1, name = "cx22", architecture = "x86", cores = 2,
-                                    memory = 4, disk = 40, locations = new[] { new { name = "nbg1" } } }
+                                    memory = 4, disk = 40, locations = new[] { new { name = "nbg1" } } },
+                                new { id = 2, name = "cx32", architecture = "x86", cores = 4,
+                                    memory = 8, disk = 80, locations = new[] { new { name = "nbg1" } } },
+                                new { id = 3, name = "cpx31", architecture = "x86", cores = 4,
+                                    memory = 8, disk = 160, locations = new[] { new { name = "nbg1" } } },
+                                new { id = 4, name = "cax21", architecture = "arm", cores = 4,
+                                    memory = 8, disk = 80, locations = new[] { new { name = "nbg1" } } }
                             }
                         },
                     var value when value.StartsWith("/v1/images", StringComparison.Ordinal) =>
@@ -278,8 +294,15 @@ public sealed class SeedProviderTests
                             server_types = new[]
                             {
                                 new { id = 1, prices = new[] { new { location = "nbg1",
-                                    price_monthly = new { net = "8.90" }, price_hourly = new { net = "0.01" } } } }
+                                    price_monthly = new { net = "8.90" }, price_hourly = new { net = "0.01" } } } },
+                                new { id = 2, prices = new[] { new { location = "nbg1",
+                                    price_monthly = new { net = "6.80" }, price_hourly = new { net = "0.0109" } } } },
+                                new { id = 3, prices = new[] { new { location = "nbg1",
+                                    price_monthly = new { net = "13.10" }, price_hourly = new { net = "0.021" } } } },
+                                new { id = 4, prices = new[] { new { location = "nbg1",
+                                    price_monthly = new { net = "5.00" }, price_hourly = new { net = "0.008" } } } }
                             },
+                            volume = new { price_per_gb_month = new { net = "0.044" } },
                             primary_ips = new[]
                             {
                                 new { type = "ipv4", prices = new[] { new { location = "nbg1",
@@ -308,7 +331,13 @@ public sealed class SeedProviderTests
                     var value when value.StartsWith("/v2/sizes", StringComparison.Ordinal) =>
                         new { sizes = new[] { new { slug = "s-2vcpu-4gb", available = true,
                             regions = new[] { "nbg1" }, vcpus = 2, memory = 4096, disk = 80,
-                            price_monthly = "24.00", price_hourly = "0.0357" } } },
+                            price_monthly = "24.00", price_hourly = "0.0357" },
+                            new { slug = "s-1vcpu-8gb", available = true,
+                            regions = new[] { "nbg1" }, vcpus = 1, memory = 8192, disk = 80,
+                            price_monthly = "30.00", price_hourly = "0.04464" },
+                            new { slug = "s-4vcpu-8gb", available = true,
+                            regions = new[] { "nbg1" }, vcpus = 4, memory = 8192, disk = 160,
+                            price_monthly = "48.00", price_hourly = "0.07143" } } },
                     "/v2/images/ubuntu-24-04-x64" => new
                     {
                         image = new { id = 101, distribution = "Ubuntu", slug = "ubuntu-24-04-x64",
@@ -332,11 +361,20 @@ public sealed class SeedProviderTests
                         {
                             new { id = "vc2-2c-4gb", type = "vc2", locations = new[] { "ewr" },
                                 vcpu_count = 2, ram = 4096, disk = 80, monthly_cost = "24.00",
-                                bandwidth = 3 }
+                                bandwidth = 3, hourly_cost = 0.036m },
+                            new { id = "voc-m-1c-8gb", type = "voc", locations = new[] { "ewr" },
+                                vcpu_count = 1, ram = 8192, disk = 50, monthly_cost = "40.00",
+                                bandwidth = 3, hourly_cost = 0.055m },
+                            new { id = "vhf-3c-8gb", type = "vhf", locations = new[] { "ewr" },
+                                vcpu_count = 3, ram = 8192, disk = 256, monthly_cost = "48.00",
+                                bandwidth = 3, hourly_cost = 0.066m },
+                            new { id = "vc2-4c-8gb", type = "vc2", locations = new[] { "ewr" },
+                                vcpu_count = 4, ram = 8192, disk = 160, monthly_cost = "40.00",
+                                bandwidth = 3, hourly_cost = 0.055m }
                         }
                     },
                 "/v2/regions/ewr/availability" =>
-                    new { available_plans = new[] { "vc2-2c-4gb" } },
+                    new { available_plans = new[] { "vc2-2c-4gb", "voc-m-1c-8gb", "vhf-3c-8gb", "vc2-4c-8gb" } },
                 var value when value.StartsWith("/v2/os", StringComparison.Ordinal) =>
                     new { os = new[] { new { id = 2284, family = "ubuntu", arch = "x64",
                         name = "Ubuntu 24.04 LTS" } } },

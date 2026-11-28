@@ -138,6 +138,18 @@ install -d -m 0700 __REMOTE__
         }
         var selection = state.Plan.Selection;
         var setupToken = Path.Combine(directory, "setup-token");
+        // Bundles older than #208 lack --workspace-defaults; only pass it when seed-start advertises it.
+        var defaultsFile = remote + "/workspace-defaults.json";
+        var defaultsArgs = "";
+        if (state.RegisterWorkspaceProvider && state.Plan.Quote.Workspace is { } workspace)
+        {
+            var policy = JsonSerializer.SerializeToUtf8Bytes(workspace.Policy(selection.Region));
+            var written = await SshAsync(state, directory,
+                "umask 077 && cat > " + Quote(defaultsFile), cancellationToken, policy);
+            SeedGuard.Require(written.ExitCode == 0, "Uploading the default workspace policy over pinned SSH failed.");
+            defaultsArgs = " && if grep -qF -e '--workspace-defaults' \"$bundle_root/seed-start.sh\"; then defaults_args="
+                + Quote("--workspace-defaults " + defaultsFile) + "; fi";
+        }
         var archiveRoot = remoteRelease + "/extracted";
         // Bundles older than #208 lack --management-address; only pass it when seed-start advertises it.
         var managementAddress = ManagementAddress(state);
@@ -174,7 +186,8 @@ install -d -m 0700 __REMOTE__
             + " && management_args=''"
             + " && if grep -qF -e '--management-address' \"$bundle_root/seed-start.sh\"; then management_args="
             + Quote("--management-address " + managementAddress) + "; fi"
-            + " && \"$bundle_root/seed-start.sh\" " + config + " $management_args"
+            + " && defaults_args=''" + defaultsArgs
+            + " && \"$bundle_root/seed-start.sh\" " + config + " $management_args $defaults_args"
             + " --release-root \"$bundle_root\""
             + " --bundle-sha256 " + Quote(state.Plan.Release.BundleSha256)
             + " --setup-token-output " + Quote(remote + "/setup-token");
@@ -189,11 +202,20 @@ install -d -m 0700 __REMOTE__
         CancellationToken cancellationToken)
     {
         // The credential travels only on pinned SSH stdin into the maintenance container; never argv or logs.
-        var input = JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, string>
+        var values = new Dictionary<string, object>
         {
             ["providerType"] = state.Plan.Selection.Provider,
             ["credential"] = credential
-        });
+        };
+        if (state.Plan.Quote.Workspace is { } workspace)
+            values["workspaceDefaults"] = new Dictionary<string, string>
+            {
+                ["providerAccountId"] = SeedWorkspaceDefaults.ProviderAccountId,
+                ["planId"] = SeedWorkspaceDefaults.PlanId,
+                ["region"] = state.Plan.Selection.Region,
+                ["sku"] = workspace.Sku
+            };
+        var input = JsonSerializer.SerializeToUtf8Bytes(values);
         try
         {
             var result = await SshAsync(state, directory,

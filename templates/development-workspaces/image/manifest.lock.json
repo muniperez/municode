@@ -44,6 +44,14 @@
     "dependencyLock": "tools/package-lock.json",
     "executable": "node_modules/@anthropic-ai/claude-code-linux-x64/claude"
   },
+  "gemini": {
+    "version": "0.71.1",
+    "source": "https://registry.npmjs.org/@google/gemini-cli/0.71.1",
+    "integrity": "sha512-FYDTjU+9BFPYKBcFS3vCjJol8pFyV0iHVigUNr2wZqk4vYNFgacGB5ubyrySFGM5jWxCK+1EFdcDJiEQjNomaw==",
+    "dependencyLock": "tools/package-lock.json",
+    "executable": "node_modules/@google/gemini-cli/bundle/gemini.js",
+    "systemSettings": "/etc/gemini-cli/settings.json"
+  },
   "antigravity": {
     "version": "1.4.5",
     "source": "https://github.com/agentclientprotocol/registry/blob/02b46036/antigravity/agent.json",
@@ -76,6 +84,11 @@
       "id": "claude",
       "name": "Claude Code",
       "version": "2.1.328"
+    },
+    {
+      "id": "gemini",
+      "name": "Gemini CLI",
+      "version": "0.71.1"
     },
     {
       "id": "antigravity",

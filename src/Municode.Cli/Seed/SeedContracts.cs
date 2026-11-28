@@ -68,7 +68,62 @@ internal sealed record SeedQuote(
     SeedCost[] Costs,
     DateTimeOffset RetrievedAt,
     string Restrictions,
-    string? NetworkId = null);
+    string? NetworkId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] SeedWorkspaceDefaults? Workspace = null);
+
+/// <summary>
+/// The default coding-VM plan seed configures when the owner keeps the seed provider as the workspace provider.
+/// Its account and plan IDs are fixed so the installed policy can reference the account registered after setup.
+/// </summary>
+internal sealed record SeedWorkspaceDefaults(
+    string Sku,
+    int CpuCount,
+    int MemoryGiB,
+    string Image,
+    decimal Hourly,
+    decimal Monthly,
+    decimal VolumeMonthlyRatePerGb,
+    string Currency,
+    string Source)
+{
+    public const string ProviderAccountId = "provider_seed";
+    public const string PlanId = "plan_seed";
+    public const string ImageKey = "ubuntu-24-04";
+    public const string ProfileKey = "standard";
+    // Seeded pricing stays valid for a year; admins review it under DevelopmentWorkspaces:PricingUpdatedAt.
+    public const int MaxPricingAgeDays = 365;
+
+    public SeedCost Cost => new($"each default coding VM ({Sku}, {CpuCount} vCPU, {MemoryGiB} GiB) while it exists",
+        Monthly, Hourly, Currency, "hourly while it exists, monthly cap; created only when a user launches one",
+        $"Workspace volumes {VolumeMonthlyRatePerGb.ToString("0.###", CultureInfo.InvariantCulture)} {Currency}/GB-month; "
+        + "taxes and bandwidth overage excluded.", Source);
+
+    /// <summary>The installer merges this into a newly created policy and stamps its pricing and qualification times.</summary>
+    public object Policy(string region) => new Dictionary<string, object>
+    {
+        ["Currency"] = Currency,
+        ["VolumeMonthlyRatePerGb"] = VolumeMonthlyRatePerGb,
+        ["MaxPricingAgeDays"] = MaxPricingAgeDays,
+        ["Profiles"] = new Dictionary<string, object>
+        {
+            [ProfileKey] = new
+            {
+                MemoryGiB, CpuCount, ComputeHourlyRate = Hourly,
+                AllowedPlanIds = new[] { PlanId }, DefaultPlanIdsForNewWorkspaces = new[] { PlanId },
+                AllowedSkus = new[] { Sku }, AllowedRegions = new[] { region }
+            }
+        },
+        ["Images"] = new Dictionary<string, object>
+        {
+            [ImageKey] = new
+            {
+                DisplayName = "Ubuntu 24.04", Source = "ubuntu", ProviderImageId = Image, Architecture = "linux/amd64",
+                ProviderAccountId, AllowedRegions = new[] { region }, Enabled = true, RuntimeQualified = true,
+                T3ConnectForNewWorkspaces = true
+            }
+        }
+    };
+}
 
 internal sealed record SeedReleaseIdentity(
     string Tag,
@@ -146,7 +201,8 @@ internal interface ISeedProvider : IDisposable
 {
     string CredentialScope(string operationId);
     Task<string> GetAccountIdentityAsync(CancellationToken cancellationToken);
-    Task<SeedQuote> QuoteAsync(SeedSelection selection, string operationId, CancellationToken cancellationToken);
+    Task<SeedQuote> QuoteAsync(
+        SeedSelection selection, string operationId, bool workspaceDefaults, CancellationToken cancellationToken);
     Task<SeedServer?> FindServerAsync(string operationId, CancellationToken cancellationToken);
     Task<SeedServer> CreateServerAsync(
         SeedState state,

@@ -81,22 +81,29 @@ municode seed resume <operation> \
       DNS is present. No coding VM is needed to perform this control-plane check.
 - [ ] Confirm Docker services include API, worker, gateway, dashboard, PostgreSQL,
       Kratos, OpenBao and Caddy. Inspect only sanitized status/log output.
-- [ ] Read the protected local setup token, open `/setup` over HTTPS and complete
-      first-owner setup. Sign out, sign back in and list workspaces without
-      creating one. The one-time token must not be reusable.
+- [ ] In an interactive terminal, open the printed `/setup#token=` link and
+      confirm the token is prefilled and removed from the address bar. On
+      another run, enter the protected local token manually at `/setup`.
+      Complete first-owner setup, sign out, sign back in and list workspaces.
+      The one-time token must not be reusable, and redirected output and the
+      journal must not contain it.
 - [ ] Confirm the provider credential never appears in the release, journal,
       control-plane environment, logs or URLs. If you answered no or ran
       unattended, also confirm no OpenBao path or provider account holds it.
-- [ ] On a second disposable seed, answer yes to the workspace-provider prompt.
-      After first-owner setup, confirm exactly one seed provider account in the
-      first organization, a `provider.created` audit from `system:seed`, the
-      staged file removed from the `seed-provider` volume, and no duplicate
-      after an API restart.
+- [ ] Accept the default workspace-provider reuse. After first-owner setup,
+      confirm exactly one `Default provider` account and one
+      `Default workspace plan` in the first organization, `provider.created`
+      and `plan.created` audits from `system:seed`, the staged file removed
+      from the `seed-provider` volume, and no duplicate after an API restart.
+- [ ] Without any further configuration, launch one coding VM on the default
+      plan and stock Ubuntu image. Confirm provisioning completes, T3 connects
+      and the Codex, Claude, Gemini and Copilot CLIs report their pinned
+      versions; then delete the VM and its volume. On a second disposable seed
+      with `--workspace-provider no`, confirm no provider account exists.
 - [ ] Confirm the host policy's `DevelopmentWorkspaceWorker:ManagementAddresses`
       holds the VPS's public IPv4 `/32`.
-- [ ] Confirm exactly zero workspace/coding VMs exist. Qualifying an image is a
-      separate action, and so is registering a provider when the seed opt-in was
-      declined. Workspace creation is outside seed validation.
+- [ ] Confirm seed itself created no workspace/coding VM; the only one is the
+      VM launched above, now deleted.
 
 ## Recovery and cleanup
 

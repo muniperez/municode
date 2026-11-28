@@ -24,6 +24,7 @@ services.AddSingleton<IIdGenerator, IdGenerator>();
 services.AddScoped<DevelopmentWorkspaceService>();
 services.AddScoped<ProviderAccountClientFactory>();
 services.Configure<DevelopmentWorkspaceOptions>(configuration.GetSection(DevelopmentWorkspaceOptions.SectionName));
+services.PostConfigure<DevelopmentWorkspaceOptions>(WorkspaceRecipe.Apply);
 services.Configure<DevelopmentWorkspaceManagementOptions>(configuration.GetSection(DevelopmentWorkspaceManagementOptions.SectionName));
 services.Configure<DevelopmentWorkspaceGatewayOptions>(configuration.GetSection(DevelopmentWorkspaceGatewayOptions.SectionName));
 services.Configure<WorkspaceSshOptions>(configuration.GetSection(WorkspaceSshOptions.SectionName));

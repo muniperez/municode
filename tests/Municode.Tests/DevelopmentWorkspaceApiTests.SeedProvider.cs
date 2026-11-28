@@ -1,7 +1,10 @@
+using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Municode.Api.Services;
 using Municode.Common.Data;
 using Municode.Common.Models;
@@ -42,12 +45,78 @@ public sealed partial class DevelopmentWorkspaceApiTests
         var db = scope.ServiceProvider.GetRequiredService<WorkspaceDbContext>();
         var account = await db.ProviderAccounts.SingleAsync(x => x.OrganizationId == "other");
         Assert.Equal(CloudProvider.Hetzner, account.ProviderType);
+        Assert.Equal(SeedProviderStaging.AccountName, account.Name);
         Assert.Equal("valid", account.ValidationStatus);
         Assert.Equal(SeedCredential, factory.Secrets.Values[account.CredentialPath!]);
         var audit = await db.AuditEvents.SingleAsync(x => x.OrganizationId == "other" && x.Action == "provider.created");
         Assert.Equal(SeedProviderRegistrar.Actor, audit.Actor);
         Assert.Empty(await db.DevelopmentWorkspaceVms.ToListAsync());
         Assert.DoesNotContain(logs, line => line.Contains(SeedCredential, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task StagedSeedDefaultsRegisterTheDefaultProviderAndPlanOnceWithTheirSeededIds()
+    {
+        using var directory = new SeedStagingDirectory();
+        var defaults = new SeedWorkspaceDefaults("provider_seed", "plan_seed", "fsn1", "cx32");
+        var input = new BootstrapCommand.Input { ProviderType = "hetzner", Credential = SeedCredential, WorkspaceDefaults = defaults };
+        await BootstrapCommand.StageProviderAsync(input, directory.File);
+        await MarkSetupReadyAsync("other");
+        var logs = new List<string>();
+        Assert.Equal(SeedProviderRegistrationOutcome.Registered, await RunRegistrarAsync(directory.File, logs));
+        Assert.False(File.Exists(directory.File));
+
+        // A retry after a partial registration completes the missing plan without a second account.
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<WorkspaceDbContext>();
+            db.ProviderPlanNames.RemoveRange(db.ProviderPlanNames.Where(x => x.PlanId == "plan_seed"));
+            db.ProviderPlans.Remove(await db.ProviderPlans.SingleAsync(x => x.Id == "plan_seed"));
+            await db.SaveChangesAsync();
+        }
+        await BootstrapCommand.StageProviderAsync(input, directory.File);
+        Assert.Equal(SeedProviderRegistrationOutcome.AlreadyRegistered, await RunRegistrarAsync(directory.File, logs));
+        await BootstrapCommand.StageProviderAsync(input, directory.File);
+        Assert.Equal(SeedProviderRegistrationOutcome.AlreadyRegistered, await RunRegistrarAsync(directory.File, logs));
+
+        await using var verify = factory.Services.CreateAsyncScope();
+        var data = verify.ServiceProvider.GetRequiredService<WorkspaceDbContext>();
+        var account = await data.ProviderAccounts.SingleAsync(x => x.OrganizationId == "other");
+        Assert.Equal(("provider_seed", SeedProviderStaging.AccountName), (account.Id, account.Name));
+        var plan = await data.ProviderPlans.SingleAsync(x => x.OrganizationId == "other");
+        Assert.Equal(("plan_seed", "provider_seed", "fsn1", "cx32", "linux/amd64", true),
+            (plan.Id, plan.ProviderAccountId, plan.Region, plan.Sku, plan.BuildPlatform, plan.Enabled));
+        Assert.Equal(SeedProviderStaging.PlanName, plan.Name);
+        Assert.Empty(await data.DevelopmentWorkspaceVms.ToListAsync());
+        Assert.DoesNotContain(logs, line => line.Contains(SeedCredential, StringComparison.Ordinal));
+
+        // The policy seed writes (CLI defaults plus the installer's host-clock stamps) must offer the seeded plan as
+        // the default for new coding VMs with no further operator configuration.
+        var now = DateTimeOffset.UtcNow.AddMinutes(-1).ToString("O");
+        var json = $$"""
+            {"DevelopmentWorkspaces":{"Currency":"EUR","VolumeMonthlyRatePerGb":0.044,"MaxPricingAgeDays":365,
+             "PricingUpdatedAt":"{{now}}",
+             "Profiles":{"standard":{"MemoryGiB":8,"CpuCount":4,"ComputeHourlyRate":0.0128,"AllowedPlanIds":["plan_seed"],
+               "DefaultPlanIdsForNewWorkspaces":["plan_seed"],"AllowedSkus":["cx32"],"AllowedRegions":["fsn1"] } },
+             "Images":{"ubuntu-24-04":{"DisplayName":"Ubuntu 24.04","Source":"ubuntu","ProviderImageId":"161547269",
+               "Architecture":"linux/amd64","ProviderAccountId":"provider_seed","AllowedRegions":["fsn1"],"Enabled":true,
+               "RuntimeQualified":true,"T3ConnectForNewWorkspaces":true,"QualifiedAt":"{{now}}" } } } }
+            """;
+        var policy = new ConfigurationBuilder().AddJsonStream(new MemoryStream(Encoding.UTF8.GetBytes(json))).Build()
+            .GetSection("DevelopmentWorkspaces").Get<DevelopmentWorkspaceOptions>()!;
+        WorkspaceRecipe.Apply(policy);
+        var service = new DevelopmentWorkspaceService(data, new IdGenerator(), TimeProvider.System, Options.Create(policy),
+            Options.Create(new DevelopmentWorkspaceManagementOptions { ManagementAddresses = ["198.51.100.1/32"] }));
+        var selections = await service.GetSelectionsAsync("other", null, CancellationToken.None);
+        Assert.True(selections.Available, selections.UnavailableReason);
+        var option = Assert.Single(selections.Options);
+        Assert.Equal(("ubuntu-24-04", "standard", "plan_seed", "cx32", true),
+            (option.ImageId, option.Profile, option.PlanId, option.Sku, option.IsDefault));
+
+        var error = await Assert.ThrowsAsync<BootstrapException>(() => BootstrapCommand.StageProviderAsync(
+            new BootstrapCommand.Input { ProviderType = "hetzner", Credential = SeedCredential,
+                WorkspaceDefaults = defaults with { PlanId = "provider_seed" } }, directory.File));
+        Assert.Equal("seed_provider_invalid", error.Code);
     }
 
     [Fact]
@@ -99,7 +168,8 @@ public sealed partial class DevelopmentWorkspaceApiTests
         await using var scope = factory.Services.CreateAsyncScope();
         var services = scope.ServiceProvider;
         var registrar = new SeedProviderRegistrar(services.GetRequiredService<WorkspaceDbContext>(),
-            services.GetRequiredService<ProviderAccountService>(), services.GetRequiredService<AuditEventService>(),
+            services.GetRequiredService<ProviderAccountService>(), services.GetRequiredService<ProviderCatalogService>(),
+            services.GetRequiredService<AuditEventService>(),
             new ListLogger(logs));
         return await registrar.RunAsync(path, CancellationToken.None);
     }

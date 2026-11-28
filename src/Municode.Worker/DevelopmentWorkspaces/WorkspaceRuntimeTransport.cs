@@ -13,6 +13,9 @@ namespace Municode.Worker.DevelopmentWorkspaces;
 
 public sealed record WorkspaceRuntimeTarget(string VmId, long Generation, string Kind, string Address, string HostFingerprint);
 
+/// <summary>Provisioning progress on a stock Ubuntu VM: Unreachable, NotStarted, Running, Provisioned or Failed.</summary>
+public sealed record WorkspaceProvisionStatus(string State, string? Error = null);
+
 public interface IWorkspaceRuntimeTransport
 {
     Task<bool> CheckSshReadinessAsync(WorkspaceRuntimeTarget target, CancellationToken ct) =>
@@ -29,6 +32,10 @@ public interface IWorkspaceRuntimeTransport
         throw new NotSupportedException("Repository credential readback is required for safe retirement.");
     Task VerifyGitRecoverySourceAsync(WorkspaceRuntimeTarget target, DevelopmentWorkspaceGitRecoverySource source, CancellationToken ct) =>
         throw new NotSupportedException("Saved Git source verification is required before recovery bootstrap.");
+    Task<WorkspaceProvisionStatus> GetProvisionStatusAsync(WorkspaceRuntimeTarget target, string recipeSha256, CancellationToken ct) =>
+        throw new NotSupportedException("Stock Ubuntu workspace provisioning is unavailable.");
+    Task StartProvisioningAsync(WorkspaceRuntimeTarget target, string payloadDirectory, string recipeSha256, CancellationToken ct) =>
+        throw new NotSupportedException("Stock Ubuntu workspace provisioning is unavailable.");
 }
 
 public sealed class WorkspaceRuntimeTransport(IOptions<WorkspaceSshOptions> options) : IWorkspaceRuntimeTransport
@@ -120,6 +127,92 @@ public sealed class WorkspaceRuntimeTransport(IOptions<WorkspaceSshOptions> opti
             Upload(sftp, "/run/municode-workspace/enrollment.json", enrollment);
         }
         return Parse(await ExecuteAsync(target, "python3 -B /opt/municode-workspace/bootstrap.py bootstrap", ct));
+    }
+
+    internal const string ProvisionSource = "/opt/municode-image-source";
+    internal const string ProvisionUnit = "municode-provision.service";
+
+    public async Task<WorkspaceProvisionStatus> GetProvisionStatusAsync(WorkspaceRuntimeTarget target, string recipeSha256, CancellationToken ct)
+    {
+        string output;
+        try { output = await ExecuteAsync(target, ProvisionStatusCommand(), ct); }
+        // A fresh VM may still be applying its first-boot host identity; the caller enforces the deadline.
+        catch (Exception error) when (!ct.IsCancellationRequested && error is SshException or SocketException or SshOperationTimeoutException)
+        {
+            return new("Unreachable");
+        }
+        return ReadProvisionStatus(Parse(output), recipeSha256);
+    }
+
+    internal static string ProvisionStatusCommand()
+    {
+        const string script = """
+            import json, pathlib, subprocess
+            path = pathlib.Path("/var/lib/municode-provision/result.json")
+            result = json.loads(path.read_text()) if path.is_file() else None
+            unit = subprocess.run(["systemctl", "show", "-p", "ActiveState", "--value", "municode-provision.service"],
+                                  capture_output=True, text=True, timeout=30).stdout.strip()
+            print(json.dumps({"result": result, "unit": unit}))
+            """;
+        var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(script));
+        return $"printf '%s' '{encoded}' | base64 -d | python3 -I -B -";
+    }
+
+    internal static WorkspaceProvisionStatus ReadProvisionStatus(JsonElement status, string recipeSha256)
+    {
+        if (status.TryGetProperty("result", out var result) && result.ValueKind == JsonValueKind.Object)
+        {
+            var state = result.TryGetProperty("state", out var s) ? s.GetString() : null;
+            if (state == "Provisioned")
+                return result.TryGetProperty("recipeSha256", out var sha) && sha.GetString() == recipeSha256
+                    ? new("Provisioned") : new("Failed", "The VM was provisioned from a different recipe.");
+            if (state == "Failed")
+                return new("Failed", result.TryGetProperty("error", out var e) ? Bounded(e.GetString()) : null);
+        }
+        return (status.TryGetProperty("unit", out var unit) ? unit.GetString() : null) switch
+        {
+            "active" or "activating" or "deactivating" or "reloading" => new("Running"),
+            "failed" => new("Failed", "Provisioning stopped without a result."),
+            _ => new("NotStarted")
+        };
+    }
+
+    private static string? Bounded(string? value) =>
+        value is null ? null : new string(value.Where(c => !char.IsControl(c)).Take(400).ToArray());
+
+    public async Task StartProvisioningAsync(WorkspaceRuntimeTarget target, string payloadDirectory, string recipeSha256, CancellationToken ct)
+    {
+        if (!System.Text.RegularExpressions.Regex.IsMatch(recipeSha256, "^[0-9a-f]{64}$"))
+            throw new InvalidOperationException("Invalid workspace recipe digest.");
+        var root = new DirectoryInfo(payloadDirectory);
+        if (!File.Exists(Path.Combine(root.FullName, "image", "build.py")))
+            throw new InvalidOperationException("The workspace provisioning recipe is missing from this worker build.");
+        using (var sftp = new SftpClient(Connection(target)) { OperationTimeout = TimeSpan.FromSeconds(30) })
+        {
+            Pin(sftp, target);
+            await sftp.ConnectAsync(ct);
+            UploadDirectory(sftp, root, ProvisionSource, ct);
+        }
+        Parse(await ExecuteAsync(target, StartProvisionCommand(recipeSha256), ct));
+    }
+
+    internal static string StartProvisionCommand(string recipeSha256) =>
+        $"systemd-run --quiet --unit={ProvisionUnit} --property=WorkingDirectory={ProvisionSource} " +
+        $"/usr/bin/python3 -I -B {ProvisionSource}/image/build.py provision " +
+        $"--acknowledgement PROVISION-FRESH-STOCK-WORKSPACE-VM --recipe-sha256 {recipeSha256} && echo '{{\"started\":true}}'";
+
+    private static void UploadDirectory(SftpClient client, DirectoryInfo source, string destination, CancellationToken ct)
+    {
+        if (!client.Exists(destination)) client.CreateDirectory(destination);
+        client.ChangePermissions(destination, 755);
+        foreach (var file in source.EnumerateFiles())
+        {
+            ct.ThrowIfCancellationRequested();
+            using (var input = file.OpenRead()) client.UploadFile(input, destination + "/" + file.Name, true);
+            client.ChangePermissions(destination + "/" + file.Name, 644);
+        }
+        foreach (var directory in source.EnumerateDirectories().Where(x => x.Name != "__pycache__"))
+            UploadDirectory(client, directory, destination + "/" + directory.Name, ct);
     }
 
     public async Task VerifyGitRecoverySourceAsync(WorkspaceRuntimeTarget target, DevelopmentWorkspaceGitRecoverySource source, CancellationToken ct)
