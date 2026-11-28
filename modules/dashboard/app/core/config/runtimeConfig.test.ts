@@ -73,10 +73,10 @@ describe("parseRuntimeConfig", () => {
             encoding: "utf8",
             env: {
               ...process.env,
-              WORKSPACES_API_URL: "https://api.example.test",
-              WORKSPACES_SOURCE_URL: "https://github.com/muniperez/municode",
+              MUNICODE_API_URL: "https://api.example.test",
+              MUNICODE_SOURCE_URL: "https://github.com/muniperez/municode",
               ...environment,
-              WORKSPACES_DASHBOARD_HTML_ROOT: fixture,
+              MUNICODE_DASHBOARD_HTML_ROOT: fixture,
               NGINX_ARGV_FILE: argvFile,
               PATH: `${bin}:${process.env.PATH}`,
             },
@@ -97,7 +97,7 @@ describe("parseRuntimeConfig", () => {
     it("writes only the same public installation config for independent API origins", () => {
       for (const apiBaseUrl of ["https://api.alpha.example", "https://control.beta.test:8443"]) {
         const result = runStartup({
-          WORKSPACES_API_URL: apiBaseUrl,
+          MUNICODE_API_URL: apiBaseUrl,
           OpenBao__Address: "https://openbao:8200",
           OpenBao__Token: "synthetic-private-token",
           Kratos__AdminBaseUrl: "http://kratos:4434/",
@@ -115,10 +115,10 @@ describe("parseRuntimeConfig", () => {
     });
 
     it.each([
-      { WORKSPACES_API_URL: "http://api.example.test" },
-      { WORKSPACES_API_URL: "https://api.example.test/admin" },
-      { WORKSPACES_API_URL: "https://user:synthetic-secret@api.example.test" },
-      { WORKSPACES_SOURCE_URL: "https://user:synthetic-secret@example.test/source" },
+      { MUNICODE_API_URL: "http://api.example.test" },
+      { MUNICODE_API_URL: "https://api.example.test/admin" },
+      { MUNICODE_API_URL: "https://user:synthetic-secret@api.example.test" },
+      { MUNICODE_SOURCE_URL: "https://user:synthetic-secret@example.test/source" },
     ])("rejects invalid public values before writing configuration or starting the server: %j", (environment) => {
       const result = runStartup(environment);
       expect(result.status).toBe(1);

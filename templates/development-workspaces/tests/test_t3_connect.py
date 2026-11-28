@@ -79,7 +79,7 @@ class ConnectTests(unittest.TestCase):
         (process / "fd").mkdir(parents=True)
         (proc / "net").mkdir()
         (process / "status").write_text("Uid:\t0\t0\t0\t0\n")
-        (process / "cgroup").write_text("0::/system.slice/workspaces-t3-connect.service\n")
+        (process / "cgroup").write_text("0::/system.slice/municode-t3-connect.service\n")
         (process / "cmdline").write_bytes(b"/usr/bin/python3\0-B\0" +
                                          os.fsencode(connect.MANAGEMENT_SCRIPT) + b"\0serve\0")
         (process / "exe").symlink_to(sys.executable)
@@ -87,8 +87,8 @@ class ConnectTests(unittest.TestCase):
         (proc / "net" / "tcp").write_text("header\n 0: 0100007F:0306 00000000:0000 0A 0:0 00:0 0 0 0 456\n")
         (proc / "net" / "tcp6").write_text("header\n")
         properties = "\n".join(("ActiveState=active", "MainPID=123", "User=root",
-            "FragmentPath=/etc/systemd/system/workspaces-t3-connect.service", "DropInPaths=",
-            "ControlGroup=/system.slice/workspaces-t3-connect.service"))
+            "FragmentPath=/etc/systemd/system/municode-t3-connect.service", "DropInPaths=",
+            "ControlGroup=/system.slice/municode-t3-connect.service"))
         return proc, properties
 
     def test_listener_admission_requires_root_service_process_and_its_actual_listening_socket(self):
@@ -98,7 +98,7 @@ class ConnectTests(unittest.TestCase):
             connect.require_trusted_listener(proc)
             for path, replacement in (
                     (proc / "123/status", "Uid:\t2000\t2000\t2000\t2000\n"),
-                    (proc / "123/cgroup", "0::/workspaceswork.slice/workspaces-t3.service\n"),
+                    (proc / "123/cgroup", "0::/municodework.slice/municode-t3.service\n"),
                     (proc / "123/cmdline", "/usr/bin/python3\0-B\0/workspace/spoof.py\0serve\0"),
                     (proc / "net/tcp", "header\n"),
                     (proc / "net/tcp", "header\n 0: 00000000:0306 00000000:0000 0A 0:0 00:0 0 0 0 456\n"),
@@ -162,7 +162,7 @@ class ConnectTests(unittest.TestCase):
                 patch.object(connect, "relay_start_diagnostics", return_value={}):
             connect.activate(self.config, self.root)
         self.assertEqual(run.call_args_list[-2].args[0],
-                         ["systemctl", "restart", "workspaces-t3.service"])
+                         ["systemctl", "restart", "municode-t3.service"])
         self.assertEqual(self.activation()["state"], "linked")
         self.queue_activation()
         with patch.object(connect, "run", return_value="inactive") as run:
@@ -257,7 +257,7 @@ class ConnectTests(unittest.TestCase):
         status = self.approved_status(cloudUserId="private-account",
                                       relayUrl="https://example.invalid/private")
         def run(argv, **kwargs):
-            if argv == ["systemctl", "restart", "workspaces-t3.service"]:
+            if argv == ["systemctl", "restart", "municode-t3.service"]:
                 started_ns = int(queued["startedAt"] * 1_000_000_000)
                 quota_failure = dict(type="effect-span", name="environment.cloud.reconcileDesiredLinkWith",
                     startTimeUnixNano=str(started_ns + 1_000_000_000), exit=dict(
@@ -493,7 +493,7 @@ class ConnectTests(unittest.TestCase):
         handler.path = "/link"
         handler.reply = Mock()
         for headers in ({}, {"Authorization": "Bearer owner-only-secret"},
-                        {"Authorization": "Bearer owner-only-secret", "X-Workspaces-Connect": "1",
+                        {"Authorization": "Bearer owner-only-secret", "X-Municode-Connect": "1",
                          "Content-Length": "10"}):
             handler.headers = headers
             handler.do_POST()

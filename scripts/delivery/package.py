@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MPL-2.0
-"""Assemble and verify a self-contained Municode Workspaces release."""
+"""Assemble and verify a self-contained Municode release."""
 
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import gzip
 import hashlib
 import json
@@ -13,22 +14,30 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
+import subprocess
+import sys
 import tarfile
 import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
-BUNDLE = ROOT / "packaging" / "bundle"
-TARGETS = ROOT / "packaging" / "targets.json"
 REQUIRED_BACKEND_FILES = {
-    "api": "Workspaces.Api.dll",
-    "worker": "Workspaces.Worker.dll",
-    "gateway": "Workspaces.Gateway.dll",
+    "api": "Municode.Api.dll",
+    "worker": "Municode.Worker.dll",
+    "gateway": "Municode.Gateway.dll",
 }
 
 
 class PackageError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class LocalBuild:
+    source_dirty: bool
+    image_platform: str
+    image_directory: Path
+    image_ids: dict[str, str]
 
 
 def require(condition: bool, message: str) -> None:
@@ -78,36 +87,18 @@ def component_inventory(root: Path) -> dict[str, object]:
     }
 
 
-def add_cli_aliases(root: Path, targets: dict[str, object]) -> None:
-    for rid in targets["components"]["cli"]["rids"]:
-        directory = root / rid
-        if not directory.exists():
-            continue
-        if rid == "win-x64":
-            binary = directory / "municode.exe"
-            alias = directory / "workspaces.cmd"
-            if binary.is_file() and not alias.exists():
-                alias.write_bytes(b'@echo off\r\n"%~dp0municode.exe" %*\r\n')
-        else:
-            binary = directory / "municode"
-            alias = directory / "workspaces"
-            if binary.is_file() and not alias.exists():
-                alias.write_text('#!/bin/sh\nexec "$(dirname "$0")/municode" "$@"\n')
-                alias.chmod(0o755)
-
-
-def validate_targets() -> dict[str, object]:
-    targets = json.loads(TARGETS.read_text())
+def validate_targets(source_root: Path = ROOT) -> dict[str, object]:
+    targets = json.loads((source_root / "packaging" / "targets.json").read_text())
     require(targets.get("schemaVersion") == 1, "Unsupported package target schema.")
     for component in ("api", "worker", "gateway", "dashboard", "cli"):
         require(component in targets["components"], f"Missing package target: {component}")
     return targets
 
 
-def validate_release() -> dict[str, object]:
-    release = json.loads((ROOT / "packaging" / "release.json").read_text())
+def validate_release(source_root: Path = ROOT) -> dict[str, object]:
+    release = json.loads((source_root / "packaging" / "release.json").read_text())
     require(release.get("schemaVersion") == 1, "Unsupported release metadata schema.")
-    require(release.get("product") == "municode-workspaces", "Unexpected release product.")
+    require(release.get("product") == "municode", "Unexpected release product.")
     images = release.get("images")
     require(isinstance(images, dict) and images, "Release image inventory is empty.")
     for name, image in images.items():
@@ -184,13 +175,39 @@ def deterministic_archive(staging: Path, archive: Path) -> None:
                         bundle.addfile(info)
 
 
-def package(args: argparse.Namespace) -> Path:
+def add_local_images(root: Path, contract: dict, local: LocalBuild) -> dict:
+    images = {}
+    env = {"MUNICODE_RUNTIME_PULL_POLICY": "never"}
+    require(local.image_ids.keys() == REQUIRED_BACKEND_FILES.keys(), "Incomplete local image inventory.")
+    compose = (root / "compose.yml").read_text()
+    (root / "images").mkdir()
+    for name, image_id in local.image_ids.items():
+        require(re.fullmatch(r"sha256:[0-9a-f]{64}", image_id), f"Invalid {name} image ID.")
+        relative = f"images/{name}.tar"
+        image = root / relative
+        shutil.move(local.image_directory / f"{name}.tar", image)
+        reference = f"municode-{name}:local-{image_id.removeprefix('sha256:')}"
+        images[name] = {"path": relative, "sha256": file_digest(image),
+                        "imageId": image_id, "reference": reference}
+        env[f"MUNICODE_{name.upper()}_IMAGE"] = reference
+    with (root / ".env.example").open("a") as template:
+        template.write("\n")
+        for key, value in env.items():
+            require(f"${{{key}:-" in compose, f"Source revision does not support local builds: {key}")
+            contract[key] = {"owner": "release"}
+            template.write(f"{key}={value}\n")
+    (root / "env-contract.json").write_text(json.dumps(contract, indent=2, sort_keys=True) + "\n")
+    return {"sourceDirty": local.source_dirty, "imagePlatform": local.image_platform,
+            "imageArchives": images}
+
+
+def package(args: argparse.Namespace, *, source_root: Path = ROOT, local: LocalBuild | None = None) -> Path:
     validate_identity(args)
-    targets = validate_targets()
-    release = validate_release()
+    targets = validate_targets(source_root)
+    release = validate_release(source_root)
     components = validate_payloads(args)
     args.output.mkdir(parents=True, exist_ok=True)
-    archive_name = f"municode-workspaces-{args.version}-{args.rid}.tar.gz"
+    archive_name = f"municode-{args.version}-{args.rid}.tar.gz"
     archive = args.output / archive_name
     manifest_path = args.output / "release-manifest.json"
     checksums_path = args.output / "checksums.txt"
@@ -199,24 +216,31 @@ def package(args: argparse.Namespace) -> Path:
         "Release output already exists; select an empty ignored artifacts directory.",
     )
 
-    with tempfile.TemporaryDirectory(prefix="workspaces-package-") as temporary:
-        root = Path(temporary) / f"municode-workspaces-{args.version}"
-        copy_tree(BUNDLE, root)
+    with tempfile.TemporaryDirectory(prefix="municode-package-", dir=args.output) as temporary:
+        root = Path(temporary) / f"municode-{args.version}"
+        copy_tree(source_root / "packaging" / "bundle", root)
         (root / "docs").mkdir()
         for name in ("operator.md", "user.md"):
-            shutil.copy2(ROOT / "docs" / name, root / "docs" / name)
+            shutil.copy2(source_root / "docs" / name, root / "docs" / name)
 
         inventories: dict[str, object] = {}
         for name, (relative, source) in components.items():
             destination = root / relative
             copy_tree(source, destination)
-            if name == "cli":
-                add_cli_aliases(destination, targets)
             inventories[name] = component_inventory(destination)
 
+        api = root / components["api"][0]
+        migrations = subprocess.run(
+            ["dotnet", str((api / REQUIRED_BACKEND_FILES["api"]).resolve()), "migrations", "list", "--json"],
+            cwd=api, check=True, stdout=subprocess.PIPE, text=True,
+        )
+        contract = json.loads((root / "env-contract.json").read_text())
         manifest = {
             "schemaVersion": 1,
-            "product": "municode-workspaces",
+            "deployProtocol": 1,
+            "migrations": json.loads(migrations.stdout),
+            "envContract": contract,
+            "product": "municode",
             "version": args.version,
             "rid": args.rid,
             "sourceRepository": "https://github.com/muniperez/municode",
@@ -225,10 +249,14 @@ def package(args: argparse.Namespace) -> Path:
             "dependencies": release["images"],
             "components": inventories,
             "bundle": archive_name,
+            "hostAgent": {"path": "deploy_host.py", "sha256": file_digest(root / "deploy_host.py")},
         }
+        if local is not None:
+            manifest.update(add_local_images(root, contract, local))
         (root / "release-manifest.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n"
         )
+        subprocess.run([sys.executable, "-B", str(root / "verify_bundle.py")], check=True)
         deterministic_archive(root, archive)
 
     (manifest_path).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
@@ -260,7 +288,7 @@ def main() -> int:
     try:
         require(bool(args.version) and bool(args.source), "Version and source revision are required.")
         archive = package(args)
-    except (OSError, PackageError, json.JSONDecodeError, tarfile.TarError) as error:
+    except (OSError, PackageError, json.JSONDecodeError, subprocess.CalledProcessError, tarfile.TarError) as error:
         print(f"Packaging failed: {error}", file=os.sys.stderr)
         return 1
     print(archive)

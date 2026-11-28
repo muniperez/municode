@@ -38,7 +38,7 @@ def cloud_image_serial(path=Path("/etc/cloud/build.info")):
 def builder_guard(acknowledgement):
     require(acknowledgement == "DESTROY-DISPOSABLE-IMAGE-BUILDER",
             "Explicit disposable-image-builder acknowledgement required")
-    marker = Path("/etc/workspaces-disposable-image-builder")
+    marker = Path("/etc/municode-disposable-image-builder")
     require(marker.is_file() and marker.stat().st_uid == 0 and
             marker.read_text().strip() == acknowledgement, "Disposable builder marker missing")
     require(os.geteuid() == 0 and os.uname().machine == "x86_64", "Root linux/amd64 builder required")
@@ -46,7 +46,7 @@ def builder_guard(acknowledgement):
     manifest = json.loads((HERE / "manifest.lock.json").read_text())
     require(cloud_image_serial() == manifest["os"]["cloudImageSerial"],
             "Builder cloud-image serial does not match the pinned Ubuntu image")
-    require(not Path("/etc/workspaces-workspace/runtime.json").exists(), "Already enrolled runtime")
+    require(not Path("/etc/municode-workspace/runtime.json").exists(), "Already enrolled runtime")
     require(not os.path.ismount("/workspace") and
             not list(Path("/dev/disk/by-id").glob("*Volume*")), "Builder has workspace volume")
     require(run(["systemd-detect-virt", "--vm"]) not in ("", "none"), "A disposable VM is required")
@@ -71,17 +71,17 @@ RUNTIME_FILES = ("runtime.py", "bootstrap.py", "issue-t3-session.py", "git-crede
                  "t3_connect.py", "t3-connect.html", "t3-connect.js", "t3-connect.css",
                  "copilot_provider.py", "disk_usage.py", "t3_project_defaults.py",
                  "storage_tiers.py", "scratch_mounts.py", "repo_checkpoint.py")
-SYSTEMD_FILES = ("workspaces-workspace.service", "workspaces-workspace-mount.service",
-                 "workspaces-t3.service", "workspaceswork.slice",
-                 "workspaces-t3-connect.service", "workspaces-t3-connect-activate.service",
-                 "workspaces-scratch-mounts.service", "workspaces-scratch-watch.service",
-                 "workspaces-repos-checkpoint.service", "workspaces-repos-checkpoint.timer")
+SYSTEMD_FILES = ("municode-workspace.service", "municode-workspace-mount.service",
+                 "municode-t3.service", "municodework.slice",
+                 "municode-t3-connect.service", "municode-t3-connect-activate.service",
+                 "municode-scratch-mounts.service", "municode-scratch-watch.service",
+                 "municode-repos-checkpoint.service", "municode-repos-checkpoint.timer")
 PINNED_EXECUTABLE_FILES = (
-    "/opt/workspaces-node/bin/node", "/opt/workspaces-dotnet/dotnet",
-    "/opt/workspaces-tools/node_modules/@openai/codex/bin/codex.js",
-    "/opt/workspaces-copilot/copilot", "/opt/workspaces-muse/muse",
-    "/opt/workspaces-antigravity/agy_acp_server.par",
-    "/opt/workspaces-antigravity/localharness_external",
+    "/opt/municode-node/bin/node", "/opt/municode-dotnet/dotnet",
+    "/opt/municode-tools/node_modules/@openai/codex/bin/codex.js",
+    "/opt/municode-copilot/copilot", "/opt/municode-muse/muse",
+    "/opt/municode-antigravity/agy_acp_server.par",
+    "/opt/municode-antigravity/localharness_external",
     "/usr/local/bin/cloudflared", "/usr/local/bin/gh", "/usr/local/bin/glab",
     "/usr/local/bin/copilot", "/usr/local/bin/claude", "/usr/local/bin/muse",
 )
@@ -96,8 +96,8 @@ def install_systemd_units(source_directory, destination_directory):
 
 
 STORAGE_TIER_FILES = (("scratch.env", "{runtime}/scratch.env"),
-                      ("tmpfiles.conf", "/etc/tmpfiles.d/workspaces-scratch.conf"),
-                      ("profile.sh", "/etc/profile.d/workspaces-scratch.sh"))
+                      ("tmpfiles.conf", "/etc/tmpfiles.d/municode-scratch.conf"),
+                      ("profile.sh", "/etc/profile.d/municode-scratch.sh"))
 
 
 def install_storage_tiers(source_directory, runtime, root=Path("/")):
@@ -112,13 +112,13 @@ def install_storage_tiers(source_directory, runtime, root=Path("/")):
 
 def write_image_manifest(lock, source_directory=HERE.parent, root=Path("/")):
     """Record actual immutable inputs, checking source-managed copies before publication."""
-    runtime = "/opt/workspaces-workspace"
+    runtime = "/opt/municode-workspace"
     copies = [(source_directory / name, runtime + "/" + name) for name in RUNTIME_FILES]
     copies += [(source_directory / "storage" / name, target.format(runtime=runtime))
                for name, target in STORAGE_TIER_FILES]
     copies += [(source_directory / "systemd" / name, "/etc/systemd/system/" + name)
                for name in SYSTEMD_FILES]
-    copies += [(source_directory / "image/tools" / name, "/opt/workspaces-tools/" + name)
+    copies += [(source_directory / "image/tools" / name, "/opt/municode-tools/" + name)
                for name in ("package.json", "package-lock.json")]
     files = {}
 
@@ -138,13 +138,13 @@ def write_image_manifest(lock, source_directory=HERE.parent, root=Path("/")):
     for source, target in copies:
         record(root / target.lstrip("/"), source)
     for target in (*PINNED_EXECUTABLE_FILES,
-                   "/opt/workspaces-tools/" + lock["claude"]["executable"],
-                   "/opt/workspaces-t3/" + lock["t3"]["resourceMonitor"]["path"]):
+                   "/opt/municode-tools/" + lock["claude"]["executable"],
+                   "/opt/municode-t3/" + lock["t3"]["resourceMonitor"]["path"]):
         record(root / target.lstrip("/"))
     # The release's T3 directory is discovered during installation; record the real file,
     # not the /usr/local/bin symlink which the native guard deliberately rejects.
     t3 = (root / "usr/local/bin/t3").resolve(strict=True)
-    require(t3.is_relative_to(root / "opt/workspaces-t3"), "Unexpected installed T3 executable")
+    require(t3.is_relative_to(root / "opt/municode-t3"), "Unexpected installed T3 executable")
     record(t3)
     lock["provenance"]["installedImmutableInputs"] = {"files": files}
     atomic_json(root / runtime.lstrip("/") / "image-manifest.json", lock)
@@ -153,7 +153,7 @@ def write_image_manifest(lock, source_directory=HERE.parent, root=Path("/")):
 def install_copilot(lock, cache):
     artifact = cache / "copilot.tar.gz"
     download(lock["copilot"], artifact)
-    destination = Path("/opt/workspaces-copilot")
+    destination = Path("/opt/municode-copilot")
     destination.mkdir(parents=True, exist_ok=True)
     destination.chmod(0o755)
     run(["tar", "--no-same-owner", "-xf", str(artifact), "-C", str(destination)])
@@ -161,7 +161,7 @@ def install_copilot(lock, cache):
     (destination / "copilot").chmod(0o755)
     wrapper = Path("/usr/local/bin/copilot")
     wrapper.write_text("#!/bin/sh\nexport COPILOT_AUTO_UPDATE=false\n"
-                       'exec /opt/workspaces-copilot/copilot "$@"\n')
+                       'exec /opt/municode-copilot/copilot "$@"\n')
     wrapper.chmod(0o755)
     return probe_copilot(expected_version=lock["copilot"]["version"],
                          environment=dict(PATH="/usr/local/bin:/usr/bin:/bin", HOME=str(cache)))
@@ -191,7 +191,7 @@ def install_claude(lock, tools, wrapper=Path("/usr/local/bin/claude")):
     require(re.match(re.escape(item["version"]) + r"(?:\s|$)", output), "Wrong Claude Code version")
 
 
-def install_antigravity(lock, cache, destination=Path("/opt/workspaces-antigravity")):
+def install_antigravity(lock, cache, destination=Path("/opt/municode-antigravity")):
     item = lock["antigravity"]
     artifact = cache / "antigravity.zip"
     download(item, artifact)
@@ -214,7 +214,7 @@ def install_antigravity(lock, cache, destination=Path("/opt/workspaces-antigravi
     artifact.unlink()
 
 
-def install_muse(lock, cache, destination=Path("/opt/workspaces-muse"), wrapper=Path("/usr/local/bin/muse")):
+def install_muse(lock, cache, destination=Path("/opt/municode-muse"), wrapper=Path("/usr/local/bin/muse")):
     item = lock["muse"]
     make_agent_directory(destination)
     binary = destination / "muse"
@@ -276,27 +276,27 @@ def install(source_revision, builder):
     for name in ("node", "dotnet", "t3"):
         artifact = cache / (name + ".tar")
         download(lock[name], artifact)
-        destination = Path("/opt") / ("workspaces-" + name)
+        destination = Path("/opt") / ("municode-" + name)
         destination.mkdir(parents=True, exist_ok=True)
         argv = ["tar", "--no-same-owner", "-xf", str(artifact), "-C", str(destination)]
         if name == "node":
             argv += ["--strip-components=1"]
         run(argv)
     for executable in ("node", "npm", "npx"):
-        Path("/usr/local/bin", executable).symlink_to("/opt/workspaces-node/bin/" + executable)
-    Path("/usr/local/bin/dotnet").symlink_to("/opt/workspaces-dotnet/dotnet")
-    t3 = list(Path("/opt/workspaces-t3").rglob("t3"))
+        Path("/usr/local/bin", executable).symlink_to("/opt/municode-node/bin/" + executable)
+    Path("/usr/local/bin/dotnet").symlink_to("/opt/municode-dotnet/dotnet")
+    t3 = list(Path("/opt/municode-t3").rglob("t3"))
     require(len(t3) == 1 and t3[0].is_file(), "Unexpected T3 release archive layout")
     Path("/usr/local/bin/t3").symlink_to(t3[0])
     relay = Path("/usr/local/bin/cloudflared")
     download(lock["t3"]["relayClient"], relay)
     relay.chmod(0o755)
     install_source_control_clis(lock, cache)
-    monitor = Path("/opt/workspaces-t3") / lock["t3"]["resourceMonitor"]["path"]
+    monitor = Path("/opt/municode-t3") / lock["t3"]["resourceMonitor"]["path"]
     with monitor.open("rb") as binary:
         require(hashlib.file_digest(binary, "sha256").hexdigest() ==
                 lock["t3"]["resourceMonitor"]["sha256"], "Pinned T3 telemetry helper checksum mismatch")
-    tools = Path("/opt/workspaces-tools")
+    tools = Path("/opt/municode-tools")
     tools.mkdir(exist_ok=True)
     for name in ("package.json", "package-lock.json"):
         shutil.copy2(HERE / "tools" / name, tools / name)
@@ -313,7 +313,7 @@ def install(source_revision, builder):
     run(["groupadd", "--gid", "2000", "coding"])
     run(["useradd", "--uid", "2000", "--gid", "2000", "--home-dir", "/workspace/home",
          "--no-create-home", "--shell", "/usr/sbin/nologin", "coding"])
-    runtime = Path("/opt/workspaces-workspace")
+    runtime = Path("/opt/municode-workspace")
     runtime.mkdir(exist_ok=True)
     for name in RUNTIME_FILES:
         shutil.copy2(HERE.parent / name, runtime / name)
@@ -321,17 +321,17 @@ def install(source_revision, builder):
         (runtime / name).chmod(0o755)
     install_storage_tiers(HERE.parent / "storage", runtime)
     install_systemd_units(HERE.parent / "systemd", Path("/etc/systemd/system"))
-    Path("/var/cache/workspaces-workspace/verification").mkdir(parents=True, exist_ok=True, mode=0o711)
-    Path("/var/cache/workspaces-workspace").chmod(0o711)
-    Path("/etc/workspaces-workspace").mkdir(mode=0o700, exist_ok=True)
+    Path("/var/cache/municode-workspace/verification").mkdir(parents=True, exist_ok=True, mode=0o711)
+    Path("/var/cache/municode-workspace").chmod(0o711)
+    Path("/etc/municode-workspace").mkdir(mode=0o700, exist_ok=True)
     run(["systemctl", "mask", "apt-daily.service", "apt-daily-upgrade.service", "apt-daily.timer",
          "apt-daily-upgrade.timer", "unattended-upgrades.service"])
-    Path("/etc/ssh/sshd_config.d/00-workspaces-workspace.conf").write_text(
+    Path("/etc/ssh/sshd_config.d/00-municode-workspace.conf").write_text(
         "PasswordAuthentication no\nKbdInteractiveAuthentication no\n"
         "PermitRootLogin prohibit-password\nAllowUsers root\n"
         "AllowAgentForwarding no\nPermitTunnel no\nX11Forwarding no\n"
         "GatewayPorts no\nAllowTcpForwarding local\n")
-    run(["systemctl", "enable", "workspaces-workspace.service"])
+    run(["systemctl", "enable", "municode-workspace.service"])
     require(run(["node", "--version"]) == "v" + lock["node"]["version"], "Wrong Node version")
     require(run(["dotnet", "--version"]) == lock["dotnet"]["version"], "Wrong .NET version")
     require(lock["codex"]["version"] in run(["codex", "--version"]), "Wrong Codex version")
@@ -356,23 +356,23 @@ def install(source_revision, builder):
 def generalize():
     # Guard is applied by main before either install or this destructive operation.
     os.chdir("/")
-    for unit in ("workspaces-repos-checkpoint.timer", "workspaces-repos-checkpoint.service",
-                 "workspaces-scratch-watch.service", "workspaces-scratch-mounts.service",
-                 "workspaces-workspace-mount.service",
-                 "workspaces-workspace.service", "workspaces-t3.service",
-                 "workspaces-t3-connect.service", "workspaces-t3-connect-activate.service"):
+    for unit in ("municode-repos-checkpoint.timer", "municode-repos-checkpoint.service",
+                 "municode-scratch-watch.service", "municode-scratch-mounts.service",
+                 "municode-workspace-mount.service",
+                 "municode-workspace.service", "municode-t3.service",
+                 "municode-t3-connect.service", "municode-t3-connect-activate.service"):
         subprocess.run(["systemctl", "stop", unit], capture_output=True, timeout=120, check=False)
     require(not os.path.ismount("/workspace"), "Never erase an attached workspace")
-    run(["systemctl", "disable", "workspaces-t3.service"])
+    run(["systemctl", "disable", "municode-t3.service"])
     # Build-output bind mounts must go first: erasing through one would empty scratch, not the image.
-    if Path("/opt/workspaces-workspace/scratch_mounts.py").is_file():
-        subprocess.run(["/usr/bin/python3", "-I", "-B", "/opt/workspaces-workspace/scratch_mounts.py",
+    if Path("/opt/municode-workspace/scratch_mounts.py").is_file():
+        subprocess.run(["/usr/bin/python3", "-I", "-B", "/opt/municode-workspace/scratch_mounts.py",
                         "unmount-all"], capture_output=True, timeout=180, check=False)
     mounts = Path("/proc/self/mountinfo").read_text().splitlines()
     require(not any(line.split()[4].startswith("/workspace/") for line in mounts),
             "Never erase through a mount below the workspace")
     # The helper self-binds scratch/repos (nosuid,nodev); ismount() misses a same-filesystem bind.
-    scratch_repos = "/var/lib/workspaces-scratch/repos"
+    scratch_repos = "/var/lib/municode-scratch/repos"
     for _ in range(4):
         if not any(line.split()[4] == scratch_repos
                    for line in Path("/proc/self/mountinfo").read_text().splitlines()):
@@ -381,10 +381,10 @@ def generalize():
     else:
         require(False, "Scratch repos is still mounted")
     for path in ("/workspace", "/root/.codex", "/root/.t3", "/root/.config", "/root/.cache",
-                 "/root/.npm", "/root/.ssh", "/home/ubuntu/.ssh", "/var/lib/workspaces-workspace",
-                 "/var/lib/workspaces-scratch",
-                 "/var/cache/workspaces-workspace/verification",
-                 "/etc/workspaces-workspace", "/var/log/journal"):
+                 "/root/.npm", "/root/.ssh", "/home/ubuntu/.ssh", "/var/lib/municode-workspace",
+                 "/var/lib/municode-scratch",
+                 "/var/cache/municode-workspace/verification",
+                 "/etc/municode-workspace", "/var/log/journal"):
         target = Path(path)
         if target.is_dir() and not target.is_symlink():
             shutil.rmtree(target)
@@ -398,7 +398,7 @@ def generalize():
             shutil.rmtree(path)
         else:
             path.unlink()
-    staging = Path("/opt/workspaces-image-source")
+    staging = Path("/opt/municode-image-source")
     if staging.exists():
         shutil.rmtree(staging)
     for path in Path("/etc/ssh").glob("ssh_host_*"):
@@ -414,7 +414,7 @@ def generalize():
             with path.open("wb"):
                 pass
     require(not list(Path("/etc/ssh").glob("ssh_host_*")), "SSH host keys remain")
-    Path("/etc/workspaces-disposable-image-builder").unlink()
+    Path("/etc/municode-disposable-image-builder").unlink()
     os.sync()
     print(json.dumps({"type": "ImageGeneralized", "captureOnlyAfterPowerOff": True,
                       "providerVolumeEncryptionClaim": False}))

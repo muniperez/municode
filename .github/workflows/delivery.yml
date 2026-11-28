@@ -1,4 +1,4 @@
-name: Workspaces delivery
+name: Municode delivery
 
 on:
   pull_request:
@@ -15,6 +15,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  restore-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Restore a matched snapshot on the real Compose stack
+        run: |
+          git check-ignore .local/artifacts/restore-drill
+          sudo python3 -B scripts/delivery/restore_drill.py --disposable-docker
+
   build-and-test:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -33,9 +43,9 @@ jobs:
           python3 -B -m unittest discover -s scripts/delivery -p 'test_*.py' -v
       - name: Build and test the runtime
         run: |
-          dotnet clean Workspaces.slnx -c Release
-          dotnet build Workspaces.slnx -c Release
-          dotnet test Workspaces.slnx -c Release --no-build \
+          dotnet clean Municode.slnx -c Release
+          dotnet build Municode.slnx -c Release
+          dotnet test Municode.slnx -c Release --no-build \
             --results-directory .local/artifacts/test-results
       - name: Verify guest runtime tests
         run: |
@@ -60,7 +70,7 @@ jobs:
             'DSN=postgres://kratos:synthetic@postgres:5432/kratos?sslmode=disable' \
             'SECRETS_COOKIE=synthetic' \
             'SECRETS_CIPHER=synthetic' > "$secrets/kratos.env"
-          WORKSPACES_SECRETS_DIR="$secrets" docker compose \
+          MUNICODE_SECRETS_DIR="$secrets" docker compose \
             -f packaging/bundle/compose.yml \
             --env-file packaging/bundle/.env.example config --quiet
       - name: Smoke-test the packaged dashboard and CLI handoff
@@ -68,17 +78,17 @@ jobs:
           set -eu
           root=.local/artifacts/package-smoke
           mkdir -p "$root/api" "$root/worker" "$root/gateway" "$root/dashboard" "$root/cli"
-          dotnet publish src/Workspaces.Api -c Release --no-build \
+          dotnet publish src/Municode.Api -c Release --no-build \
             -o "$root/api"
-          dotnet publish src/Workspaces.Worker -c Release --no-build \
+          dotnet publish src/Municode.Worker -c Release --no-build \
             -o "$root/worker"
-          dotnet publish src/Workspaces.Gateway -c Release --no-build \
+          dotnet publish src/Municode.Gateway -c Release --no-build \
             -o "$root/gateway"
           npm ci --prefix modules/dashboard
           npm test --prefix modules/dashboard -- --run
           npm run build --prefix modules/dashboard
           cp -R .local/artifacts/dashboard-dist/. "$root/dashboard/"
-          dotnet publish src/Workspaces.Cli/Workspaces.Cli.csproj -c Release \
+          dotnet publish src/Municode.Cli/Municode.Cli.csproj -c Release \
             --runtime linux-x64 --self-contained true \
             -o "$root/cli/linux-x64"
           python3 -B scripts/delivery/package.py \
@@ -86,34 +96,35 @@ jobs:
             --api "$root/api" --worker "$root/worker" --gateway "$root/gateway" \
             --dashboard "$root/dashboard" --cli "$root/cli" \
             --output .local/artifacts/package
-          tar -xzf .local/artifacts/package/municode-workspaces-0.0.0-ci-linux-x64.tar.gz \
+          tar -xzf .local/artifacts/package/municode-0.0.0-ci-linux-x64.tar.gz \
             -C .local/artifacts/package
-          .local/artifacts/package/municode-workspaces-0.0.0-ci/cli/linux-x64/workspaces \
-            help seed | grep -F 'workspaces seed plan'
+          .local/artifacts/package/municode-0.0.0-ci/cli/linux-x64/municode \
+            help seed | grep -F 'municode seed plan'
           mkdir -p .local/artifacts/install
-          .local/artifacts/package/municode-workspaces-0.0.0-ci/install.sh \
-            --install-root "$PWD/.local/artifacts/install/release" \
-            --secrets-dir "$PWD/.local/artifacts/install/secrets"
-          grep -F 'workspaces' .local/artifacts/package/release-manifest.json
+          .local/artifacts/package/municode-0.0.0-ci/install.sh \
+            --host-root "$PWD/.local/artifacts/install" \
+            --bundle-sha256 "$(sha256sum .local/artifacts/package/municode-0.0.0-ci-linux-x64.tar.gz | cut -d ' ' -f 1)"
+          jq -e '.product == "municode"' .local/artifacts/package/release-manifest.json
           dashboard_probe="$PWD/scripts/delivery/probe_dashboard.py"
-          cd .local/artifacts/install/release
+          release="$(readlink -e .local/artifacts/install/opt/municode/current)"
+          overlay="$PWD/.local/artifacts/install/dashboard-probe.yml"
           project="runtime-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          cat > dashboard-probe.yml <<'YAML'
+          cat > "$overlay" <<'YAML'
           services:
             caddy:
               environment:
                 CONSOLE_HOSTNAME: http://localhost
                 API_HOSTNAME: http://api.localhost
                 API_URL: https://api.localhost
-                WORKSPACES_SOURCE_URL: https://github.com/muniperez/municode
+                MUNICODE_SOURCE_URL: https://github.com/muniperez/municode
               ports: !override
                 - "127.0.0.1::80"
               networks: !override
                 - private
           YAML
           compose() {
-            docker compose --project-name "$project" --env-file .env \
-              -f compose.yml -f dashboard-probe.yml "$@"
+            docker compose --project-name "$project" --project-directory "$release" \
+              --env-file "$release/.env" -f "$release/compose.yml" -f "$overlay" "$@"
           }
           trap 'compose down --volumes --remove-orphans' EXIT
           for service in api-migrate api worker workspace-gateway; do
@@ -148,6 +159,6 @@ jobs:
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Build current runtime image targets
         run: |
-          docker build --file src/Workspaces.Api/Dockerfile --tag municode-api:ci .
-          docker build --file src/Workspaces.Worker/Dockerfile --tag municode-workspaces-worker:ci .
-          docker build --file src/Workspaces.Gateway/Dockerfile --tag municode-workspaces-gateway:ci .
+          docker build --file src/Municode.Api/Dockerfile --tag municode-api:ci .
+          docker build --file src/Municode.Worker/Dockerfile --tag municode-worker:ci .
+          docker build --file src/Municode.Gateway/Dockerfile --tag municode-gateway:ci .

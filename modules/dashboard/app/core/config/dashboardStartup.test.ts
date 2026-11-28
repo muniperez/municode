@@ -44,7 +44,7 @@ describe("dashboard container startup", () => {
   function start(root: string, environment: Record<string, string>) {
     return spawnSync(process.execPath, [startupScript], {
       encoding: "utf8",
-      env: { PATH: `${stubPath}:${process.env.PATH}`, WORKSPACES_DASHBOARD_HTML_ROOT: root, ...environment },
+      env: { PATH: `${stubPath}:${process.env.PATH}`, MUNICODE_DASHBOARD_HTML_ROOT: root, ...environment },
     });
   }
 
@@ -54,10 +54,10 @@ describe("dashboard container startup", () => {
     cpSync(image, first, { recursive: true });
     cpSync(image, second, { recursive: true });
 
-    const one = start(first, { WORKSPACES_API_URL: "https://api.one.example" });
+    const one = start(first, { MUNICODE_API_URL: "https://api.one.example" });
     const two = start(second, {
-      WORKSPACES_API_URL: "https://api.two.example",
-      WORKSPACES_SOURCE_URL: "https://source.two.example/municode",
+      MUNICODE_API_URL: "https://api.two.example",
+      MUNICODE_SOURCE_URL: "https://source.two.example/municode",
     });
 
     expect(one.status, one.stderr).toBe(0);
@@ -78,9 +78,9 @@ describe("dashboard container startup", () => {
 
   it.each([
     [{}],
-    [{ WORKSPACES_API_URL: "http://api.example" }],
-    [{ WORKSPACES_API_URL: "https://api.example/path" }],
-    [{ WORKSPACES_API_URL: "https://api.example", WORKSPACES_SOURCE_URL: "https://u:p@source.example" }],
+    [{ MUNICODE_API_URL: "http://api.example" }],
+    [{ MUNICODE_API_URL: "https://api.example/path" }],
+    [{ MUNICODE_API_URL: "https://api.example", MUNICODE_SOURCE_URL: "https://u:p@source.example" }],
   ])("refuses invalid public configuration before serving %#", (environment) => {
     const result = start(image, environment);
     expect(result.status).toBe(1);

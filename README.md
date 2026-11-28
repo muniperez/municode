@@ -1,4 +1,4 @@
-# Municode Workspaces
+# Municode
 
 Standalone coding-workspace control plane and delivery. The API owns identity,
 organizations, provider accounts, plans, workspace lifecycle and Git access; the
@@ -17,14 +17,14 @@ From a released standalone CLI on an operator workstation:
 
 ```sh
 chmod 600 /protected/hetzner.token
-workspaces seed plan \
+municode seed plan \
   --provider hetzner --region <location> --size <server-type> \
   --dashboard-hostname console.example.com \
   --api-hostname api.example.com \
   --gateway-domain workspaces.example.com \
-  --release workspaces-vX.Y.Z \
+  --release municode-vX.Y.Z \
   --credential-file /protected/hetzner.token
-workspaces seed apply <operation> \
+municode seed apply <operation> \
   --credential-file /protected/hetzner.token --approve <plan-digest>
 ```
 
@@ -32,9 +32,8 @@ Seed is a signed-release, one-control-plane-VPS workflow for Hetzner, DigitalOce
 or Vultr. It prints authoritative recurring costs and creates nothing before the
 exact plan digest is approved. The durable journal safely resumes an uncertain
 provider response, but pauses for an independently checked SSH console
-fingerprint and exact DNS records. `workspaces seed resume <operation>` continues
+fingerprint and exact DNS records. `municode seed resume <operation>` continues
 preparation, bundle verification, HTTPS/health checks and first-owner setup.
-`municode seed` and `municode workspaces seed` are compatibility spellings.
 
 The bootstrap provider token is read only from a protected local file. It is
 never copied into the control-plane journal, release, server or provider-account
@@ -44,15 +43,33 @@ the first workspace are separate post-login actions. See the
 [live validation checklist](docs/setup/live-seed-validation.md) for the manual
 test that must run on disposable provider capacity outside CI.
 
+For the common upgrade, register any existing control plane you can reach over
+SSH (including hosts not created with seed), then plan and approve the release:
+
+```sh
+municode instance add production --ssh ops@control.example.com \
+  --confirm-host-fingerprint SHA256:...
+municode deploy plan --instance production --release latest
+municode deploy apply <operation> --approve <digest>
+```
+
+Verify the SSH fingerprint independently; non-root users need passwordless
+`sudo -n`. Use `municode deploy status <operation>` to inspect progress and
+`municode deploy resume <operation>` after interruption. See the
+[operator guide](docs/operator.md#operate-and-upgrade) and
+[deploy command reference](docs/user.md#cli) for local builds, backups and
+rollback safeguards, and the
+[live validation checklist](docs/setup/live-seed-validation.md#live-deploy-validation).
+
 ## Build and test
 
 Use the .NET 10 SDK and Python 3.11+ from the repository root. All generated
 output is ignored under `.local/artifacts/`.
 
 ```sh
-dotnet clean Workspaces.slnx -c Release
-dotnet build Workspaces.slnx -c Release
-dotnet test Workspaces.slnx -c Release --no-build --results-directory .local/artifacts/test-results
+dotnet clean Municode.slnx -c Release
+dotnet build Municode.slnx -c Release
+dotnet test Municode.slnx -c Release --no-build --results-directory .local/artifacts/test-results
 templates/development-workspaces/test.sh
 python3 -B templates/development-workspaces/image/test-t3-candidate.py
 node --test scripts/workspace-image-release-acceptance.test.mjs # Node.js 22 LTS
@@ -61,7 +78,7 @@ python3 -B -m unittest discover -s scripts/delivery -p 'test_*.py' -v
 
 Tests use synthetic identities, repositories, secrets, HTTP transports and client
 payloads. To include the optional PostgreSQL test, set
-`WORKSPACES_TEST_POSTGRES` to a fresh disposable database.
+`MUNICODE_TEST_POSTGRES` to a fresh disposable database.
 
 ## Package
 
@@ -71,9 +88,9 @@ self-contained CLI targets through [package targets](packaging/targets.json).
 The package handoff smoke test builds and verifies all five actual payloads.
 
 ```sh
-dotnet publish src/Workspaces.Api -c Release -o .local/artifacts/publish/api
-dotnet publish src/Workspaces.Worker -c Release -o .local/artifacts/publish/worker
-dotnet publish src/Workspaces.Gateway -c Release -o .local/artifacts/publish/gateway
+dotnet publish src/Municode.Api -c Release -o .local/artifacts/publish/api
+dotnet publish src/Municode.Worker -c Release -o .local/artifacts/publish/worker
+dotnet publish src/Municode.Gateway -c Release -o .local/artifacts/publish/gateway
 # Supply the merged dashboard build and self-contained CLI RID outputs.
 python3 -B scripts/delivery/package.py \
   --version 0.0.0-local --source "$(git rev-parse HEAD)" --rid linux-any \
@@ -88,21 +105,30 @@ python3 -B scripts/delivery/package.py \
 The archive contains the Compose/Caddy bundle, API/worker/gateway payloads,
 dashboard, CLI, installer, operator/user guides and a component inventory. Exact
 release checksums are written under `.local/artifacts/release`.
+Packaging runs `dotnet Municode.Api.dll migrations list --json` from the API
+payload to record both providers' migration IDs without connecting to a database.
+The manifest also records the deploy protocol and `.env` ownership contract.
 
 The merged CLI and dashboard projects are built and included by delivery CI.
 Their package paths and release commands are fixed in `packaging/targets.json`;
-release tags fail closed when either artifact cannot be built. The package adds a
-`workspaces` command alias beside `municode` for each Unix RID and `workspaces.cmd`
-for Windows.
+release tags fail closed when either artifact cannot be built.
+
+For an unsigned local deploy bundle, run `scripts/delivery/build-release.sh --ref HEAD`.
+See the [delivery guide](scripts/delivery/README.md) for prerequisites, output,
+and bundled image handling.
 
 ## Start with a fresh database
 
 ```sh
-dotnet run --project src/Workspaces.Api -c Release --no-build -- migrate
-dotnet run --project src/Workspaces.Api -c Release --no-build -- --urls http://127.0.0.1:5080
+dotnet run --project src/Municode.Api -c Release --no-build -- migrate
+dotnet run --project src/Municode.Api -c Release --no-build -- --urls http://127.0.0.1:5080
 ```
 
-The default database is `.local/artifacts/data/workspaces.db`. Check `/health`
+For read-only inspection of an existing database, run
+`dotnet run --project src/Municode.Api -c Release --no-build -- migrations status --json`.
+The result has `historyTableExists`, `applied`, `pending`, and `unknownApplied`.
+
+The default database is `.local/artifacts/data/municode.db`. Check `/health`
 on the local listener. Workspace admission and gateway launch are disabled by
 default. This configuration verifies migration and API startup without external
 services.

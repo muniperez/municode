@@ -6,7 +6,7 @@ umask 077
 usage() {
     echo "Usage: seed-start.sh --release-tag TAG --release-root PATH --installation-id ID" >&2
     echo "  --dashboard-hostname HOST --api-hostname HOST --gateway-domain DOMAIN" >&2
-    echo "  --install-root PATH --secrets-dir PATH --setup-token-output PATH" >&2
+    echo "  --bundle-sha256 SHA --setup-token-output PATH [--host-root PATH] [--policy-file PATH]" >&2
     exit 2
 }
 
@@ -16,8 +16,9 @@ installation_id=
 dashboard_hostname=
 api_hostname=
 gateway_domain=
-install_root=
-secrets_dir=
+bundle_sha256=
+host_root=/
+policy_file=
 setup_token_output=
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -27,18 +28,19 @@ while [ "$#" -gt 0 ]; do
         --dashboard-hostname) [ "$#" -ge 2 ] || usage; dashboard_hostname=$2; shift 2 ;;
         --api-hostname) [ "$#" -ge 2 ] || usage; api_hostname=$2; shift 2 ;;
         --gateway-domain) [ "$#" -ge 2 ] || usage; gateway_domain=$2; shift 2 ;;
-        --install-root) [ "$#" -ge 2 ] || usage; install_root=$2; shift 2 ;;
-        --secrets-dir) [ "$#" -ge 2 ] || usage; secrets_dir=$2; shift 2 ;;
+        --bundle-sha256) [ "$#" -ge 2 ] || usage; bundle_sha256=$2; shift 2 ;;
+        --host-root) [ "$#" -ge 2 ] || usage; host_root=$2; shift 2 ;;
+        --policy-file) [ "$#" -ge 2 ] || usage; policy_file=$2; shift 2 ;;
         --setup-token-output) [ "$#" -ge 2 ] || usage; setup_token_output=$2; shift 2 ;;
         *) usage ;;
     esac
 done
 [ -n "$release_tag" ] && [ -n "$release_root" ] && [ -n "$installation_id" ] &&
 [ -n "$dashboard_hostname" ] && [ -n "$api_hostname" ] && [ -n "$gateway_domain" ] &&
-[ -n "$install_root" ] && [ -n "$secrets_dir" ] && [ -n "$setup_token_output" ] || usage
+[ -n "$bundle_sha256" ] && [ -n "$setup_token_output" ] || usage
 
-case "$release_root:$install_root:$secrets_dir:$setup_token_output" in
-    /*:*:*:/*) ;;
+case "$release_root:$host_root:$setup_token_output" in
+    /*:/*:/*) ;;
     *) echo "Seed installation paths must be absolute." >&2; exit 1 ;;
 esac
 [ -d "$release_root" ] && [ -f "$release_root/install.sh" ] || {
@@ -53,179 +55,20 @@ for command in docker python3; do
 done
 docker compose version >/dev/null
 
-marker="$secrets_dir/seed-install-complete"
-owner_record="$secrets_dir.seed-owner"
-install_stage="$install_root.seed-pending"
-secrets_stage="$secrets_dir.seed-pending"
+set -- --host-root "$host_root" --bundle-sha256 "$bundle_sha256" --verified-release-tag "$release_tag" \
+    --installation-id "$installation_id" --dashboard-hostname "$dashboard_hostname" \
+    --api-hostname "$api_hostname" --gateway-domain "$gateway_domain"
+[ -z "$policy_file" ] || set -- "$@" --policy-file "$policy_file"
+"$release_root/install.sh" "$@"
 
-validate_install() {
-    root=$1
-    [ -f "$root/.env" ] &&
-    [ -f "$root/release-manifest.json" ] &&
-    [ -f "$root/runtime/api/Workspaces.Api.dll" ] &&
-    [ -f "$root/runtime/worker/Workspaces.Worker.dll" ] &&
-    [ -f "$root/runtime/gateway/Workspaces.Gateway.dll" ] &&
-    [ -f "$root/dashboard/index.html" ] &&
-    python3 -B "$root/verify_bundle.py"
+secrets_dir="${host_root%/}/etc/municode/secrets"
+compose() {
+    "${host_root%/}/usr/local/sbin/municode-compose" "$@"
 }
 
-validate_secrets() {
-    root=$1
-    [ -s "$root/postgres-admin-password" ] &&
-    [ -s "$root/app-db-password" ] &&
-    [ -s "$root/kratos-db-password" ] &&
-    [ -s "$root/workspace-gateway-credential" ] &&
-    [ -s "$root/kratos.env" ] &&
-    [ -s "$root/ssh/worker-key" ] &&
-    [ -s "$root/ssh/worker-key.pub" ] &&
-    [ -s "$root/openbao-server.crt" ] &&
-    [ -s "$root/openbao-server.key" ] &&
-    [ -s "$root/openbao-ca.crt" ] &&
-    [ -f "$root/openbao-approle/role-id" ] &&
-    [ -f "$root/openbao-approle/secret-id" ]
-}
-
-write_owner() {
-    phase=$1
-    install -d -m 700 "$(dirname "$owner_record")"
-    printf '%s %s %s\n' "$installation_id" "$release_tag" "$phase" > "$owner_record.pending"
-    chmod 600 "$owner_record.pending"
-    mv "$owner_record.pending" "$owner_record"
-}
-
-ownership=
-[ ! -s "$owner_record" ] || ownership="$(cat "$owner_record")"
-expected="$installation_id $release_tag"
-if [ -f "$marker" ]; then
-    { [ "$ownership" = "$expected complete" ] || [ "$ownership" = "$expected promotion" ]; } &&
-    validate_install "$install_root" &&
-    validate_secrets "$secrets_dir" || {
-        echo "Completed seed installation ownership or contents no longer match." >&2
-        exit 1
-    }
-    [ "$ownership" = "$expected complete" ] || write_owner complete
-elif [ -n "$ownership" ]; then
-    case "$ownership" in
-        "$expected staging")
-            # These private staging trees were created by this exact operation only.
-            rm -rf -- "$install_stage" "$secrets_stage"
-            [ ! -e "$install_root" ] && [ ! -e "$secrets_dir" ] || {
-                echo "Owned staging state conflicts with unexpected final paths." >&2
-                exit 1
-            }
-            ;;
-        "$expected promotion")
-            if [ -e "$secrets_stage" ] && [ ! -e "$secrets_dir" ]; then
-                validate_secrets "$secrets_stage" || {
-                    echo "Owned secrets staging validation failed; no partial final was promoted." >&2
-                    exit 1
-                }
-                mv "$secrets_stage" "$secrets_dir"
-            fi
-            if [ -e "$install_stage" ] && [ ! -e "$install_root" ]; then
-                validate_install "$install_stage" || {
-                    echo "Owned install staging validation failed; no partial final was promoted." >&2
-                    exit 1
-                }
-                mv "$install_stage" "$install_root"
-            fi
-            validate_install "$install_root" && validate_secrets "$secrets_dir" || {
-                echo "Owned promotion is incomplete; preserve state for reconciliation." >&2
-                exit 1
-            }
-            : > "$marker.pending"
-            chmod 600 "$marker.pending"
-            mv "$marker.pending" "$marker"
-            write_owner complete
-            ;;
-        "$expected complete")
-            validate_install "$install_root" && validate_secrets "$secrets_dir" &&
-            [ ! -e "$install_stage" ] && [ ! -e "$secrets_stage" ] || {
-                echo "Completed ownership has not reached a valid final installation." >&2
-                exit 1
-            }
-            : > "$marker.pending"
-            chmod 600 "$marker.pending"
-            mv "$marker.pending" "$marker"
-            ;;
-        *) echo "Seed owner record conflicts with the exact installation and release." >&2; exit 1 ;;
-    esac
-fi
-
-if [ ! -f "$marker" ] && [ -z "$ownership" ]; then
-    [ ! -e "$install_root" ] && [ ! -e "$secrets_dir" ] &&
-    [ ! -e "$install_stage" ] && [ ! -e "$secrets_stage" ] || {
-        echo "Unowned installation paths exist; seed will not adopt or delete them." >&2
-        exit 1
-    }
-    write_owner staging
-    ownership="$expected staging"
-fi
-
-if [ ! -f "$marker" ] && [ "$ownership" = "$expected staging" ]; then
-    "$release_root/install.sh" --install-root "$install_stage" --secrets-dir "$secrets_stage"
-    validate_install "$install_stage" && validate_secrets "$secrets_stage" || {
-        echo "The exact staged release or secrets are incomplete; owned staging is retained for a safe retry." >&2
-        exit 1
-    }
-    write_owner promotion
-    mv "$secrets_stage" "$secrets_dir"
-    mv "$install_stage" "$install_root"
-    validate_install "$install_root" && validate_secrets "$secrets_dir" || {
-        echo "Promoted seed contents changed; no completion marker was written." >&2
-        exit 1
-    }
-    : > "$marker.pending"
-    chmod 600 "$marker.pending"
-    mv "$marker.pending" "$marker"
-    write_owner complete
-fi
-
-python3 -B - "$install_root/.env" "$secrets_dir" \
-    "$installation_id" "$dashboard_hostname" "$api_hostname" "$gateway_domain" <<'PY'
-from pathlib import Path
-import os
-import re
-import sys
-
-path, secrets, installation, dashboard, api, gateway = sys.argv[1:]
-if any(not isinstance(v, str) or not v for v in sys.argv[1:]):
-    raise SystemExit("Invalid seed configuration.")
-for host in (dashboard, api, gateway):
-    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+", host):
-        raise SystemExit("Unsafe public hostname.")
-values = {
-    "WORKSPACES_INSTALLATION_ID": installation,
-    "CONSOLE_HOSTNAME": dashboard,
-    "CONSOLE_URL": "https://" + dashboard,
-    "API_HOSTNAME": api,
-    "API_URL": "https://" + api,
-    "WORKSPACES_GATEWAY_DOMAIN": gateway,
-    "WORKSPACES_SECRETS_DIR": secrets,
-}
-lines = []
-seen = set()
-for line in Path(path).read_text().splitlines():
-    key = line.partition("=")[0]
-    value = values.get(key)
-    if value is None:
-        lines.append(line)
-    else:
-        lines.append(f"{key}={value}")
-        seen.add(key)
-if seen != set(values):
-    raise SystemExit("The exact release environment contract changed.")
-temporary = Path(path + ".pending")
-temporary.write_text("\n".join(lines) + "\n")
-os.chmod(temporary, 0o600)
-os.replace(temporary, path)
-PY
-chmod 600 "$install_root/.env"
-
-cd "$install_root"
 preflight_openbao_ownership() {
     existing_volumes="$(docker volume ls -q \
-        --filter label=com.docker.compose.project=municode-workspaces \
+        --filter label=com.docker.compose.project=municode \
         --filter label=com.docker.compose.volume=openbao)"
     if [ -n "$existing_volumes" ]; then
         [ "$(printf '%s\n' "$existing_volumes" | wc -l)" -eq 1 ] || {
@@ -233,16 +76,16 @@ preflight_openbao_ownership() {
             exit 1
         }
         [ "$(docker volume inspect \
-            --format '{{ index .Labels "com.municode.workspaces.installation-id" }}' \
+            --format '{{ index .Labels "com.municode.installation-id" }}' \
             "$existing_volumes")" = "$installation_id" ] || {
             echo "Pre-existing OpenBao volume ownership changed before startup." >&2
             exit 1
         }
     fi
-    existing_containers="$(docker compose ps -aq openbao openbao-agent)"
+    existing_containers="$(compose ps -aq openbao openbao-agent)"
     for container in $existing_containers; do
         [ "$(docker inspect \
-            --format '{{ index .Config.Labels "com.municode.workspaces.installation-id" }}' \
+            --format '{{ index .Config.Labels "com.municode.installation-id" }}' \
             "$container")" = "$installation_id" ] || {
             echo "Pre-existing OpenBao container ownership changed before startup." >&2
             exit 1
@@ -250,7 +93,7 @@ preflight_openbao_ownership() {
     done
 }
 preflight_openbao_ownership
-docker compose up -d postgres openbao
+compose up -d postgres openbao
 
 openbao_init="$secrets_dir/openbao-seed-init.json"
 openbao_pending="$openbao_init.pending"
@@ -272,24 +115,24 @@ reset_unconfigured_openbao() {
         exit 1
     }
     volume="$(docker volume ls -q \
-        --filter label=com.docker.compose.project=municode-workspaces \
+        --filter label=com.docker.compose.project=municode \
         --filter label=com.docker.compose.volume=openbao \
-        --filter "label=com.municode.workspaces.installation-id=$installation_id")"
+        --filter "label=com.municode.installation-id=$installation_id")"
     [ -n "$volume" ] && [ "$(printf '%s\n' "$volume" | wc -l)" -eq 1 ] || {
         echo "No unique OpenBao volume is owned by this exact installation; preserve the host." >&2
         exit 1
     }
     [ "$(docker volume inspect \
-        --format '{{ index .Labels "com.municode.workspaces.installation-id" }}' "$volume")" \
+        --format '{{ index .Labels "com.municode.installation-id" }}' "$volume")" \
         = "$installation_id" ] || {
         echo "OpenBao volume ownership changed before reset." >&2
         exit 1
     }
-    containers="$(docker compose ps -aq openbao openbao-agent)"
+    containers="$(compose ps -aq openbao openbao-agent)"
     owned_containers=
     for container in $containers; do
         [ "$(docker inspect \
-            --format '{{ index .Config.Labels "com.municode.workspaces.installation-id" }}' \
+            --format '{{ index .Config.Labels "com.municode.installation-id" }}' \
             "$container")" = "$installation_id" ] || {
             echo "OpenBao container ownership changed before reset." >&2
             exit 1
@@ -302,11 +145,11 @@ reset_unconfigured_openbao() {
     docker volume rm "$volume"
     rm -f "$openbao_init" "$openbao_pending" "$secrets_dir/openbao-unseal-key" \
         "$secrets_dir/openbao-root-token"
-    docker compose up -d openbao
+    compose up -d openbao
 }
 
 openbao_exec() {
-    docker compose exec -T \
+    compose exec -T \
         -e BAO_ADDR=https://openbao:8200 \
         -e BAO_CACERT=/run/secrets/openbao-ca.crt \
         openbao "$@"
@@ -327,7 +170,7 @@ except Exception:
         case "$result" in
             true|false) printf '%s\n' "$result"; return 0 ;;
         esac
-        sleep "${WORKSPACES_SEED_OPENBAO_READY_INTERVAL:-2}"
+        sleep "${MUNICODE_SEED_OPENBAO_READY_INTERVAL:-2}"
     done
     return 1
 }
@@ -398,19 +241,19 @@ openbao_exec bao operator unseal "$unseal_key" >/dev/null 2>&1 || true
 unset unseal_key
 
 OPENBAO_ROOT_TOKEN_FILE="$secrets_dir/openbao-root-token" \
-    docker compose --profile maintenance run --rm openbao-configure
+    compose --profile maintenance run --rm openbao-configure
 [ -s "$secrets_dir/openbao-approle/role-id" ] &&
 [ -s "$secrets_dir/openbao-approle/secret-id" ] || {
-    echo "OpenBao Workspaces AppRole configuration is incomplete." >&2
+    echo "OpenBao Municode AppRole configuration is incomplete." >&2
     exit 1
 }
 : > "$openbao_configured.pending"
 chmod 600 "$openbao_configured.pending"
 mv "$openbao_configured.pending" "$openbao_configured"
 for migration in database-initialize kratos-migrate api-migrate; do
-    docker compose up --abort-on-container-exit --exit-code-from "$migration" "$migration"
+    compose up --abort-on-container-exit --exit-code-from "$migration" "$migration"
 done
-docker compose up -d
+compose up -d
 
 setup_token="$secrets_dir/bootstrap/setup-token"
 token_rotated_this_run=false
@@ -427,16 +270,16 @@ fi
 if ! valid_setup_token "$setup_token"; then
     printf '%s\n' \
         "{\"installationId\":\"$installation_id\",\"operationId\":\"first-owner\"}" |
-        docker compose --profile maintenance run --rm --no-TTY api-bootstrap \
-            prepare --stdin --output-file /run/workspaces-bootstrap/setup-token
+        compose --profile maintenance run --rm --no-TTY api-bootstrap \
+            prepare --stdin --output-file /run/municode-bootstrap/setup-token
     if [ -e "$setup_token" ] && ! valid_setup_token "$setup_token"; then
         rm -f "$setup_token"
     fi
     if ! valid_setup_token "$setup_token"; then
         printf '%s\n' \
             "{\"installationId\":\"$installation_id\",\"operationId\":\"first-owner\"}" |
-            docker compose --profile maintenance run --rm --no-TTY api-bootstrap \
-                rotate-token --stdin --output-file /run/workspaces-bootstrap/setup-token
+            compose --profile maintenance run --rm --no-TTY api-bootstrap \
+                rotate-token --stdin --output-file /run/municode-bootstrap/setup-token
         token_rotated_this_run=true
     fi
 fi
@@ -447,7 +290,7 @@ valid_setup_token "$setup_token" || {
 bootstrap_token_decision() {
     status="$(printf '%s\n' \
         "{\"installationId\":\"$installation_id\",\"operationId\":\"first-owner\"}" |
-        docker compose --profile maintenance run --rm --no-TTY api-bootstrap status --stdin)"
+        compose --profile maintenance run --rm --no-TTY api-bootstrap status --stdin)"
     printf '%s' "$status" | python3 -c '
 import datetime
 import json
@@ -471,8 +314,8 @@ case "$token_decision" in
         rm -f "$setup_token"
         printf '%s\n' \
             "{\"installationId\":\"$installation_id\",\"operationId\":\"first-owner\"}" |
-            docker compose --profile maintenance run --rm --no-TTY api-bootstrap \
-                rotate-token --stdin --output-file /run/workspaces-bootstrap/setup-token
+            compose --profile maintenance run --rm --no-TTY api-bootstrap \
+                rotate-token --stdin --output-file /run/municode-bootstrap/setup-token
         token_rotated_this_run=true
         valid_setup_token "$setup_token" || {
             echo "The expired first-owner token could not be rotated safely." >&2
@@ -497,14 +340,14 @@ cp "$setup_token" "$setup_token_output.pending"
 chmod 600 "$setup_token_output.pending"
 mv "$setup_token_output.pending" "$setup_token_output"
 
-settle_interval=${WORKSPACES_SEED_HEALTH_SETTLE_INTERVAL:-5}
+settle_interval=${MUNICODE_SEED_HEALTH_SETTLE_INTERVAL:-5}
 consecutive=0
 attempt=0
 while [ "$attempt" -lt 6 ] && [ "$consecutive" -lt 3 ]; do
     attempt=$((attempt + 1))
     all_running=true
     for service in postgres openbao openbao-agent kratos api worker workspace-gateway caddy; do
-        container="$(docker compose ps -q "$service")"
+        container="$(compose ps -q "$service")"
         if [ -z "$container" ] ||
             [ "$(docker inspect -f '{{.State.Running}}' "$container")" != "true" ]; then
             all_running=false
@@ -523,4 +366,4 @@ done
     exit 1
 }
 
-printf '%s\n' "Workspaces release $release_tag is installed and running."
+printf '%s\n' "Municode release $release_tag is installed and running."

@@ -124,16 +124,16 @@ archive. Retrieval alone does not qualify an image.
 
 An operator must download and verify the specified base image, then boot it in a
 **disposable isolated builder VM without workspace volumes**. No build script allocates
-provider resources. Stage only this subtree at `/opt/workspaces-image-source` inside that
+provider resources. Stage only this subtree at `/opt/municode-image-source` inside that
 VM. These commands are **not for a development workstation/control-plane/shared host**:
 
 ```sh
 # INSIDE THE DISPOSABLE BUILDER ONLY, as root:
-printf '%s\n' DESTROY-DISPOSABLE-IMAGE-BUILDER > /etc/workspaces-disposable-image-builder
-cd /opt/workspaces-image-source
+printf '%s\n' DESTROY-DISPOSABLE-IMAGE-BUILDER > /etc/municode-disposable-image-builder
+cd /opt/municode-image-source
 python3 -B image/build.py install \
   --acknowledgement DESTROY-DISPOSABLE-IMAGE-BUILDER \
-  --source-revision <exact-40-character-workspaces-commit> --builder-identity <operator-build-id>
+  --source-revision <exact-40-character-municode-commit> --builder-identity <operator-build-id>
 python3 -B image/build.py generalize \
   --acknowledgement DESTROY-DISPOSABLE-IMAGE-BUILDER
 # Power off via the builder's management console, then capture a private candidate.
@@ -146,6 +146,8 @@ Generalization erases root/user homes, agent logins, build source, workspace and
 enrollment/runtime state, cloud-init seed/state/logs, machine IDs, SSH host keys and logs.
 First boot regenerates identity/host keys through systemd/cloud-init. Do not execute more
 interactive build commands after generalization. Capture only after power-off.
+Images built before the `municode-*` VM contract are incompatible with this
+worker. Build, capture, and qualify a new image before admitting it.
 Register the private candidate in isolation, then run the
 [operator lifecycle acceptance](../../docs/setup/runtime.md#release-a-workspace-image)
 on one disposable workspace from that exact snapshot. It must reach Ready, save a file through
@@ -267,7 +269,7 @@ Provider differences that affect isolation and operations:
   key is attached. The image's SSH configuration disables password authentication, and
   management access uses only the cloud-init key.
 
-Installed manifest: `/opt/workspaces-workspace/image-manifest.json`, including actual dpkg
+Installed manifest: `/opt/municode-workspace/image-manifest.json`, including actual dpkg
 versions, source revision, builder identity, artifact integrity and runtime CLI checks.
 The builder also writes `provenance.installedImmutableInputs.files`: canonical root-owned
 installed paths and their actual SHA-256 hashes for the curated runtime files, storage
@@ -302,12 +304,12 @@ agent/key or provider/control-plane credentials into coding processes.
 
 The recipe pins the official Linux x64 Copilot CLI **1.0.114** release archive and SHA-256
 alongside the existing Codex installation. `/usr/local/bin/copilot` is a root-owned launcher
-for `/opt/workspaces-copilot/copilot`, with automatic updates disabled so a user cache cannot
+for `/opt/municode-copilot/copilot`, with automatic updates disabled so a user cache cannot
 silently replace the qualified version. Terminal commands and the T3 service use this same
 executable and coding user's home, `/workspace/home`. No login is included in the image.
 
 Before each T3 start, `copilot_provider.py configure` runs as `coding`. It adds
-`workspaces-copilot` to `/workspace/t3/userdata/settings.json`, using the pinned T3
+`municode-copilot` to `/workspace/t3/userdata/settings.json`, using the pinned T3
 `acpRegistry` driver with `source: local`, `commandPath: /usr/local/bin/copilot`, and
 literal `commandArgs: ["--acp", "--stdio"]`. This is the documented **Local ACP command**
 path, not an invented Copilot driver. The card is named **GitHub Copilot CLI** under
@@ -319,7 +321,7 @@ Setup preserves unrelated settings, Codex, native Copilot credentials, and T3 th
 Reapplying it leaves an existing local Copilot ACP instance (including a custom ID, home,
 or disabled state) untouched instead of duplicating it. Invalid settings produce a sanitized
 setup error in the service journal. Otherwise each provider is decided on its own and logs one
-`T3 provider <id> (<driver>): …` line to the journal (`journalctl -u workspaces-t3`): `seeded`,
+`T3 provider <id> (<driver>): …` line to the journal (`journalctl -u municode-t3`): `seeded`,
 `already configured as <id>`, `skipped, missing binary <path>`, or `error, <reason>`. A
 conflicting managed ID or an unusable agent binary fails only that provider; the others are
 still seeded, and setup exits nonzero so the failure is visible. No pre-start failure prevents
@@ -341,7 +343,7 @@ runuser -u coding -- env -i HOME=/workspace/home PATH=/usr/local/bin:/usr/bin:/b
   copilot login --device-code
 # Separately check the actual pinned stdio transport, without opening a thread:
 runuser -u coding -- env -i HOME=/workspace/home PATH=/usr/local/bin:/usr/bin:/bin \
-  python3 -B /opt/workspaces-workspace/copilot_provider.py probe
+  python3 -B /opt/municode-workspace/copilot_provider.py probe
 ```
 
 Open the displayed GitHub URL on your own browser and enter the short-lived code privately.
@@ -392,10 +394,10 @@ records the IDs, names and versions shown by the API, CLI and dashboard.
 | Agent | Version | Install | T3 provider |
 | --- | --- | --- | --- |
 | Codex | 0.169.0 | npm lockfile integrity (`tools/package-lock.json`) | built-in `codex` |
-| GitHub Copilot CLI | 1.0.114 | release archive SHA-256 | `workspaces-copilot` (local ACP, above) |
+| GitHub Copilot CLI | 1.0.114 | release archive SHA-256 | `municode-copilot` (local ACP, above) |
 | Claude Code | 2.1.328 | native `@anthropic-ai/claude-code-linux-x64` package, npm lockfile integrity; `/usr/local/bin/claude` sets `DISABLE_AUTOUPDATER=1` | built-in `claudeAgent` (enabled by default, uses `claude` from `PATH`) |
-| Antigravity | 1.4.5 | ACP server zip SHA-256 and size; only `agy_acp_server.par` and `localharness_external` are copied to `/opt/workspaces-antigravity` | `workspaces-antigravity` (`antigravity` driver, `binaryPath` set) |
-| Muse Code | 1.4.24-R9131.1 | release binary SHA-256 and size at `/opt/workspaces-muse/muse`; `/usr/local/bin/muse` sets `MUSE_NO_AUTO_UPDATE=1` | `workspaces-muse` (`muse` driver, `binaryPath` set) |
+| Antigravity | 1.4.5 | ACP server zip SHA-256 and size; only `agy_acp_server.par` and `localharness_external` are copied to `/opt/municode-antigravity` | `municode-antigravity` (`antigravity` driver, `binaryPath` set) |
+| Muse Code | 1.4.24-R9131.1 | release binary SHA-256 and size at `/opt/municode-muse/muse`; `/usr/local/bin/muse` sets `MUSE_NO_AUTO_UPDATE=1` | `municode-muse` (`muse` driver, `binaryPath` set) |
 
 T3 0.1.9 supports all of these natively. Its `antigravity` and `muse` drivers are disabled
 by default, so `copilot_provider.py configure` adds an enabled instance for each one whose
@@ -404,8 +406,8 @@ skipped and logged with its path; an unreadable install directory or non-executa
 logged as an error for that agent only. Any existing instance of the same driver, including a
 disabled one, is the user's choice and is left alone. An occupied instance ID is reported in the
 setup result without blocking T3 or the other providers. The build creates
-`/opt/workspaces-antigravity` and `/opt/workspaces-muse` root-owned with mode 0755 regardless
-of its umask, like `/opt/workspaces-copilot`. The `copilot-stdio-provider-setup` native probe
+`/opt/municode-antigravity` and `/opt/municode-muse` root-owned with mode 0755 regardless
+of its umask, like `/opt/municode-copilot`. The `copilot-stdio-provider-setup` native probe
 requires the Copilot, Antigravity and Muse instances to be enabled in T3 settings and their
 binaries to be executable by `coding`. The Claude Code build verifies `claude --version`.
 Antigravity and Muse are verified by digest and size only, because their version commands
@@ -551,13 +553,13 @@ ignored files and local credentials are not retained by that flow.
 
 The image installs:
 
-* `/opt/workspaces-workspace/{runtime.py,bootstrap.py,issue-t3-session.py,git-credential.py,copilot_provider.py,storage_tiers.py,scratch.env}`
+* `/opt/municode-workspace/{runtime.py,bootstrap.py,issue-t3-session.py,git-credential.py,copilot_provider.py,storage_tiers.py,scratch.env}`
 * `/etc/systemd/system/workspaces{work.slice,-workspace.service,-workspace-mount.service,-t3.service}`
-* `/etc/tmpfiles.d/workspaces-scratch.conf` and `/etc/profile.d/workspaces-scratch.sh` (see
+* `/etc/tmpfiles.d/municode-scratch.conf` and `/etc/profile.d/municode-scratch.sh` (see
   [Storage tiers](#storage-tiers))
-* `/opt/workspaces-workspace/image-manifest.json`
+* `/opt/municode-workspace/image-manifest.json`
 
-Upload root-owned mode-0600 configuration to `/etc/workspaces-workspace/runtime.json`.
+Upload root-owned mode-0600 configuration to `/etc/municode-workspace/runtime.json`.
 First-boot cloud-init must explicitly enable key-only root access (`disable_root:false`)
 with only the selected management public key; the image's SSH allowlist admits root only.
 Example **primary** (replace synthetic values; root fields outside this schema fail closed):
@@ -577,8 +579,8 @@ Example **primary** (replace synthetic values; root fields outside this schema f
       "providerVolumeId": "123"
     }
   },
-  "infrastructureUnits": ["workspaces-t3.service"],
-  "stopUnits": ["workspaces-t3.service"]
+  "infrastructureUnits": ["municode-t3.service"],
+  "stopUnits": ["municode-t3.service"]
 }
 ```
 
@@ -592,7 +594,7 @@ signature and returns the existing ext4 volume on retry; it then probes.
 For a **newly provider-formatted empty volume only**, the trusted worker first probes:
 
 ```sh
-python3 -B /opt/workspaces-workspace/bootstrap.py volume-probe \
+python3 -B /opt/municode-workspace/bootstrap.py volume-probe \
   --device /dev/disk/by-id/scsi-0HC_Volume_123 \
   --provider-device-id scsi-0HC_Volume_123
 ```
@@ -601,7 +603,7 @@ This returns `{"ok":true,"result":{"schemaVersion":1,"type":"VolumeProbe","devic
 "providerDeviceId":"…","filesystemUuid":"…","filesystem":"ext4","formatted":false}}`.
 Persist the UUID in the control plane **before** admitting a writer. Set `initializeOwner:true`
 only for that new, empty, separately provisioned volume. It creates a root-owned
-`.workspaces-volume.json` exactly equal to `owner`. Existing content without a matching
+`.municode-volume.json` exactly equal to `owner`. Existing content without a matching
 ownership marker blocks; resume never initializes/rewrites claims or formats anything.
 `blkid`, stable provider by-id device, ext4 UUID, mounted source/UUID, and ownership marker
 are checked. Unexpected mounts/devices/filesystems/claims, missing devices or nonempty local
@@ -609,7 +611,7 @@ fallback directories block. The worker must separately prove exclusive provider 
 and previous-generation compute absence before attach. There is no detach/force-detach API.
 
 After successful primary bootstrap, managed T3 is enabled on that VM. On reboot
-`workspaces-workspace-mount.service` must succeed before T3 or either scratch
+`municode-workspace-mount.service` must succeed before T3 or either scratch
 unit may start. It checks the persisted generation and reopens `/workspace`
 using the recorded provider by-id device and ext4 UUID, then verifies the
 existing owner marker. It never formats a device or initializes ownership.
@@ -618,9 +620,9 @@ does not authorize reopening it. Ephemeral storage is unchanged.
 
 The mount guard waits up to 45 seconds for the provider device. If the device
 is missing or identity checks fail, see
-`journalctl -b -u workspaces-workspace-mount.service`. T3 and scratch stay
+`journalctl -b -u municode-workspace-mount.service`. T3 and scratch stay
 stopped; `/workspace` is not used as local fallback storage. After the same
-registered device is available, starting `workspaces-t3.service` retries the
+registered device is available, starting `municode-t3.service` retries the
 mount. The runtime reports `StorageUnavailable` until the retained mount can
 be verified; on its next successful observation the worker blocks gateway
 admission until both the retained mount and T3 readiness are verified again.
@@ -648,13 +650,13 @@ retained files. Ephemeral storage is root-disk only; volume claims, common mount
 known primary/backup paths and shared container sockets are refused. Provider allocation,
 networking, credential grants and gateway authorization must enforce the remaining isolation.
 No primary credentials are inherited. Private Git over pinned SSH can use an explicitly
-selected per-generation key at `/run/workspaces-git/key` (owner 2000, mode 0400; directory
-root-owned 0711), plus root-owned `/etc/workspaces-git-known-hosts` (0644). HTTPS credential
+selected per-generation key at `/run/municode-git/key` (owner 2000, mode 0400; directory
+root-owned 0711), plus root-owned `/etc/municode-git-known-hosts` (0644). HTTPS credential
 helpers from repositories/user configuration are disabled. SSH keys require independent
 revocation policy; GitHub deploy keys are **not intrinsically expiring**.
 
 Preferred private Git uses an explicitly selected, genuinely repository-bound GitHub App
-installation token issued for at most one hour. Parent stages `/run/workspaces-git/credential.json`
+installation token issued for at most one hour. Parent stages `/run/municode-git/credential.json`
 (regular file, owner 2000, mode 0400, single link, directory root-owned 0711):
 `{"origin":"https://github.com/org/repo.git","username":"x-access-token","password":"SECRET",
 "expiresAt":1790000000}`. Do not put this material in runtime config, image, logs or receipts.
@@ -669,13 +671,13 @@ All Git/helper/SSH execution runs as UID 2000, never root. Remote evidence is co
 a fresh independent verifier with redirects disabled, no checkout-controlled HTTP/credential
 configuration, and no replacement refs/grafts. Absent the staged file, public Git uses no helper.
 
-Upload a distinct root-owned 0600 **one-time** `/run/workspaces-workspace/enrollment.json`:
+Upload a distinct root-owned 0600 **one-time** `/run/municode-workspace/enrollment.json`:
 `{"url":"https://control.example.invalid/enroll","token":"ONE_TIME_SECRET","vmId":"…",
 "generation":7,"operationId":"start-operation","expiresAt":1790000000}`.
 Optional `caFile` selects a private trust CA. Then invoke over **pinned management SSH**:
 
 ```sh
-python3 -B /opt/workspaces-workspace/bootstrap.py bootstrap
+python3 -B /opt/municode-workspace/bootstrap.py bootstrap
 ```
 
 It mounts/initializes the declared layout, starts services, verifies that the loopback
@@ -701,30 +703,30 @@ Application-specific lifecycle integration must be explicit, not inferred from a
 ### Storage tiers
 
 `/workspace` is the **retained** tier: the provider volume that survives VM replacement.
-Regenerable data lives on the **scratch** tier, `/var/lib/workspaces-scratch` on the VM's
+Regenerable data lives on the **scratch** tier, `/var/lib/municode-scratch` on the VM's
 local disk, which is never under `/workspace` and may be empty after any VM replacement:
 
 | Path | Owner, mode | Holds |
 | --- | --- | --- |
-| `/var/lib/workspaces-scratch` | root, 0755 | scratch root |
+| `/var/lib/municode-scratch` | root, 0755 | scratch root |
 | `cache` | coding, 0700 | package, build and tool caches (below) |
 | `tmp` | coding, 0700 | `TMPDIR`; emptied at every boot |
 | `docker` | root, 0711 | reserved for a container runtime's data root |
 | `repos` | root, 0700 | sources of build-output bind mounts into `/workspace/repos` |
 
-`/etc/tmpfiles.d/workspaces-scratch.conf` creates the layout at every boot
+`/etc/tmpfiles.d/municode-scratch.conf` creates the layout at every boot
 (`systemd-tmpfiles-setup.service`, before `sysinit.target` and therefore before T3), and
 `storage_tiers.py prepare` re-applies it before each T3 start.
 
-`/opt/workspaces-workspace/scratch.env` is the single list of redirected variables. The T3
+`/opt/municode-workspace/scratch.env` is the single list of redirected variables. The T3
 service reads it with `EnvironmentFile=`, so T3, its terminals and agents inherit it;
 processes started by the runtime with `systemd-run` get the same `EnvironmentFile=`; and
-`/etc/profile.d/workspaces-scratch.sh` exports it in login shells of UID 2000 only (for
+`/etc/profile.d/municode-scratch.sh` exports it in login shells of UID 2000 only (for
 example `su - coding` or `runuser -l coding` from the root management SSH session).
 Root and other users are unchanged. Values are fixed absolute paths, parsed line by line,
 never sourced.
 
-| Variable | Scratch path (under `/var/lib/workspaces-scratch`) |
+| Variable | Scratch path (under `/var/lib/municode-scratch`) |
 | --- | --- |
 | `XDG_CACHE_HOME` | `cache` (also Yarn 1, pip/uv fallbacks, Playwright fallback, …) |
 | `TMPDIR` | `tmp` |
@@ -760,14 +762,14 @@ export `HF_TOKEN_PATH=/workspace/home/.config/huggingface/token` (or `HF_HOME`) 
 signing in, or supply `HF_TOKEN` per session.
 
 **Container runtimes.** The image ships no Docker, containerd or Podman. If one is added,
-its data root must be under `/var/lib/workspaces-scratch/docker` (for Docker,
+its data root must be under `/var/lib/municode-scratch/docker` (for Docker,
 `"data-root"` in `/etc/docker/daemon.json`); native qualification fails with
 `CONTAINER_RUNTIME_DATA_ROOT_UNQUALIFIED` until that is qualified.
 
-**One-time cache migration.** Before T3 starts, `workspaces-t3.service` runs
+**One-time cache migration.** Before T3 starts, `municode-t3.service` runs
 `storage_tiers.py prepare` as root (`ExecStartPre=-+`, so a failure is logged and never
 blocks T3). Unless the root-only marker
-`/var/lib/workspaces-workspace/storage-tiers-migrated.json` (0600) records completion, a
+`/var/lib/municode-workspace/storage-tiers-migrated.json` (0600) records completion, a
 child that has dropped to UID/GID 2000 renames known cache directories in
 `/workspace/home` (`.cache`, `.npm`, `.nuget/packages`, NuGet's `http-cache`, `v3-cache`
 and `plugins-cache`, the pnpm and Yarn Berry stores, `go/pkg/mod`,
@@ -783,14 +785,14 @@ trash folder can also be deleted from the folder-size view). The marker is on th
 disk, so a replacement VM repeats the migration, which is then a no-op. The helper logs
 one bounded JSON line to the journal and always exits 0.
 
-`runtime.py serve` owns `/run/workspaces-workspace/control.sock` (0600, root peer UID checked).
+`runtime.py serve` owns `/run/municode-workspace/control.sock` (0600, root peer UID checked).
 The agent is outside the freezable coding slice. State/atomic fsynced receipts live in
-`/var/lib/workspaces-workspace`; parent must durably persist returned lifecycle receipts
+`/var/lib/municode-workspace`; parent must durably persist returned lifecycle receipts
 **before deleting compute**. File presence on the disposable VM alone is not off-VM durability.
 
 ### T3 service recovery
 
-`workspaces-t3.service` restarts on unexpected exit, signal, or OOM kill
+`municode-t3.service` restarts on unexpected exit, signal, or OOM kill
 (`Restart=on-failure`, `RestartSec=5`). The default `OOMPolicy=stop` turns a kernel or
 cgroup OOM kill into a failed run that restarts on the same VM generation and retained
 volume, so environment identity, projects, threads, and sign-ins persist. Interrupted
@@ -798,7 +800,7 @@ agent turns are not resumed. Exit 130, T3's graceful stop code, is a success and
 restart. `StartLimitIntervalSec=300` and `StartLimitBurst=5` bound the retries, including
 explicit starts: a fresh start followed by five SIGKILLs within the window ends in
 `failed` (`Result=signal` on Ubuntu systemd `255.4-1ubuntu8.10`). To recover from
-exhaustion without a lifecycle stop, run `systemctl reset-failed workspaces-t3.service`
+exhaustion without a lifecycle stop, run `systemctl reset-failed municode-t3.service`
 and start it again.
 
 `systemctl stop` cancels a pending restart. While a dependency keeps the stopped unit loaded,
@@ -822,9 +824,9 @@ launch and a previously linked T3 Connect relay recover after a T3 crash.
 
 ### Build outputs on local scratch
 
-`scratch_mounts.py` (`workspaces-scratch-mounts`) is a root helper that keeps regenerable,
+`scratch_mounts.py` (`municode-scratch-mounts`) is a root helper that keeps regenerable,
 git-ignored build outputs off the retained volume. It bind-mounts
-`/var/lib/workspaces-scratch/repos/<repo-id>/<relative-path>` over the output directory inside
+`/var/lib/municode-scratch/repos/<repo-id>/<relative-path>` over the output directory inside
 `/workspace/repos`. Paths in the checkout stay the same: no symlinks and no tool configuration.
 `<repo-id>` is the checkout's directory name plus a hash of its path below `repos` and its
 inode, so ids are stable and two checkouts never share one. Relative paths are validated
@@ -869,10 +871,10 @@ only when Git would ignore them:
 
 The helper runs at three points:
 
-1. `workspaces-scratch-mounts.service`, a oneshot ordered before `workspaces-t3.service`.
+1. `municode-scratch-mounts.service`, a oneshot ordered before `municode-t3.service`.
    T3 pulls it in with `Wants=`. It also runs before any coding process starts.
 2. Runtime `bootstrap`, after initial clones and before T3 starts.
-3. `workspaces-scratch-watch.service`, a long-running inotify watcher (via `ctypes`, with a
+3. `municode-scratch-watch.service`, a long-running inotify watcher (via `ctypes`, with a
    bounded polling fallback). It handles new checkouts, manifests, output directories and
    removed mount points. It also runs a full pass every 5 minutes, or every minute while work
    is deferred.
@@ -882,7 +884,7 @@ no process has its cwd, root or an open file inside it (checked through `/proc`)
 
 1. Copies the directory to a staging directory on scratch. Owners, modes, timestamps,
    symlinks (as symlinks) and hardlinks within the tree are preserved. A root-only journal
-   is written under `/workspace/.workspaces-scratch-trash`.
+   is written under `/workspace/.municode-scratch-trash`.
 2. Moves the volume copy into that trash directory, then re-checks the moved copy and
    mounts scratch.
 3. Deletes the volume copy.
@@ -893,11 +895,11 @@ directories are retried later. If a mount point is removed after it is unmounted
 pass can recreate the ignored output directory and its mount.
 
 **Mount propagation.** The helper units use no mount namespacing, so mounts are made in the
-host namespace. `workspaces-t3.service` (`ProtectSystem=strict`, `PrivateTmp=yes`), task units
+host namespace. `municode-t3.service` (`ProtectSystem=strict`, `PrivateTmp=yes`), task units
 and folder-size jobs run in their own namespaces, which systemd creates as slaves of the host.
 Mounts and unmounts below `/workspace` therefore propagate into T3, its terminals and agents,
 including those made after T3 started. Propagated mounts keep the host's read-write flags.
-`workspaceswork.slice` changes nothing here. T3 is ordered `After=` the oneshot only so the
+`municodework.slice` changes nothing here. T3 is ordered `After=` the oneshot only so the
 first build already sees the mounts; the native probe checks the mounts from inside a T3
 terminal.
 
@@ -920,7 +922,7 @@ checkout deletion first releases only verified, owned scratch mounts inside its 
 it does not traverse their scratch contents. The
 resource sampler counts them in `nestedMountsExcluded`. The trash directory stays in backups
 because it can hold user data mid-relocation. After a restore it belongs to the coding user,
-so the helper renames it to `.workspaces-scratch-trash.untrusted-*` without reading its
+so the helper renames it to `.municode-scratch-trash.untrusted-*` without reading its
 journals.
 
 **Pressure safety net.** When the retained volume is more than 85% full (override with
@@ -929,7 +931,7 @@ on the volume. Only checkouts with no process inside them qualify, and the least
 modified directories go first, until usage falls 5 points below the threshold. Each
 eviction is journaled before deletion. Tracked, non-ignored, non-allowlisted and open
 content is never deleted. Actions go to the journal (`journalctl -u
-workspaces-scratch-watch`) and to `/run/workspaces-scratch-mounts/status.json`
+municode-scratch-watch`) and to `/run/municode-scratch-mounts/status.json`
 (`scratch_mounts.py status`). The threshold is a command-line option because `runtime.json`
 rejects unknown fields.
 
@@ -1031,7 +1033,7 @@ deferring periodic saves.
 
 With `"storageLayout": 2` in the runtime configuration (primary only):
 
-* Live checkouts are in `/var/lib/workspaces-local/repos` on the VM disk. It is bind-mounted
+* Live checkouts are in `/var/lib/municode-local/repos` on the VM disk. It is bind-mounted
   `nodev,nosuid` at `/workspace/repos`, so T3 and linked worktrees keep the same absolute
   paths. The rest of `/workspace`, including T3 state, stays on the retained volume. The
   local directory must be on a separate ext4, xfs or btrfs filesystem.
@@ -1068,8 +1070,8 @@ With `"storageLayout": 2` in the runtime configuration (primary only):
 
 #### Periodic checkpoints and status
 
-`workspaces-repos-checkpoint.timer` runs `runtime.py checkpoint-periodic` every minute while
-T3 runs. It is wanted by `workspaces-t3.service` and stops with it. It saves only when the
+`municode-repos-checkpoint.timer` runs `runtime.py checkpoint-periodic` every minute while
+T3 runs. It is wanted by `municode-t3.service` and stops with it. It saves only when the
 interval has passed since the last attempt: 300 seconds by default, or
 `DevelopmentWorkspaceWorker:CheckpointIntervalSeconds` (60 to 3,600). The worker sends
 `checkpointIntervalSeconds` only when it differs from the default, so older layout 2 images
@@ -1080,7 +1082,7 @@ keep working.
   has fenced the workspace; that refusal records nothing. A save deferred by the engine (busy
   lock, changing tree, or a fence seen under the lock) exits with 75, which systemd treats as
   success. A later run tries again.
-* The service runs at low CPU and I/O priority outside `workspaceswork.slice`, as root, with
+* The service runs at low CPU and I/O priority outside `municodework.slice`, as root, with
   a limited capability set. Git runs as the coding user, as in other saves.
 * Stop fences the workspace first, then stops the service and waits for a running save to
   finish before it checks idleness and freezes T3. The final checkpoint is then saved as
@@ -1127,7 +1129,7 @@ it, so T3, tasks and folder jobs never run during it:
 1. Preconditions: `/workspace/repos` is a non-empty directory, there is no checkpoint store
    and no layout marker, and the VM disk has no checkout tree. Scratch mounts are detached
    first. If an interrupted scratch relocation is still unresolved
-   (`.workspaces-scratch-trash`), the migration is refused. An empty volume needs no
+   (`.municode-scratch-trash`), the migration is refused. An empty volume needs no
    migration and starts layout 2 with an empty tree.
 2. A root-only journal (`/workspace/.workspaces-layout-migration.json`) records `started`.
 3. The old tree is saved as the volume's first checkpoint, under a writer fence, with the
@@ -1234,7 +1236,7 @@ Unrelated or unconfirmed processes still report the existing inventory holds.
 
 ### JSON control protocol
 
-Run `python3 -B /opt/workspaces-workspace/runtime.py call`, sending one newline-terminated
+Run `python3 -B /opt/municode-workspace/runtime.py call`, sending one newline-terminated
 JSON object on stdin. All requests require `vmId`, integer `generation`, `operationId`
 (`[A-Za-z0-9_-]{1,128}`), and `action`. Responses are `{"ok":true,"result":{…}}` or
 `{"ok":false,"state":"Blocked|AwaitingGitSave","reason":"sanitized actionable reason"}`.
@@ -1295,7 +1297,7 @@ Inspect `ok`, not only SSH exit status. Never log enrollment or T3 secret output
   `scratch` is never added to `paths`. A scratch tier on its own device is reported as
   `unavailable["filesystems.scratch"]="separate_device"` (older control planes accept only
   `/` and `/workspace` entries). The workspace entry's `scratchBindMounts` counts
-  bind mounts into `/workspace` whose source is under `/var/lib/workspaces-scratch/repos`;
+  bind mounts into `/workspace` whose source is under `/var/lib/municode-scratch/repos`;
   they are not included in `nestedMountsExcluded`. Sampling never walks directories,
   never sleeps on the request path and does not change `revision`; a sampling failure
   reports `resources.unavailable` instead of failing status.
@@ -1312,7 +1314,7 @@ Inspect `ok`, not only SSH exit status. Never log enrollment or T3 secret output
   nested directory or file mount is refused, including same-device binds; the job's
   systemd writable binds on the three user-data roots are not checkout mounts.
   Scratch bind mounts (sources under
-  `/var/lib/workspaces-scratch/repos`) are listed as excluded, non-selectable rows with
+  `/var/lib/municode-scratch/repos`) are listed as excluded, non-selectable rows with
   `storage:"scratch"` and the `separate_mount` error, and are never walked or counted, even
   when scratch shares the workspace device.
   A root scan also reports the managed ext4 recovery directory as an excluded,
@@ -1343,11 +1345,11 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
 
 The same test file includes an explicitly opt-in guest check. **Only inside a
 disposable image-builder VM** already marked as described above, stage this source
-at a coding-user-readable location (for example `/opt/workspaces-image-source`) and
+at a coding-user-readable location (for example `/opt/municode-image-source`) and
 run as root:
 
 ```sh
-WORKSPACES_DISK_USAGE_GUEST=RUN-DISK-USAGE-ON-DISPOSABLE-GUEST \
+MUNICODE_DISK_USAGE_GUEST=RUN-DISK-USAGE-ON-DISPOSABLE-GUEST \
   unshare --mount --propagation private \
   python3 -B -m unittest discover \
   -s templates/development-workspaces/tests -p test_disk_usage.py \
@@ -1394,7 +1396,7 @@ and provider turns are not proof that their nodes or turn items are idle.
    recovery to try on this pin is a graceful restart of the **guest T3 service**,
    not a VM deletion. Coordinate operator maintenance and confirm that the guest
    has reopened after the failed freeze and that restarting won't interrupt
-   genuine work. Restart `workspaces-t3.service` through its existing systemd
+   genuine work. Restart `municode-t3.service` through its existing systemd
    supervisor, then let the normal stop retry verify both gates. T3 0.1.9
    [reconciles at shutdown and startup](https://github.com/pingdotgg/t3code/blob/24e77473ecf41bc1f7142529c7911c1c1aae1d76/apps/server/src/serverRuntimeStartup.ts#L475-L545)
    and [settles certain stale background items and linked nodes](https://github.com/pingdotgg/t3code/blob/24e77473ecf41bc1f7142529c7911c1c1aae1d76/apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.ts#L661-L716).
@@ -1419,15 +1421,15 @@ SIGKILL; unexpected children remain alive and block the receipt rather than bein
 
 ### Operator-qualified preview services
 
-Only explicitly registered `workspaces-preview-[a-z0-9-]{1,24}.service` units may join
+Only explicitly registered `municode-preview-[a-z0-9-]{1,24}.service` units may join
 `infrastructureUnits`; every infrastructure unit must also appear in `stopUnits`.
 The default image contains no preview application or preview service unit. Users must
 explicitly create and register a workload; registration does not turn a bundled test
 application into product infrastructure.
 
 Preview admission exempts **only the unit's MainPID**, with all four process UIDs equal to
-2000 and exact cgroup `0::/workspaceswork.slice/<unit>`. The loaded system unit must report
-`Slice=workspaceswork.slice`, `KillMode=process`, and `SendSIGKILL=no`. Its fragment and every
+2000 and exact cgroup `0::/municodework.slice/<unit>`. The loaded system unit must report
+`Slice=municodework.slice`, `KillMode=process`, and `SendSIGKILL=no`. Its fragment and every
 drop-in, including their directory ancestry, must be root/operator-owned and not group/other
 writable. Transient/unknown fragments and unsafe settings block, including before any preview
 stop. Children (even other UIDs), additional preview-cgroup processes and leftovers after
@@ -1478,7 +1480,7 @@ orchestration-shell snapshot; unknown/active/pending runs block. Passive observe
 input activity. A live lease/process still blocks, irrespective of expiry or shell classification.
 
 The opt-in OS adapter permits only single-threaded UID-2000 root-owned image bash/dash processes
-descended from the known `workspaces-t3.service` MainPID in that exact service cgroup. The shell
+descended from the known `municode-t3.service` MainPID in that exact service cgroup. The shell
 must be an interactive/automatic-TTY invocation, a foreground session/process-group leader,
 have matching stdin/stderr PTY slave character devices and controlling-terminal device number,
 have no child, zombie, stopped or background job, and be sleeping in kernel `read(0, buffer,

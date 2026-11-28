@@ -16,7 +16,7 @@
 
 {$CONSOLE_HOSTNAME} {
 	encode zstd gzip
-	root * /srv/workspaces-dashboard
+	root * /srv/municode-dashboard
 	handle /runtime-config.json {
 		header {
 			Content-Type application/json
@@ -24,7 +24,7 @@
 		}
 		respond ` {
 			"apiBaseUrl": "{$API_URL}",
-			"sourceUrl": "{$WORKSPACES_SOURCE_URL}",
+			"sourceUrl": "{$MUNICODE_SOURCE_URL}",
 			"auth": {
 				"origin": "{$API_URL}",
 				"capabilitiesUrl": "{$API_URL}/api/account/capabilities"
@@ -59,7 +59,7 @@ https:// {
 	tls {
 		on_demand
 	}
-	@workspace host *.{$WORKSPACES_GATEWAY_DOMAIN}
+	@workspace host *.{$MUNICODE_GATEWAY_DOMAIN}
 	handle @workspace {
 		reverse_proxy 172.31.20.3:8080 {
 			header_up X-Forwarded-Proto https

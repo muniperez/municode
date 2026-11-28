@@ -287,18 +287,18 @@
                     <span id="cmd-seed-plan">Shell</span>
                     <button type="button" class="copy-btn" aria-label="Copy control-plane seed commands"><span class="copy-btn-text">Copy</span></button>
                   </div>
-                  <pre role="region" aria-labelledby="cmd-seed-plan" tabindex="0"><code><span class="term-prompt">$ </span>workspaces seed plan \
+                  <pre role="region" aria-labelledby="cmd-seed-plan" tabindex="0"><code><span class="term-prompt">$ </span>municode seed plan \
     --provider &lt;provider&gt; --region &lt;region&gt; --size &lt;size&gt; \
     --dashboard-hostname console.example.com \
     --api-hostname api.example.com \
     --gateway-domain workspaces.example.com \
-    --release workspaces-vX.Y.Z \
+    --release municode-vX.Y.Z \
     --credential-file /protected/provider.token
 
-<span class="term-prompt">$ </span>workspaces seed apply &lt;operation&gt; \
+<span class="term-prompt">$ </span>municode seed apply &lt;operation&gt; \
     --credential-file /protected/provider.token --approve &lt;digest&gt;
 
-<span class="term-prompt">$ </span>workspaces seed resume &lt;operation&gt; \
+<span class="term-prompt">$ </span>municode seed resume &lt;operation&gt; \
     --credential-file /protected/provider.token \
     --confirm-console-fingerprint SHA256:...</code></pre>
                 </div>
@@ -360,17 +360,17 @@
                     <button type="button" class="copy-btn" aria-label="Copy source build and run commands"><span class="copy-btn-text">Copy</span></button>
                   </div>
                   <pre role="region" aria-labelledby="cmd-src-flow" tabindex="0"><code><span class="term-prompt">$ </span>git clone https://github.com/muniperez/municode.git &amp;&amp; cd municode
-<span class="term-prompt">$ </span>dotnet build Workspaces.slnx -c Release
-<span class="term-prompt">$ </span>dotnet test Workspaces.slnx -c Release --no-build
+<span class="term-prompt">$ </span>dotnet build Municode.slnx -c Release
+<span class="term-prompt">$ </span>dotnet test Municode.slnx -c Release --no-build
 
-<span class="term-prompt">$ </span>dotnet run --project src/Workspaces.Api -c Release --no-build -- migrate
-<span class="term-prompt">$ </span>dotnet run --project src/Workspaces.Api -c Release --no-build -- --urls http://127.0.0.1:5080</code></pre>
+<span class="term-prompt">$ </span>dotnet run --project src/Municode.Api -c Release --no-build -- migrate
+<span class="term-prompt">$ </span>dotnet run --project src/Municode.Api -c Release --no-build -- --urls http://127.0.0.1:5080</code></pre>
                 </div>
 
                 <div class="tile">
                   <ol class="plain-steps">
-                    <li>Build <code>Workspaces.slnx</code> and run the synthetic test suites locally with the .NET 10 SDK and Python 3.11+.</li>
-                    <li>Run local SQLite migrations and start <code>Workspaces.Api</code> on <code>127.0.0.1:5080</code>.</li>
+                    <li>Build <code>Municode.slnx</code> and run the synthetic test suites locally with the .NET 10 SDK and Python 3.11+.</li>
+                    <li>Run local SQLite migrations and start <code>Municode.Api</code> on <code>127.0.0.1:5080</code>.</li>
                     <li>Check <code>/health</code> locally, or inspect the service boundaries and runtime contracts in the architecture docs.</li>
                   </ol>
 
@@ -387,7 +387,7 @@
         <div class="grid-3 mt-lg">
           <article class="tile tile-interactive">
             <h3>Control-plane setup</h3>
-            <p>Journaled <code>workspaces seed</code> workflow, DNS records, manual Docker Compose installation, and image admission.</p>
+            <p>Journaled <code>municode seed</code> workflow, DNS records, manual Docker Compose installation, and image admission.</p>
             <div class="tile-footer">
               <a class="text-action" href="docs/getting-started.html">Read setup guide &rarr;</a>
             </div>

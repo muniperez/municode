@@ -12,7 +12,7 @@ function validateOrigin(value) {
   try {
     url = new URL(value);
   } catch {
-    throw new Error("WORKSPACES_API_URL must be an absolute origin.");
+    throw new Error("MUNICODE_API_URL must be an absolute origin.");
   }
 
   if (
@@ -23,7 +23,7 @@ function validateOrigin(value) {
     url.hash ||
     !(url.protocol === "https:" || (url.protocol === "http:" && isLocalHostname(url.hostname)))
   ) {
-    throw new Error("WORKSPACES_API_URL must be an HTTPS origin (HTTP is allowed only for localhost).");
+    throw new Error("MUNICODE_API_URL must be an HTTPS origin (HTTP is allowed only for localhost).");
   }
 
   return url.origin;
@@ -34,7 +34,7 @@ function validateSourceUrl(value) {
   try {
     url = new URL(value);
   } catch {
-    throw new Error("WORKSPACES_SOURCE_URL must be an absolute URL.");
+    throw new Error("MUNICODE_SOURCE_URL must be an absolute URL.");
   }
 
   if (
@@ -44,15 +44,15 @@ function validateSourceUrl(value) {
     url.hash ||
     !(url.protocol === "https:" || (url.protocol === "http:" && isLocalHostname(url.hostname)))
   ) {
-    throw new Error("WORKSPACES_SOURCE_URL must be a public HTTPS URL (HTTP is allowed only for localhost).");
+    throw new Error("MUNICODE_SOURCE_URL must be a public HTTPS URL (HTTP is allowed only for localhost).");
   }
 
   return url.href;
 }
 
 function createConfig() {
-  const apiBaseUrl = validateOrigin(process.env.WORKSPACES_API_URL ?? "");
-  const sourceUrl = validateSourceUrl(process.env.WORKSPACES_SOURCE_URL ?? defaultSourceUrl);
+  const apiBaseUrl = validateOrigin(process.env.MUNICODE_API_URL ?? "");
+  const sourceUrl = validateSourceUrl(process.env.MUNICODE_SOURCE_URL ?? defaultSourceUrl);
   return {
     apiBaseUrl,
     sourceUrl,
@@ -65,7 +65,7 @@ function createConfig() {
 
 function startNginx() {
   const config = createConfig();
-  const root = process.env.WORKSPACES_DASHBOARD_HTML_ROOT || "/usr/share/nginx/html";
+  const root = process.env.MUNICODE_DASHBOARD_HTML_ROOT || "/usr/share/nginx/html";
   const output = `${root}/runtime-config.json`;
   const temporary = `${output}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(config)}\n`, { mode: 0o644 });

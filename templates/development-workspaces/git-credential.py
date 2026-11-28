@@ -10,7 +10,7 @@ import time
 from urllib.parse import urlsplit
 
 
-CREDENTIAL = Path("/run/workspaces-git/credential.json")
+CREDENTIAL = Path("/run/municode-git/credential.json")
 
 
 def selected_credential(fields, credential, now):

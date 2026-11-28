@@ -22,7 +22,7 @@ const { WebSocketServer } = require("ws");
 const domain = "workspace.example.test";
 const t3Host = `vm-${"a".repeat(32)}-g1.${domain}`;
 const previewHost = `vm-${"a".repeat(32)}-g1-s-web.${domain}`;
-const sessionCookie = "__Host-workspaces-workspace";
+const sessionCookie = "__Host-municode-workspace";
 const serviceCredential = "c".repeat(64);
 const t3Bearer = "synthetic-t3-bearer";
 const routes = new Map([
@@ -77,7 +77,7 @@ try {
   const upstreamPort = await listen(upstream);
 
   const controlPort = await listen(httpServer(async (req, res) => {
-    if (req.headers["x-workspaces-gateway-credential"] !== serviceCredential) {
+    if (req.headers["x-municode-gateway-credential"] !== serviceCredential) {
       res.writeHead(401).end();
       return;
     }
@@ -102,7 +102,7 @@ try {
     res.writeHead(401).end();
   }));
 
-  gateway = spawn("dotnet", [join(root, ".local/artifacts/bin/Workspaces.Gateway/debug/Workspaces.Gateway.dll")], {
+  gateway = spawn("dotnet", [join(root, ".local/artifacts/bin/Municode.Gateway/debug/Municode.Gateway.dll")], {
     cwd: artifacts,
     env: {
       PATH: process.env.PATH,
@@ -191,7 +191,7 @@ try {
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await context.newPage();
   const preview = await context.newPage();
-  const launch = host => `https://${host}/__workspaces/launch?code=${routes.get(host).code}`;
+  const launch = host => `https://${host}/__municode/launch?code=${routes.get(host).code}`;
   assert.equal((await page.goto(launch(t3Host))).status(), 200);
   assert.equal(page.url(), `https://${t3Host}/`);
   assert.equal(await page.locator("h1").textContent(), "Synthetic T3");

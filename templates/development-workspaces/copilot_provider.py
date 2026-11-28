@@ -14,7 +14,7 @@ from runtime import Blocked, atomic_json, require
 
 VERSION = "1.0.114"
 EXECUTABLE = "/usr/local/bin/copilot"
-INSTANCE_ID = "workspaces-copilot"
+INSTANCE_ID = "municode-copilot"
 COPILOT = dict(instanceId=INSTANCE_ID, driver="acpRegistry", displayName="GitHub Copilot CLI",
                executable=EXECUTABLE,
                environment=[dict(name="COPILOT_AUTO_UPDATE", value="false", sensitive=False)],
@@ -22,9 +22,9 @@ COPILOT = dict(instanceId=INSTANCE_ID, driver="acpRegistry", displayName="GitHub
 # T3 drivers that are disabled by default; seeded only when the image installed their pinned executable.
 # Claude Code needs no instance: T3 enables its default claudeAgent instance and finds `claude` on PATH.
 AGENTS = (
-    dict(instanceId="workspaces-antigravity", driver="antigravity", displayName="Antigravity",
-         executable="/opt/workspaces-antigravity/agy_acp_server.par", environment=[]),
-    dict(instanceId="workspaces-muse", driver="muse", displayName="Muse Code",
+    dict(instanceId="municode-antigravity", driver="antigravity", displayName="Antigravity",
+         executable="/opt/municode-antigravity/agy_acp_server.par", environment=[]),
+    dict(instanceId="municode-muse", driver="muse", displayName="Muse Code",
          executable="/usr/local/bin/muse",
          environment=[dict(name="MUSE_NO_AUTO_UPDATE", value="1", sensitive=False)]),
 )

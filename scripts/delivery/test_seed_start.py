@@ -1,12 +1,15 @@
 # SPDX-License-Identifier: MPL-2.0
+from datetime import datetime
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 
 
@@ -14,57 +17,14 @@ ROOT = Path(__file__).resolve().parents[2]
 SEED_START = ROOT / "packaging" / "bundle" / "seed-start.sh"
 
 
-INSTALLER = r"""#!/bin/sh
+OPENSSL = r"""#!/bin/sh
 set -eu
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --install-root) install=$2; shift 2 ;;
-        --secrets-dir) secrets=$2; shift 2 ;;
+        -keyout|-out) printf 'synthetic\n' > "$2"; shift 2 ;;
         *) shift ;;
     esac
 done
-mkdir -p "$install/runtime/api" "$install/runtime/worker" "$install/runtime/gateway" \
-    "$install/dashboard" "$secrets/ssh" "$secrets/bootstrap" "$secrets/openbao-approle"
-cat > "$install/.env" <<'EOF'
-WORKSPACES_INSTALLATION_ID=replace
-CONSOLE_HOSTNAME=console.invalid
-CONSOLE_URL=https://console.invalid
-API_HOSTNAME=api.invalid
-API_URL=https://api.invalid
-WORKSPACES_GATEWAY_DOMAIN=workspaces.invalid
-WORKSPACES_SECRETS_DIR=/replace
-WORKSPACES_DOTNET_IMAGE=synthetic
-WORKSPACES_POSTGRES_IMAGE=synthetic
-WORKSPACES_OPENBAO_IMAGE=synthetic
-WORKSPACES_KRATOS_IMAGE=synthetic
-WORKSPACES_CADDY_IMAGE=synthetic
-WORKSPACES_WORKER_SSH_PUBLIC_KEY=synthetic
-EOF
-printf synthetic > "$install/release-manifest.json"
-printf synthetic > "$install/runtime/api/Workspaces.Api.dll"
-printf synthetic > "$install/runtime/worker/Workspaces.Worker.dll"
-printf synthetic > "$install/runtime/gateway/Workspaces.Gateway.dll"
-printf '<html>' > "$install/dashboard/index.html"
-cat > "$install/verify_bundle.py" <<'PY'
-raise SystemExit(0)
-PY
-for file in postgres-admin-password app-db-password kratos-db-password \
-    workspace-gateway-credential kratos.env ssh/worker-key ssh/worker-key.pub \
-    openbao-server.crt openbao-server.key openbao-ca.crt \
-    openbao-approle/role-id openbao-approle/secret-id; do
-    : > "$secrets/$file"
-    chmod 600 "$secrets/$file"
-done
-printf secret > "$secrets/postgres-admin-password"
-printf secret > "$secrets/app-db-password"
-printf secret > "$secrets/kratos-db-password"
-printf secret > "$secrets/workspace-gateway-credential"
-printf secret > "$secrets/kratos.env"
-printf secret > "$secrets/ssh/worker-key"
-printf secret > "$secrets/ssh/worker-key.pub"
-printf secret > "$secrets/openbao-server.crt"
-printf secret > "$secrets/openbao-server.key"
-printf secret > "$secrets/openbao-ca.crt"
 if [ "${FAIL_INSTALL_ONCE:-0}" = 1 ] && [ ! -e "$FAKE_STATE_DIR/install-failed" ]; then
     : > "$FAKE_STATE_DIR/install-failed"
     exit 42
@@ -78,9 +38,16 @@ from pathlib import Path
 import sys
 
 state = Path(os.environ["FAKE_STATE_DIR"])
-configured = Path(os.environ["FAKE_SECRETS_DIR"])
-secrets = configured if configured.exists() else Path(str(configured).removesuffix(".seed-pending"))
+secrets = Path(os.environ["FAKE_SECRETS_DIR"])
 args = sys.argv[1:]
+if args[:1] == ["compose"] and args != ["compose", "version"] and args[1] == "--project-name":
+    release = Path(os.environ["FAKE_RELEASE_DIR"])
+    expected = ["compose", "--project-name", "municode", "--project-directory", str(release),
+                "--env-file", str(release / ".env"), "-f", str(release / "compose.yml")]
+    if args[:len(expected)] != expected or "MUNICODE_RELEASE_TAG" in os.environ:
+        raise SystemExit("Compose did not use the fixed project and active release")
+    (state / "resolved-project").write_text(str(release))
+    args = ["compose", *args[len(expected):]]
 with (state / "docker.log").open("a") as log:
     log.write(" ".join(args) + "\n")
 
@@ -167,15 +134,15 @@ if "api-bootstrap" in " ".join(args) and "status" in args:
         print('{"state":"required","expiresAt":"2099-01-01T00:00:00Z"}')
     raise SystemExit(0)
 if len(args) >= 2 and args[:2] == ["volume", "ls"]:
-    installation = os.environ.get("FAKE_VOLUME_INSTALLATION", "workspaces-seed-operation")
+    installation = os.environ.get("FAKE_VOLUME_INSTALLATION", "municode-seed-operation")
     requested = next((value.split("=", 2)[2] for value in args
-                      if value.startswith("label=com.municode.workspaces.installation-id=")),
+                      if value.startswith("label=com.municode.installation-id=")),
                      None)
     if requested is None or installation == requested:
-        print("municode-workspaces_openbao")
+        print("municode_openbao")
     raise SystemExit(0)
 if len(args) >= 2 and args[:2] == ["volume", "inspect"]:
-    print(os.environ.get("FAKE_VOLUME_INSTALLATION", "workspaces-seed-operation"))
+    print(os.environ.get("FAKE_VOLUME_INSTALLATION", "municode-seed-operation"))
     raise SystemExit(0)
 if len(args) >= 2 and args[:2] == ["volume", "rm"]:
     if exists("openbao-initialized"):
@@ -186,7 +153,7 @@ if len(args) >= 3 and args[:2] == ["compose", "ps"]:
     print("cid-" + args[-1])
     raise SystemExit(0)
 if len(args) >= 3 and args[0] == "inspect" and "installation-id" in " ".join(args):
-    print("workspaces-seed-operation")
+    print("municode-seed-operation")
     raise SystemExit(0)
 if len(args) >= 2 and args[0] == "inspect":
     service = args[-1].removeprefix("cid-")
@@ -206,27 +173,41 @@ class SeedStartTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.release = self.root / "release"
-        self.release.mkdir()
-        installer = self.release / "install.sh"
-        installer.write_text(INSTALLER)
-        installer.chmod(0o755)
+        shutil.copytree(SEED_START.parent, self.release)
+        (self.release / "verify_bundle.py").write_text("def main(root=None): pass\n")
+        contract = json.loads((self.release / "env-contract.json").read_text())
+        (self.release / "release-manifest.json").write_text(json.dumps({
+            "version": "1.2.3", "sourceRevision": "a" * 40, "envContract": contract,
+        }))
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        docker = self.bin / "docker"
-        docker.write_text(DOCKER)
-        docker.chmod(0o755)
+        for name, script in (("docker", DOCKER), ("openssl", OPENSSL)):
+            command = self.bin / name
+            command.write_text(script)
+            command.chmod(0o755)
         self.state = self.root / "state"
         self.state.mkdir()
-        self.install = self.root / "install"
-        self.secrets = self.root / "secrets"
+        self.host = self.root / "host"
+        self.current = self.host / "opt/municode/current"
+        self.install = self.host / "opt/municode/releases/municode-v1.2.3"
+        self.secrets = self.host / "etc/municode/secrets"
+        self.config = self.host / "etc/municode/config"
+        self.policy = self.config / "municode.json"
+        self.policy_input = self.root / "policy.json"
+        self.policy_input.write_text('{"seeded":true}\n')
+        self.deploy_state = self.host / "var/lib/municode"
+        self.active = self.deploy_state / "active-release.json"
+        self.pending = self.deploy_state / "install-pending.json"
         self.token = self.root / "local" / "setup-token"
         self.env = os.environ.copy()
         self.env.update({
             "PATH": str(self.bin) + os.pathsep + self.env["PATH"],
             "FAKE_STATE_DIR": str(self.state),
-            "FAKE_SECRETS_DIR": str(self.secrets) + ".seed-pending",
-            "WORKSPACES_SEED_HEALTH_SETTLE_INTERVAL": "0",
-            "WORKSPACES_SEED_OPENBAO_READY_INTERVAL": "0",
+            "FAKE_SECRETS_DIR": str(self.secrets),
+            "FAKE_RELEASE_DIR": str(self.install),
+            "MUNICODE_RELEASE_TAG": "ambient-override-must-not-leak",
+            "MUNICODE_SEED_HEALTH_SETTLE_INTERVAL": "0",
+            "MUNICODE_SEED_OPENBAO_READY_INTERVAL": "0",
         })
 
     def tearDown(self):
@@ -235,14 +216,15 @@ class SeedStartTests(unittest.TestCase):
     def command(self):
         return [
             str(SEED_START),
-            "--release-tag", "workspaces-v1.2.3",
+            "--release-tag", "municode-v1.2.3",
             "--release-root", str(self.release),
-            "--installation-id", "workspaces-seed-operation",
+            "--installation-id", "municode-seed-operation",
             "--dashboard-hostname", "console.example.com",
             "--api-hostname", "api.example.com",
             "--gateway-domain", "workspaces.example.net",
-            "--install-root", str(self.install),
-            "--secrets-dir", str(self.secrets),
+            "--host-root", str(self.host),
+            "--bundle-sha256", "b" * 64,
+            "--policy-file", str(self.policy_input),
             "--setup-token-output", str(self.token),
         ]
 
@@ -250,6 +232,41 @@ class SeedStartTests(unittest.TestCase):
         env = self.env.copy()
         env.update(values)
         return subprocess.run(self.command(), env=env, capture_output=True, text=True)
+
+    def test_seed_installs_host_policy_and_records_verified_release(self):
+        completed = self.run_seed()
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.policy.read_bytes(), self.policy_input.read_bytes())
+        self.assertTrue(self.current.is_symlink())
+        self.assertEqual(self.current.readlink(), Path("releases/municode-v1.2.3"))
+        self.assertEqual((self.state / "resolved-project").read_text(), str(self.install))
+        env = (self.install / ".env").read_text().splitlines()
+        self.assertIn(f"MUNICODE_POLICY_FILE={self.policy}", env)
+        self.assertIn("MUNICODE_RELEASE_TAG=municode-v1.2.3", env)
+        self.assertIn("MUNICODE_RELEASE_TRUST=github-sigstore", env)
+        self.assertIn(f"MUNICODE_SECRETS_DIR={self.secrets}", env)
+        self.assertEqual((self.install / ".env").stat().st_mode & 0o777, 0o400)
+
+        # Execute the shipped SSH probe against the real installer output, relocating only host paths.
+        source = (ROOT / "src/Municode.Cli/Instances/InstanceSsh.cs").read_text()
+        probe = textwrap.dedent(re.search(r'private const string Probe = """\n(.*?)\n\s*""";', source, re.S)[1])
+        operator = self.config / "operator.env"
+        probe = probe.replace("/var/lib/municode/active-release.json", str(self.active))
+        probe = probe.replace("/etc/municode/config/operator.env", str(operator))
+        result = subprocess.run([sys.executable, "-I", "-c", probe], check=True, capture_output=True, text=True)
+        metadata = json.loads(result.stdout)
+        release = metadata["release"]
+        activated = datetime.fromisoformat(release["activatedAt"])
+        self.assertIsNotNone(activated.utcoffset())
+        self.assertEqual(metadata, {
+            "installationId": "municode-seed-operation", "dashboardHostname": "console.example.com",
+            "apiHostname": "api.example.com", "gatewayDomain": "workspaces.example.net",
+            "release": {
+                "releaseId": "municode-v1.2.3", "tag": "municode-v1.2.3", "sourceRevision": "a" * 40,
+                "bundleSha256": "b" * 64, "trust": "github-sigstore", "activatedAt": release["activatedAt"],
+            },
+        })
+        self.assertEqual(json.loads(self.active.read_text()), release | {"previous": None})
 
     def test_openbao_commands_use_verified_internal_tls(self):
         completed = self.run_seed(
@@ -289,15 +306,15 @@ class SeedStartTests(unittest.TestCase):
         self.assertNotEqual(failed.returncode, 0)
         self.assertFalse(self.install.exists())
         self.assertFalse(self.secrets.exists())
-        self.assertTrue((self.install.parent / (self.install.name + ".seed-pending")).exists())
+        self.assertFalse(self.current.exists())
+        self.assertFalse(self.active.exists())
+        self.assertEqual(json.loads(self.pending.read_text())["phase"], "staging")
+        self.assertTrue(self.secrets.with_name(".install-secrets-pending").is_dir())
 
         completed = self.run_seed()
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertTrue((self.secrets / "seed-install-complete").is_file())
-        self.assertEqual(
-            (Path(str(self.secrets) + ".seed-owner")).read_text().strip(),
-            "workspaces-seed-operation workspaces-v1.2.3 complete",
-        )
+        self.assertTrue(self.active.is_file())
+        self.assertFalse(self.pending.exists())
 
     def test_initialized_openbao_with_malformed_recovery_is_preserved_and_refused(self):
         partial = self.run_seed(PARTIAL_OPENBAO_ONCE="1")
@@ -309,7 +326,7 @@ class SeedStartTests(unittest.TestCase):
         initialized = self.state / "openbao-initialized"
         self.assertTrue(initialized.exists())
         original_state = initialized.read_bytes()
-        owner = Path(str(self.secrets) + ".seed-owner")
+        owner = self.active
         original_owner = owner.read_bytes()
         initial_log = (self.state / "docker.log").read_text()
 

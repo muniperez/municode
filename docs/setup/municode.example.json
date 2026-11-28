@@ -1,0 +1,74 @@
+{
+  "Database": {
+    "Provider": "Sqlite",
+    "RunMigrationsOnStartup": false
+  },
+  "Bootstrap": {
+    "InstallationId": "workspace-example"
+  },
+  "Console": {
+    "BaseUrl": "https://console.example.test"
+  },
+  "Cors": {
+    "AllowedOrigins": ["https://console.example.test"]
+  },
+  "Kratos": {
+    "PublicBaseUrl": "http://127.0.0.1:4433",
+    "AdminBaseUrl": "http://127.0.0.1:4434",
+    "DashboardOrigin": "https://console.example.test"
+  },
+  "GitHub": {
+    "ApiUrl": "https://console.example.test"
+  },
+  "OpenBao": {
+    "Address": "https://bao.example.test",
+    "MountPath": "municode",
+    "EnvironmentPrefix": "example"
+  },
+  "DevelopmentWorkspaces": {
+    "Enabled": false,
+    "Profiles": {
+      "standard": {
+        "MemoryGiB": 8,
+        "CpuCount": 4,
+        "AllowedPlanIds": ["synthetic-plan"],
+        "AllowedSkus": ["synthetic-sku"],
+        "AllowedRegions": ["synthetic-region"]
+      }
+    },
+    "Images": {
+      "example-image": {
+        "Enabled": false,
+        "ProviderAccountId": "synthetic-account",
+        "ProviderImageId": "100",
+        "AllowedRegions": ["synthetic-region"],
+        "Architecture": "linux/amd64"
+      }
+    }
+  },
+  "DevelopmentWorkspaceGateway": {
+    "Enabled": false,
+    "GatewayDomain": "workspaces.example.test",
+    "ServiceCredentialFile": "/etc/municode/secrets/gateway",
+    "ControlPlaneUrl": "http://127.0.0.1:7100",
+    "TrustedProxyAddress": "127.0.0.1",
+    "RelayHost": "127.0.0.1",
+    "MinimumRelayPort": 42000,
+    "MaximumRelayPort": 42999
+  },
+  "DevelopmentWorkspaceWorker": {
+    "ApiBaseUrl": "https://api.example.test",
+    "ManagementAddresses": ["192.0.2.10/32"],
+    "RelayBindAddress": "127.0.0.1",
+    "RelayLockFile": "/var/lib/municode/relay.lock",
+    "RelayMinimumPort": 42000,
+    "RelayMaximumPort": 42999,
+    "PreviewServices": {
+      "web": { "Port": 8080 }
+    }
+  },
+  "WorkspaceSsh": {
+    "PublicKey": "",
+    "PrivateKeyFile": "/etc/municode/secrets/worker-ssh"
+  }
+}

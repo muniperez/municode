@@ -76,15 +76,15 @@
         <header>
           <h1 id="main-heading" tabindex="-1">Control-plane setup</h1>
           <p class="hero-lead">
-            Provision a fresh control-plane host with <code>workspaces seed</code>, or install a verified release archive onto an existing host running Docker Compose.
+            Provision a fresh control-plane host with <code>municode seed</code>, or install a verified release archive onto an existing host running Docker Compose.
           </p>
         </header>
 
         <!-- SECTION 1: SEED WORKFLOW -->
         <section id="seed-workflow">
-          <h2>1. Provisioning with <code>workspaces seed</code></h2>
+          <h2>1. Provisioning with <code>municode seed</code></h2>
           <p>
-            <code>workspaces seed</code> (also callable as <code>municode seed</code>) provisions one control-plane host from a signed release. It quotes recurring costs before creating resources, records progress in a local journal so interrupted runs can resume, and pauses for out-of-band SSH host fingerprint verification and DNS setup.
+            <code>municode seed</code> provisions one control-plane host from a signed release. It quotes recurring costs before creating resources, records progress in a local journal so interrupted runs can resume, and pauses for out-of-band SSH host fingerprint verification and DNS setup.
           </p>
 
           <div class="callout">
@@ -96,7 +96,7 @@
           <figure id="seed-diagram" class="diagram-figure">
             <div class="diagram-canvas">
               <svg viewBox="0 0 920 510" role="img" aria-labelledby="diag-seed-title">
-                <title id="diag-seed-title">Five-step workflow for workspaces seed across Workstation CLI, Verification Gates, and Control-Plane Host: 1. Plan and cost quote, 2. Provision host with approval digest, 3. Verify console SSH fingerprint out of band, 4. Point DNS records and start services over HTTPS, 5. Complete first-owner setup.</title>
+                <title id="diag-seed-title">Five-step workflow for municode seed across Workstation CLI, Verification Gates, and Control-Plane Host: 1. Plan and cost quote, 2. Provision host with approval digest, 3. Verify console SSH fingerprint out of band, 4. Point DNS records and start services over HTTPS, 5. Complete first-owner setup.</title>
                 <defs>
                   <marker id="arr-s" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
                     <path d="M1 1.5L8.5 5L1 8.5Z" class="svg-arrow"/>
@@ -118,7 +118,7 @@
 
                 <!-- Phase 1 -->
                 <rect x="16" y="64" width="268" height="72" rx="6" class="svg-node"/>
-                <text x="30" y="86" class="svg-title">1. workspaces seed plan</text>
+                <text x="30" y="86" class="svg-title">1. municode seed plan</text>
                 <text x="30" y="105" class="svg-subtitle">Verifies signed release &amp;</text>
                 <text x="30" y="122" class="svg-subtitle">writes local operation journal</text>
 
@@ -189,7 +189,7 @@
               </svg>
             </div>
             <figcaption>
-              If a network failure interrupts <code>seed apply</code>, running <code>workspaces seed resume &lt;operation&gt;</code> reconciles against the local journal rather than creating another host.
+              If a network failure interrupts <code>seed apply</code>, running <code>municode seed resume &lt;operation&gt;</code> reconciles against the local journal rather than creating another host.
             </figcaption>
           </figure>
 
@@ -200,17 +200,17 @@
               <button type="button" class="copy-btn" aria-label="Copy seed commands"><span class="copy-btn-text">Copy</span></button>
             </div>
             <pre role="region" aria-labelledby="seed-full-cmds" tabindex="0"><code><span class="term-prompt">$ </span>install -m 600 /dev/null /protected/provider.token
-<span class="term-prompt">$ </span>workspaces seed plan \
+<span class="term-prompt">$ </span>municode seed plan \
     --provider &lt;provider&gt; --region &lt;region&gt; --size &lt;size&gt; \
     --dashboard-hostname console.example.com \
     --api-hostname api.example.com \
     --gateway-domain workspaces.example.com \
-    --release workspaces-vX.Y.Z \
+    --release municode-vX.Y.Z \
     --credential-file /protected/provider.token
-<span class="term-prompt">$ </span>workspaces seed apply &lt;operation&gt; \
+<span class="term-prompt">$ </span>municode seed apply &lt;operation&gt; \
     --credential-file /protected/provider.token \
     --approve &lt;approval-digest&gt;
-<span class="term-prompt">$ </span>workspaces seed resume &lt;operation&gt; \
+<span class="term-prompt">$ </span>municode seed resume &lt;operation&gt; \
     --credential-file /protected/provider.token \
     --confirm-console-fingerprint SHA256:...</code></pre>
           </div>
@@ -255,7 +255,7 @@
         <section id="manual-host">
           <h2>2. Manual installation with Docker Compose</h2>
           <p>
-            On an existing server with Docker Engine and Compose v2, verify the release checksums and run <code>install.sh</code>:
+            On an existing server with Docker Engine and Compose v2, first set the public hostnames and installation ID in <code>/etc/municode/config/operator.env</code> as shown in the operator guide. Then run:
           </p>
 
           <div class="code-frame">
@@ -264,13 +264,13 @@
               <button type="button" class="copy-btn" aria-label="Copy manual host installation commands"><span class="copy-btn-text">Copy</span></button>
             </div>
             <pre role="region" aria-labelledby="manual-install-cmds" tabindex="0"><code><span class="term-prompt">$ </span>sha256sum --check --strict checksums.txt
-<span class="term-prompt">$ </span>tar -xzf municode-workspaces-X.Y.Z-linux-any.tar.gz &amp;&amp; cd municode-workspaces-X.Y.Z
-<span class="term-prompt">$ </span>./install.sh --install-root /opt/municode/workspaces \
-    --secrets-dir /etc/municode/workspaces/secrets
-<span class="term-prompt">$ </span>cd /opt/municode/workspaces &amp;&amp; docker compose up -d postgres openbao
+<span class="term-prompt">$ </span>bundle_sha256="$(sha256sum municode-X.Y.Z-linux-any.tar.gz | cut -d ' ' -f 1)"
+<span class="term-prompt">$ </span>tar -xzf municode-X.Y.Z-linux-any.tar.gz &amp;&amp; cd municode-X.Y.Z
+<span class="term-prompt">$ </span>sudo ./install.sh --bundle-sha256 "$bundle_sha256"
+<span class="term-prompt">$ </span>sudo municode-compose up -d postgres openbao
 <span class="term-prompt">$ </span>OPENBAO_ROOT_TOKEN_FILE=/protected/root-token \
-    docker compose --profile maintenance run --rm openbao-configure
-<span class="term-prompt">$ </span>docker compose up database-initialize kratos-migrate api-migrate &amp;&amp; docker compose up -d</code></pre>
+    sudo --preserve-env=OPENBAO_ROOT_TOKEN_FILE municode-compose --profile maintenance run --rm openbao-configure
+<span class="term-prompt">$ </span>sudo municode-compose up database-initialize kratos-migrate api-migrate &amp;&amp; sudo municode-compose up -d</code></pre>
           </div>
           <p>
             See <a href="https://github.com/muniperez/municode/blob/main/docs/operator.md"><code>docs/operator.md</code></a> for secret backup custody, first-owner bootstrap token generation, and upgrade steps.

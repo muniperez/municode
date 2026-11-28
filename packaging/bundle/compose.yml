@@ -1,10 +1,11 @@
-name: municode-workspaces
+name: municode
 
 x-installation-labels: &installation-labels
-  com.municode.workspaces.installation-id: ${WORKSPACES_INSTALLATION_ID:?set WORKSPACES_INSTALLATION_ID}
+  com.municode.installation-id: ${MUNICODE_INSTALLATION_ID:?set MUNICODE_INSTALLATION_ID}
 
 x-runtime: &runtime
-  image: ${WORKSPACES_DOTNET_IMAGE:?set WORKSPACES_DOTNET_IMAGE}
+  user: "0"
+  pull_policy: ${MUNICODE_RUNTIME_PULL_POLICY:-missing}
   entrypoint: ["/usr/bin/dotnet"]
   restart: unless-stopped
   read_only: true
@@ -17,28 +18,28 @@ x-runtime: &runtime
 x-shared-environment: &shared-environment
   Database__Provider: Postgres
   Database__PasswordFile: /run/secrets/app-db-password
-  ConnectionStrings__Workspaces: Host=postgres;Port=5432;Database=workspaces;Username=workspaces
+  ConnectionStrings__Municode: Host=postgres;Port=5432;Database=municode;Username=municode
   OpenBao__Address: https://openbao:8200
-  OpenBao__MountPath: workspaces
+  OpenBao__MountPath: municode
   OpenBao__EnvironmentPrefix: production
-  OpenBao__TokenFile: /run/workspaces-openbao/token
+  OpenBao__TokenFile: /run/municode-openbao/token
   OpenBao__CaCertificateFile: /run/secrets/openbao-ca.crt
-  DevelopmentWorkspaces__ConfigurationFile: /etc/workspaces/workspaces.json
+  DevelopmentWorkspaces__ConfigurationFile: /etc/municode/municode.json
   DevelopmentWorkspaceGateway__Enabled: "true"
-  DevelopmentWorkspaceGateway__GatewayDomain: ${WORKSPACES_GATEWAY_DOMAIN:?set WORKSPACES_GATEWAY_DOMAIN}
+  DevelopmentWorkspaceGateway__GatewayDomain: ${MUNICODE_GATEWAY_DOMAIN:?set MUNICODE_GATEWAY_DOMAIN}
   DevelopmentWorkspaceGateway__ServiceCredentialFile: /run/secrets/workspace-gateway-credential
   DevelopmentWorkspaceGateway__RelayHost: 172.31.21.2
   DevelopmentWorkspaceGateway__MinimumRelayPort: "42000"
   DevelopmentWorkspaceGateway__MaximumRelayPort: "42999"
   DevelopmentWorkspaceWorker__ApiBaseUrl: ${API_URL:?set API_URL}
   DevelopmentWorkspaceWorker__RelayBindAddress: 172.31.21.2
-  DevelopmentWorkspaceWorker__RelayLockFile: /var/lib/workspaces/relay.lock
+  DevelopmentWorkspaceWorker__RelayLockFile: /var/lib/municode/relay.lock
   DevelopmentWorkspaceWorker__RelayMinimumPort: "42000"
   DevelopmentWorkspaceWorker__RelayMaximumPort: "42999"
 
 services:
   postgres:
-    image: ${WORKSPACES_POSTGRES_IMAGE:?set WORKSPACES_POSTGRES_IMAGE}
+    image: ${MUNICODE_POSTGRES_IMAGE:?set MUNICODE_POSTGRES_IMAGE}
     restart: unless-stopped
     environment:
       POSTGRES_DB: postgres
@@ -57,30 +58,30 @@ services:
     networks: [private]
 
   database-initialize:
-    image: ${WORKSPACES_POSTGRES_IMAGE:?set WORKSPACES_POSTGRES_IMAGE}
+    image: ${MUNICODE_POSTGRES_IMAGE:?set MUNICODE_POSTGRES_IMAGE}
     restart: "no"
-    entrypoint: ["/bin/sh", "/opt/workspaces/init-databases.sh"]
+    entrypoint: ["/bin/sh", "/opt/municode/init-databases.sh"]
     environment:
       PGHOST: postgres
       PGPORT: "5432"
       PGUSER: postgres
       PGDATABASE: postgres
-      WORKSPACES_POSTGRES_ADMIN_PASSWORD_FILE: /run/secrets/postgres-admin-password
-      WORKSPACES_APP_DB_PASSWORD_FILE: /run/secrets/app-db-password
-      WORKSPACES_KRATOS_DB_PASSWORD_FILE: /run/secrets/kratos-db-password
+      MUNICODE_POSTGRES_ADMIN_PASSWORD_FILE: /run/secrets/postgres-admin-password
+      MUNICODE_APP_DB_PASSWORD_FILE: /run/secrets/app-db-password
+      MUNICODE_KRATOS_DB_PASSWORD_FILE: /run/secrets/kratos-db-password
     secrets:
       - postgres-admin-password
       - app-db-password
       - kratos-db-password
     volumes:
-      - ./init-databases.sh:/opt/workspaces/init-databases.sh:ro
+      - ./init-databases.sh:/opt/municode/init-databases.sh:ro
     depends_on:
       postgres:
         condition: service_healthy
     networks: [private]
 
   openbao:
-    image: ${WORKSPACES_OPENBAO_IMAGE:?set WORKSPACES_OPENBAO_IMAGE}
+    image: ${MUNICODE_OPENBAO_IMAGE:?set MUNICODE_OPENBAO_IMAGE}
     labels: *installation-labels
     restart: unless-stopped
     command: ["server", "-config=/etc/openbao/server.hcl"]
@@ -109,21 +110,21 @@ services:
 
   openbao-configure:
     profiles: ["maintenance"]
-    image: ${WORKSPACES_OPENBAO_IMAGE:?set WORKSPACES_OPENBAO_IMAGE}
+    image: ${MUNICODE_OPENBAO_IMAGE:?set MUNICODE_OPENBAO_IMAGE}
     restart: "no"
-    entrypoint: ["/bin/sh", "/opt/workspaces/openbao-init.sh"]
+    entrypoint: ["/bin/sh", "/opt/municode/openbao-init.sh"]
     environment:
       BAO_ADDR: https://openbao:8200
       BAO_CACERT: /run/secrets/openbao-ca.crt
-      OPENBAO_POLICY_FILE: /etc/openbao/workspaces-policy.hcl
+      OPENBAO_POLICY_FILE: /etc/openbao/municode-policy.hcl
       OPENBAO_ROOT_TOKEN_FILE: /run/openbao-root/token
       OPENBAO_ROLE_ID_FILE: /run/openbao-approle/role-id
       OPENBAO_SECRET_ID_FILE: /run/openbao-approle/secret-id
     secrets:
       - openbao-ca.crt
     volumes:
-      - ./openbao-init.sh:/opt/workspaces/openbao-init.sh:ro
-      - ./openbao-policy.hcl:/etc/openbao/workspaces-policy.hcl:ro
+      - ./openbao-init.sh:/opt/municode/openbao-init.sh:ro
+      - ./openbao-policy.hcl:/etc/openbao/municode-policy.hcl:ro
       - type: bind
         source: ${OPENBAO_ROOT_TOKEN_FILE:-/dev/null}
         target: /run/openbao-root/token
@@ -131,7 +132,7 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: ${WORKSPACES_SECRETS_DIR:?set WORKSPACES_SECRETS_DIR}/openbao-approle
+        source: ${MUNICODE_SECRETS_DIR:?set MUNICODE_SECRETS_DIR}/openbao-approle
         target: /run/openbao-approle
         bind:
           create_host_path: false
@@ -141,7 +142,7 @@ services:
     networks: [private]
 
   openbao-agent:
-    image: ${WORKSPACES_OPENBAO_IMAGE:?set WORKSPACES_OPENBAO_IMAGE}
+    image: ${MUNICODE_OPENBAO_IMAGE:?set MUNICODE_OPENBAO_IMAGE}
     labels: *installation-labels
     restart: unless-stopped
     command: ["agent", "-config=/etc/openbao/agent.hcl"]
@@ -154,13 +155,13 @@ services:
       - openbao-ca.crt
     volumes:
       - ./openbao-agent.hcl:/etc/openbao/agent.hcl:ro
-      - ./openbao-ready.sh:/opt/workspaces/openbao-ready.sh:ro
-      - openbao-agent-token:/run/workspaces-openbao
+      - ./openbao-ready.sh:/opt/municode/openbao-ready.sh:ro
+      - openbao-agent-token:/run/municode-openbao
     depends_on:
       openbao:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "/bin/sh", "/opt/workspaces/openbao-ready.sh"]
+      test: ["CMD", "/bin/sh", "/opt/municode/openbao-ready.sh"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -168,7 +169,7 @@ services:
     networks: [private]
 
   kratos-migrate:
-    image: ${WORKSPACES_KRATOS_IMAGE:?set WORKSPACES_KRATOS_IMAGE}
+    image: ${MUNICODE_KRATOS_IMAGE:?set MUNICODE_KRATOS_IMAGE}
     user: "0:0"
     restart: "no"
     command: ["migrate", "sql", "-e", "--yes", "--config", "/etc/config/kratos.yml"]
@@ -178,11 +179,11 @@ services:
       SELFSERVICE_FLOWS_ERROR_UI_URL: ${CONSOLE_URL:?set CONSOLE_URL}/sign-in
       SELFSERVICE_FLOWS_LOGIN_UI_URL: ${CONSOLE_URL:?set CONSOLE_URL}/sign-in
       SELFSERVICE_FLOWS_SETTINGS_UI_URL: ${CONSOLE_URL:?set CONSOLE_URL}/settings/account
-      SELFSERVICE_METHODS_PASSKEY_ENABLED: ${WORKSPACES_PASSKEYS_ENABLED:-true}
+      SELFSERVICE_METHODS_PASSKEY_ENABLED: ${MUNICODE_PASSKEYS_ENABLED:-true}
       SELFSERVICE_METHODS_PASSKEY_CONFIG_RP_ID: ${CONSOLE_HOSTNAME:?set CONSOLE_HOSTNAME}
       SELFSERVICE_METHODS_PASSKEY_CONFIG_RP_ORIGINS: ${CONSOLE_URL:?set CONSOLE_URL}
     env_file:
-      - ${WORKSPACES_SECRETS_DIR:?set WORKSPACES_SECRETS_DIR}/kratos.env
+      - ${MUNICODE_SECRETS_DIR:?set MUNICODE_SECRETS_DIR}/kratos.env
     volumes:
       - ./kratos.yml:/etc/config/kratos.yml:ro
       - ./identity.schema.json:/etc/config/identity.schema.json:ro
@@ -192,13 +193,13 @@ services:
     networks: [private]
 
   kratos:
-    image: ${WORKSPACES_KRATOS_IMAGE:?set WORKSPACES_KRATOS_IMAGE}
+    image: ${MUNICODE_KRATOS_IMAGE:?set MUNICODE_KRATOS_IMAGE}
     user: "0:0"
     restart: unless-stopped
     command: ["serve", "--config", "/etc/config/kratos.yml"]
     environment: *kratos-environment
     env_file:
-      - ${WORKSPACES_SECRETS_DIR:?set WORKSPACES_SECRETS_DIR}/kratos.env
+      - ${MUNICODE_SECRETS_DIR:?set MUNICODE_SECRETS_DIR}/kratos.env
     volumes:
       - ./kratos.yml:/etc/config/kratos.yml:ro
       - ./identity.schema.json:/etc/config/identity.schema.json:ro
@@ -215,15 +216,22 @@ services:
 
   api-migrate:
     <<: *runtime
+    image: ${MUNICODE_API_IMAGE:-${MUNICODE_DOTNET_IMAGE:?set MUNICODE_DOTNET_IMAGE}}
     restart: "no"
-    command: ["/opt/workspaces/Workspaces.Api.dll", "migrate"]
+    command: ["/opt/municode/Municode.Api.dll", "migrate"]
     environment:
       <<: *shared-environment
     secrets:
       - app-db-password
     volumes:
-      - ./runtime/api:/opt/workspaces:ro
-      - ./workspaces.json:/etc/workspaces/workspaces.json:ro
+      - ./runtime/api:/opt/municode:ro
+      - &workspace-policy
+        type: bind
+        source: ${MUNICODE_POLICY_FILE:?set MUNICODE_POLICY_FILE}
+        target: /etc/municode/municode.json
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       database-initialize:
         condition: service_completed_successfully
@@ -231,30 +239,32 @@ services:
 
   api-bootstrap:
     <<: *runtime
+    image: ${MUNICODE_API_IMAGE:-${MUNICODE_DOTNET_IMAGE:?set MUNICODE_DOTNET_IMAGE}}
     profiles: ["maintenance"]
     restart: "no"
-    entrypoint: ["/usr/bin/dotnet", "/opt/workspaces/Workspaces.Api.dll", "bootstrap"]
+    entrypoint: ["/usr/bin/dotnet", "/opt/municode/Municode.Api.dll", "bootstrap"]
     command: []
     environment:
       Database__Provider: Postgres
       Database__PasswordFile: /run/secrets/app-db-password
-      ConnectionStrings__Workspaces: Host=postgres;Port=5432;Database=workspaces;Username=workspaces
+      ConnectionStrings__Municode: Host=postgres;Port=5432;Database=municode;Username=municode
       Kratos__AdminBaseUrl: http://kratos:4434/
-      Bootstrap__InstallationId: ${WORKSPACES_INSTALLATION_ID:?set WORKSPACES_INSTALLATION_ID}
+      Bootstrap__InstallationId: ${MUNICODE_INSTALLATION_ID:?set MUNICODE_INSTALLATION_ID}
     secrets:
       - app-db-password
     volumes:
-      - ./runtime/api:/opt/workspaces:ro
+      - ./runtime/api:/opt/municode:ro
       - type: bind
-        source: ${WORKSPACES_SECRETS_DIR:?set WORKSPACES_SECRETS_DIR}/bootstrap
-        target: /run/workspaces-bootstrap
+        source: ${MUNICODE_SECRETS_DIR:?set MUNICODE_SECRETS_DIR}/bootstrap
+        target: /run/municode-bootstrap
         bind:
           create_host_path: false
     networks: [private]
 
   api:
     <<: *runtime
-    command: ["/opt/workspaces/Workspaces.Api.dll"]
+    image: ${MUNICODE_API_IMAGE:-${MUNICODE_DOTNET_IMAGE:?set MUNICODE_DOTNET_IMAGE}}
+    command: ["/opt/municode/Municode.Api.dll"]
     environment:
       <<: *shared-environment
       ASPNETCORE_URLS: http://+:8080
@@ -264,17 +274,20 @@ services:
       Kratos__PublicBaseUrl: http://kratos:4433/
       Kratos__AdminBaseUrl: http://kratos:4434/
       Kratos__DashboardOrigin: ${CONSOLE_URL:?set CONSOLE_URL}
-      Kratos__PasskeyEnabled: ${WORKSPACES_PASSKEYS_ENABLED:-true}
+      Kratos__PasskeyEnabled: ${MUNICODE_PASSKEYS_ENABLED:-true}
       GitHub__ApiUrl: ${API_URL:?set API_URL}
-      Bootstrap__InstallationId: ${WORKSPACES_INSTALLATION_ID:?set WORKSPACES_INSTALLATION_ID}
+      Bootstrap__InstallationId: ${MUNICODE_INSTALLATION_ID:?set MUNICODE_INSTALLATION_ID}
+      MUNICODE_RELEASE_TAG: ${MUNICODE_RELEASE_TAG:-unknown}
+      MUNICODE_RELEASE_SOURCE_REVISION: ${MUNICODE_RELEASE_SOURCE_REVISION:-unknown}
+      MUNICODE_RELEASE_TRUST: ${MUNICODE_RELEASE_TRUST:-unknown}
     secrets:
       - app-db-password
       - workspace-gateway-credential
       - openbao-ca.crt
     volumes:
-      - ./runtime/api:/opt/workspaces:ro
-      - ./workspaces.json:/etc/workspaces/workspaces.json:ro
-      - openbao-agent-token:/run/workspaces-openbao:ro
+      - ./runtime/api:/opt/municode:ro
+      - *workspace-policy
+      - openbao-agent-token:/run/municode-openbao:ro
     depends_on:
       api-migrate:
         condition: service_completed_successfully
@@ -286,23 +299,24 @@ services:
 
   worker:
     <<: *runtime
-    command: ["/opt/workspaces/Workspaces.Worker.dll"]
+    image: ${MUNICODE_WORKER_IMAGE:-${MUNICODE_DOTNET_IMAGE:?set MUNICODE_DOTNET_IMAGE}}
+    command: ["/opt/municode/Municode.Worker.dll"]
     environment:
       <<: *shared-environment
-      WorkspaceSsh__PrivateKeyFile: /run/workspaces-ssh/worker-key
-      WorkspaceSsh__PublicKey: ${WORKSPACES_WORKER_SSH_PUBLIC_KEY:?set WORKSPACES_WORKER_SSH_PUBLIC_KEY}
+      WorkspaceSsh__PrivateKeyFile: /run/municode-ssh/worker-key
+      WorkspaceSsh__PublicKey: ${MUNICODE_WORKER_SSH_PUBLIC_KEY:?set MUNICODE_WORKER_SSH_PUBLIC_KEY}
     secrets:
       - app-db-password
       - workspace-gateway-credential
       - openbao-ca.crt
     volumes:
-      - ./runtime/worker:/opt/workspaces:ro
-      - ./workspaces.json:/etc/workspaces/workspaces.json:ro
-      - openbao-agent-token:/run/workspaces-openbao:ro
-      - relay-state:/var/lib/workspaces
+      - ./runtime/worker:/opt/municode:ro
+      - *workspace-policy
+      - openbao-agent-token:/run/municode-openbao:ro
+      - relay-state:/var/lib/municode
       - type: bind
-        source: ${WORKSPACES_SECRETS_DIR:?set WORKSPACES_SECRETS_DIR}/ssh
-        target: /run/workspaces-ssh
+        source: ${MUNICODE_SECRETS_DIR:?set MUNICODE_SECRETS_DIR}/ssh
+        target: /run/municode-ssh
         read_only: true
         bind:
           create_host_path: false
@@ -318,11 +332,12 @@ services:
 
   workspace-gateway:
     <<: *runtime
-    command: ["/opt/workspaces/Workspaces.Gateway.dll"]
+    image: ${MUNICODE_GATEWAY_IMAGE:-${MUNICODE_DOTNET_IMAGE:?set MUNICODE_DOTNET_IMAGE}}
+    command: ["/opt/municode/Municode.Gateway.dll"]
     environment:
       ASPNETCORE_URLS: http://+:8080
       DevelopmentWorkspaceGateway__Enabled: "true"
-      DevelopmentWorkspaceGateway__GatewayDomain: ${WORKSPACES_GATEWAY_DOMAIN:?set WORKSPACES_GATEWAY_DOMAIN}
+      DevelopmentWorkspaceGateway__GatewayDomain: ${MUNICODE_GATEWAY_DOMAIN:?set MUNICODE_GATEWAY_DOMAIN}
       DevelopmentWorkspaceGateway__ServiceCredentialFile: /run/secrets/workspace-gateway-credential
       DevelopmentWorkspaceGateway__ControlPlaneUrl: http://api:8080
       DevelopmentWorkspaceGateway__RelayHost: 172.31.21.2
@@ -332,7 +347,7 @@ services:
     secrets:
       - workspace-gateway-credential
     volumes:
-      - ./runtime/gateway:/opt/workspaces:ro
+      - ./runtime/gateway:/opt/municode:ro
     depends_on:
       api:
         condition: service_started
@@ -344,21 +359,21 @@ services:
         ipv4_address: 172.31.21.3
 
   caddy:
-    image: ${WORKSPACES_CADDY_IMAGE:?set WORKSPACES_CADDY_IMAGE}
+    image: ${MUNICODE_CADDY_IMAGE:?set MUNICODE_CADDY_IMAGE}
     restart: unless-stopped
     environment:
       API_HOSTNAME: ${API_HOSTNAME:?set API_HOSTNAME}
       CONSOLE_HOSTNAME: ${CONSOLE_HOSTNAME:?set CONSOLE_HOSTNAME}
       API_URL: ${API_URL:?set API_URL}
-      WORKSPACES_SOURCE_URL: ${WORKSPACES_SOURCE_URL:-https://github.com/muniperez/municode}
-      WORKSPACES_GATEWAY_DOMAIN: ${WORKSPACES_GATEWAY_DOMAIN:?set WORKSPACES_GATEWAY_DOMAIN}
+      MUNICODE_SOURCE_URL: ${MUNICODE_SOURCE_URL:-https://github.com/muniperez/municode}
+      MUNICODE_GATEWAY_DOMAIN: ${MUNICODE_GATEWAY_DOMAIN:?set MUNICODE_GATEWAY_DOMAIN}
     ports:
       - "80:80"
       - "443:443"
       - "443:443/udp"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./dashboard:/srv/workspaces-dashboard:ro
+      - ./dashboard:/srv/municode-dashboard:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
@@ -373,23 +388,23 @@ services:
 
 secrets:
   postgres-admin-password:
-    file: ${WORKSPACES_SECRETS_DIR:?set WORKSPACES_SECRETS_DIR}/postgres-admin-password
+    file: ${MUNICODE_SECRETS_DIR:?set MUNICODE_SECRETS_DIR}/postgres-admin-password
   app-db-password:
-    file: ${WORKSPACES_SECRETS_DIR:?set WORKSPACES_SECRETS_DIR}/app-db-password
+    file: ${MUNICODE_SECRETS_DIR:?set MUNICODE_SECRETS_DIR}/app-db-password
   kratos-db-password:
-    file: ${WORKSPACES_SECRETS_DIR:?set WORKSPACES_SECRETS_DIR}/kratos-db-password
+    file: ${MUNICODE_SECRETS_DIR:?set MUNICODE_SECRETS_DIR}/kratos-db-password
   workspace-gateway-credential:
-    file: ${WORKSPACES_SECRETS_DIR:?set WORKSPACES_SECRETS_DIR}/workspace-gateway-credential
+    file: ${MUNICODE_SECRETS_DIR:?set MUNICODE_SECRETS_DIR}/workspace-gateway-credential
   openbao-role-id:
-    file: ${WORKSPACES_SECRETS_DIR:?set WORKSPACES_SECRETS_DIR}/openbao-approle/role-id
+    file: ${MUNICODE_SECRETS_DIR:?set MUNICODE_SECRETS_DIR}/openbao-approle/role-id
   openbao-secret-id:
-    file: ${WORKSPACES_SECRETS_DIR:?set WORKSPACES_SECRETS_DIR}/openbao-approle/secret-id
+    file: ${MUNICODE_SECRETS_DIR:?set MUNICODE_SECRETS_DIR}/openbao-approle/secret-id
   openbao-server.crt:
-    file: ${WORKSPACES_SECRETS_DIR:?set WORKSPACES_SECRETS_DIR}/openbao-server.crt
+    file: ${MUNICODE_SECRETS_DIR:?set MUNICODE_SECRETS_DIR}/openbao-server.crt
   openbao-server.key:
-    file: ${WORKSPACES_SECRETS_DIR:?set WORKSPACES_SECRETS_DIR}/openbao-server.key
+    file: ${MUNICODE_SECRETS_DIR:?set MUNICODE_SECRETS_DIR}/openbao-server.key
   openbao-ca.crt:
-    file: ${WORKSPACES_SECRETS_DIR:?set WORKSPACES_SECRETS_DIR}/openbao-ca.crt
+    file: ${MUNICODE_SECRETS_DIR:?set MUNICODE_SECRETS_DIR}/openbao-ca.crt
 
 volumes:
   postgres:

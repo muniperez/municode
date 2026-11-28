@@ -1,6 +1,15 @@
-# Configure the Workspaces API
+# Configure the Municode API
 
-Start with [the example](workspaces.example.json). Set
+On a packaged control plane installed by seed or `install.sh`,
+`/opt/municode/current` points into `/opt/municode/releases/`. Operator
+environment and workspace policy live in
+`/etc/municode/config/{operator.env,municode.json}`, secrets in
+`/etc/municode/secrets/`, and active release metadata in
+`/var/lib/municode/active-release.json`. Use `/usr/local/sbin/municode-compose`
+for host operations. See the [operator guide](../operator.md) for packaged
+installation steps.
+
+Start with [the example](municode.example.json). Set
 `DevelopmentWorkspaces__ConfigurationFile` to its absolute path to load a local
 copy. Environment variables take precedence. Use an HTTPS endpoint for browser
 sign-in and exactly matching origins in `Console:BaseUrl`,
@@ -9,7 +18,7 @@ sign-in and exactly matching origins in `Console:BaseUrl`,
 ## Database and first operator
 
 - For PostgreSQL, set `Database__Provider=Postgres` and
-  `ConnectionStrings__Workspaces` to a dedicated empty database.
+  `ConnectionStrings__Municode` to a dedicated empty database.
   `Database__PasswordFile` can supply the password from a protected file.
   Run the same `migrate` command before starting the API. Each engine has its
   own initial migration and model snapshot. This setup is for fresh installations.
@@ -20,10 +29,10 @@ sign-in and exactly matching origins in `Console:BaseUrl`,
   `rp.origins` set to exactly `Kratos:DashboardOrigin`, and set
   `Kratos:PasskeyEnabled=true` on the API. Configure the public base URL as
   the private endpoint reachable by the API, keep the admin URL private, and
-  allow the Workspaces console as a browser return origin. The Kratos
-  `session.lifespan` must cover the longest configured Workspaces idle window
-  if remembered sessions are enabled. Workspaces issues
-  `__Host-workspaces-session` and validates the attached Kratos session.
+  allow the Municode console as a browser return origin. The Kratos
+  `session.lifespan` must cover the longest configured Municode idle window
+  if remembered sessions are enabled. Municode issues
+  `__Host-municode-session` and validates the attached Kratos session.
 - Set `Bootstrap__InstallationId` to a stable installation identifier. Prepare
   a one-time setup token after migration. Substitute the installation and
   operation identifiers for your instance.
@@ -32,7 +41,7 @@ sign-in and exactly matching origins in `Console:BaseUrl`,
 umask 077
 mkdir -p .local/artifacts/setup
 printf '%s\n' '{"installationId":"workspace-example","operationId":"first-operator"}' |
-  dotnet run --project src/Workspaces.Api -c Release --no-build -- \
+  dotnet run --project src/Municode.Api -c Release --no-build -- \
     bootstrap prepare --stdin --output-file "$PWD/.local/artifacts/setup/setup-token"
 ```
 
@@ -41,13 +50,13 @@ configured origin, or use `bootstrap complete --input-file <protected-file>`.
 The protected JSON for the command contains the same `installationId` and
 `operationId`, plus `setupToken`, `email`, `password`, `displayName`,
 `organizationName`, and `organizationSlug`. The command creates the first owner
-and binds the owner's Kratos identity to Workspaces. Remove the protected input
+and binds the owner's Kratos identity to Municode. Remove the protected input
 and setup token after completion.
 
 ## Providers, images, and Git
 
 Configure `OpenBao:Address`, a dedicated KV v2 `MountPath` (default
-`workspaces`), a deployment-specific `EnvironmentPrefix`, and `TokenFile`.
+`municode`), a deployment-specific `EnvironmentPrefix`, and `TokenFile`.
 Grant the service access to its provider and integration credential paths
 under `env/<environment>/orgs/`. Use distinct credentials for each installation.
 
@@ -73,7 +82,7 @@ OpenBao credential reference under that organization's
 ## Budget price catalog
 
 Budgets estimate spend from `DevelopmentWorkspaces:PriceCatalog`, a map of
-operator-maintained list prices keyed by a stable entry ID. Workspaces never
+operator-maintained list prices keyed by a stable entry ID. Municode never
 fetches prices from provider APIs, and the catalog is never read when creating,
 starting, stopping or resizing workspaces. Copy prices from the provider's
 published price list, then record where they came from and when they take
@@ -123,18 +132,18 @@ in each calendar month the period covers.
 ## Integration contracts
 
 Workspace client routes remain under `/api/development-workspaces`. Browser
-mutations use `X-Workspaces-CSRF`. Scoped API keys use `workspaces:read` and
+mutations use `X-Municode-CSRF`. Scoped API keys use `workspaces:read` and
 `workspaces:write`. Provider, plan, and GitHub administration have their own
 scopes. CLI device login exchanges an approved session once and persists only
 the generated API key's hash.
 
-Runtime projects in this repository can reference `Workspaces.Common` for
+Runtime projects in this repository can reference `Municode.Common` for
 `WorkspaceDbContext`, workspace services, DTOs, gateway options and
 `IDevelopmentWorkspaceProvider`. Use `WorkspaceOwnership.Manager` in the
 `managed-by` label. API enrollment and gateway authorization use their
 existing generation-bound HTTP contracts. Gateway service endpoints accept the
-`X-Workspaces-Gateway-Credential` header. The API queues lifecycle operations.
+`X-Municode-Gateway-Credential` header. The API queues lifecycle operations.
 
 See [runtime setup](runtime.md) for worker, gateway and prepared-image configuration.
 The worker claims and executes them. SSH keys and gateway service credentials
-belong to the Workspaces runtime installation.
+belong to the Municode runtime installation.

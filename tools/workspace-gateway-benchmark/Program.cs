@@ -9,8 +9,8 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
-using Workspaces.Common.Services;
-using Workspaces.Gateway;
+using Municode.Common.Services;
+using Municode.Gateway;
 
 // Synthetic workspace gateway benchmark. The real gateway Program runs in a child process with the recommended
 // container shape (1 visible CPU, 192 MiB GC heap limit), behind a loopback "trusted proxy" that supplies
@@ -473,7 +473,7 @@ static class GatewayChildProcess
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
-            if (instrument.Meter.Name == "Workspaces.Gateway" && instrument.Name.StartsWith("workspaces.gateway.", StringComparison.Ordinal))
+            if (instrument.Meter.Name == "Municode.Gateway" && instrument.Name.StartsWith("municode.gateway.", StringComparison.Ordinal))
                 l.EnableMeasurementEvents(instrument);
         };
         listener.SetMeasurementEventCallback<long>((instrument, value, tags, _) =>
@@ -599,7 +599,7 @@ sealed class FakeControlPlane : IAsyncDisposable
         var fake = new FakeControlPlane(app);
         app.MapPost("/internal/workspace-gateway/resolve", (HttpContext context) =>
         {
-            if (context.Request.Headers["X-Workspaces-Gateway-Credential"] != credential) return Results.Unauthorized();
+            if (context.Request.Headers["X-Municode-Gateway-Credential"] != credential) return Results.Unauthorized();
             Interlocked.Increment(ref fake.resolves);
             return Results.Json(new DevelopmentWorkspaceGatewayTarget(upstreamPort, "synthetic-upstream-bearer"));
         });

@@ -167,7 +167,7 @@ class FakeLinux:
 
 
 class ManagedT3StopTests(unittest.TestCase):
-    unit = "workspaces-t3.service"
+    unit = "municode-t3.service"
     failed = dict(ActiveState="failed", SubState="failed", Result="signal", Job="", MainPID="0", ControlPID="0")
     stopped = dict(failed, ActiveState="inactive", SubState="dead", Result="success")
 
@@ -219,8 +219,8 @@ class ManagedT3StopTests(unittest.TestCase):
 
 
 class ManagedStopThawTests(unittest.TestCase):
-    unit = "workspaces-t3.service"
-    slice = "workspaceswork.slice"
+    unit = "municode-t3.service"
+    slice = "municodework.slice"
 
     def setUp(self):
         self.adapter = rt.Linux(dict(workspace="/workspace"))
@@ -255,7 +255,7 @@ class ManagedStopThawTests(unittest.TestCase):
             return SimpleNamespace(stdout="")
 
         def events(path, *args, **kwargs):
-            self.assertEqual(str(path), "/sys/fs/cgroup/workspaceswork.slice/cgroup.events")
+            self.assertEqual(str(path), "/sys/fs/cgroup/municodework.slice/cgroup.events")
             if evidence_error == "missing":
                 raise FileNotFoundError(str(path))
             if evidence_error == "permission":
@@ -424,9 +424,9 @@ class LayoutTests(unittest.TestCase):
             marker.write_bytes(b"engine-independent data")
             nested = data / "lost+found"
             nested.mkdir()
-            nested_owner = nested / ".workspaces-volume.json"
+            nested_owner = nested / ".municode-volume.json"
             nested_owner.write_text("user-owned nested file")
-            owner = workspace / ".workspaces-volume.json"
+            owner = workspace / ".municode-volume.json"
             owner.write_text("{}")
             adapter = rt.Linux(dict(workspace=str(workspace), uid=2000, gid=2000))
             with patch.object(rt.os, "chown") as chown:
@@ -1219,23 +1219,23 @@ class RuntimeTests(unittest.TestCase):
 
     def test_primary_streaming_backup_ack_and_restore_separate_owned_volume(self):
         (self.workspace / "lost+found").mkdir()
-        (self.workspace / ".workspaces-volume.json").write_text("source volume ownership")
+        (self.workspace / ".municode-volume.json").write_text("source volume ownership")
         state = self.workspace / "user-data/custom-service/state.bin"
         state.parent.mkdir(parents=True)
         state.write_bytes(b"generic application data\0\xff")
         nested = self.workspace / "user-data/lost+found"
         nested.mkdir()
-        (nested / ".workspaces-volume.json").write_text("user-owned nested data")
+        (nested / ".municode-volume.json").write_text("user-owned nested data")
         receipt, archive = self.make_streaming_backup()
         with rt.tarfile.open(fileobj=io.BytesIO(archive)) as content:
             self.assertNotIn("data/lost+found", content.getnames())
-            self.assertNotIn("data/.workspaces-volume.json", content.getnames())
+            self.assertNotIn("data/.municode-volume.json", content.getnames())
         stopped = self.request("quiesce", backupRequired=True)
         self.assertEqual(receipt, stopped["backup"])
         target = self.root / "restore-workspace"
         target.mkdir()
         (target / "lost+found").mkdir()
-        owner = target / ".workspaces-volume.json"
+        owner = target / ".municode-volume.json"
         owner.write_text("separate target ownership")
         config = copy.deepcopy(self.runtime.c)
         config["workspace"] = str(target)
@@ -1254,7 +1254,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual("separate target ownership", owner.read_text())
         self.assertEqual([], list((target / "lost+found").iterdir()))
         self.assertEqual("user-owned nested data",
-                         (target / "user-data/lost+found/.workspaces-volume.json").read_text())
+                         (target / "user-data/lost+found/.municode-volume.json").read_text())
 
     def test_backup_rejects_recovered_or_aliased_filesystem_metadata(self):
         lost = self.workspace / "lost+found"
@@ -1375,11 +1375,11 @@ class RuntimeTests(unittest.TestCase):
                         hardlink = rt.tarfile.TarInfo("data/alias")
                         hardlink.type = rt.tarfile.LNKTYPE
                         hardlink.linkname = ("data/trap" if case == "hardlink-to-link"
-                                             else "data/repos/../.workspaces-volume.json")
+                                             else "data/repos/../.municode-volume.json")
                         output.addfile(hardlink)
                 target = self.root / ("restore-" + case)
                 target.mkdir()
-                owner = target / ".workspaces-volume.json"
+                owner = target / ".municode-volume.json"
                 owner.write_text("unchanged target owner")
                 current = copy.deepcopy(config)
                 current["workspace"] = str(target)
@@ -1705,7 +1705,7 @@ class LocalCheckoutTests(unittest.TestCase):
         receipt["receiptId"] = rt.digest(receipt)
         target = self.root / "workspace-b"
         target.mkdir()
-        (target / ".workspaces-volume.json").write_text("target ownership")
+        (target / ".municode-volume.json").write_text("target ownership")
         volume = dict(providerVolumeId="vol-2", filesystemUuid="fs-2",
                       owner=dict(workspaceId="ws-1", providerVolumeId="vol-2"))
         changes = dict(workspace=str(target), volume=volume, vmId="vm-b", generation=4)
@@ -1871,19 +1871,19 @@ class LocalCheckoutTests(unittest.TestCase):
 
     def test_periodic_units_run_outside_the_work_slice_and_stop_with_t3(self):
         units = Path(__file__).parents[1] / "systemd"
-        t3 = (units / "workspaces-t3.service").read_text()
-        self.assertRegex(t3, r"(?m)^Wants=.*\bworkspaces-repos-checkpoint\.timer\b")
-        service = (units / "workspaces-repos-checkpoint.service").read_text()
-        timer = (units / "workspaces-repos-checkpoint.timer").read_text()
+        t3 = (units / "municode-t3.service").read_text()
+        self.assertRegex(t3, r"(?m)^Wants=.*\bmunicode-repos-checkpoint\.timer\b")
+        service = (units / "municode-repos-checkpoint.service").read_text()
+        timer = (units / "municode-repos-checkpoint.timer").read_text()
         for text in (service, timer):
-            self.assertIn("PartOf=workspaces-t3.service", text.splitlines())
+            self.assertIn("PartOf=municode-t3.service", text.splitlines())
         self.assertNotIn("Slice=", service)
-        self.assertIn("ExecStart=/usr/bin/python3 -B /opt/workspaces-workspace/runtime.py checkpoint-periodic",
+        self.assertIn("ExecStart=/usr/bin/python3 -B /opt/municode-workspace/runtime.py checkpoint-periodic",
                       service.splitlines())
         self.assertIn("SuccessExitStatus=%d" % rc.EX_DEFERRED, service.splitlines())
         self.assertIn(f"ConditionPathExists=/workspace/{rt.LAYOUT_MARKER}", service.splitlines())
         self.assertIn("OnUnitInactiveSec=60", timer.splitlines())
-        self.assertEqual(rt.CHECKPOINT_UNIT, "workspaces-repos-checkpoint.service")
+        self.assertEqual(rt.CHECKPOINT_UNIT, "municode-repos-checkpoint.service")
 
     def test_readonly_and_writable_cover_the_checkout_mount(self):
         adapter = rt.Linux(self.config)
@@ -1911,11 +1911,11 @@ class LocalCheckoutTests(unittest.TestCase):
         attach.assert_called_once_with(restore=False)
 
     def test_checkout_mount_is_writable_and_visible_to_t3_tasks_and_folder_jobs(self):
-        unit = (Path(__file__).parents[1] / "systemd/workspaces-t3.service").read_text().splitlines()
+        unit = (Path(__file__).parents[1] / "systemd/municode-t3.service").read_text().splitlines()
         values = lambda key: " ".join(line.split("=", 1)[1] for line in unit if line.startswith(key + "="))
         # T3 cannot start before the mount unit has verified the checkout mount.
         for key in ("Requires", "After"):
-            self.assertIn("workspaces-workspace-mount.service", values(key).split())
+            self.assertIn("municode-workspace-mount.service", values(key).split())
         # ReadWritePaths= applies recursively to the mounts below it at unit start.
         self.assertIn("/workspace", values("ReadWritePaths").split())
         adapter = rt.Linux(dict(self.config, workspace="/workspace"))

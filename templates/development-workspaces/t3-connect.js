@@ -230,7 +230,7 @@ async function request(action) {
     const reading = action === "status";
     const response = await fetch(`/${action}`, {
       method: reading ? "GET" : "POST",
-      headers: reading ? {} : { "X-Workspaces-Connect": "1" },
+      headers: reading ? {} : { "X-Municode-Connect": "1" },
       cache: "no-store",
       credentials: "same-origin",
       redirect: "error",

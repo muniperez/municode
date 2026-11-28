@@ -75,7 +75,7 @@
         <header>
           <h1 id="main-heading" tabindex="-1">System architecture</h1>
           <p class="hero-lead">
-            Municode separates control-plane state (<code>Workspaces.Api</code>), cloud reconciliation and SSH forwarding (<code>Workspaces.Worker</code>), and browser session proxying (<code>Workspaces.Gateway</code>).
+            Municode separates control-plane state (<code>Municode.Api</code>), cloud reconciliation and SSH forwarding (<code>Municode.Worker</code>), and browser session proxying (<code>Municode.Gateway</code>).
           </p>
         </header>
 
@@ -87,15 +87,15 @@
           </p>
           <ul class="plain-list">
             <li><strong>Reverse proxy &amp; console:</strong> Serves the static dashboard and terminates TLS for the console, API, and wildcard workspace domains, requesting wildcard certificates on demand only for authorized workspace hostnames.</li>
-            <li><strong>Workspaces Gateway:</strong> Redeems single-use launch codes for host-only cookies, rechecks active WebSocket sessions against the API, and forwards traffic onto the internal relay network.</li>
-            <li><strong>Workspaces API:</strong> Manages organizations, RBAC, admitted images and plans, lifecycle operations, VM enrollment, and short-lived Git credentials.</li>
-            <li><strong>Workspaces Worker:</strong> Claims lifecycle jobs, provisions cloud VMs and volumes, pins each VM generation's SSH host key, and binds local SSH port forwards for the gateway.</li>
+            <li><strong>Municode Gateway:</strong> Redeems single-use launch codes for host-only cookies, rechecks active WebSocket sessions against the API, and forwards traffic onto the internal relay network.</li>
+            <li><strong>Municode API:</strong> Manages organizations, RBAC, admitted images and plans, lifecycle operations, VM enrollment, and short-lived Git credentials.</li>
+            <li><strong>Municode Worker:</strong> Claims lifecycle jobs, provisions cloud VMs and volumes, pins each VM generation's SSH host key, and binds local SSH port forwards for the gateway.</li>
           </ul>
 
           <figure class="diagram-figure">
             <div class="diagram-canvas">
               <svg viewBox="0 0 1040 540" role="img" aria-labelledby="diag-topo-title">
-                <title id="diag-topo-title">Control-plane architecture diagram showing HTTPS clients entering Reverse Proxy, connecting over a dedicated proxy network to Workspaces Gateway, which relays streams over an internal relay network to Workspaces Worker, alongside Workspaces API, Database, Identity, and Secret Store, with Worker managing Cloud VMs and Volumes.</title>
+                <title id="diag-topo-title">Control-plane architecture diagram showing HTTPS clients entering Reverse Proxy, connecting over a dedicated proxy network to Municode Gateway, which relays streams over an internal relay network to Municode Worker, alongside Municode API, Database, Identity, and Secret Store, with Worker managing Cloud VMs and Volumes.</title>
                 <defs>
                   <marker id="arr-t" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
                     <path d="M1 1.5L8.5 5L1 8.5Z" class="svg-arrow"/>
@@ -133,7 +133,7 @@
 
                 <!-- Gateway -->
                 <rect x="694" y="52" width="312" height="96" rx="6" class="svg-node-emphasis"/>
-                <text x="708" y="76" class="svg-title">Workspaces Gateway</text>
+                <text x="708" y="76" class="svg-title">Municode Gateway</text>
                 <text x="708" y="97" class="svg-subtitle">Launch-code &amp; cookie validation</text>
                 <text x="708" y="116" class="svg-subtitle">HTTP &amp; WebSocket relay</text>
 
@@ -151,12 +151,12 @@
 
                 <!-- API -->
                 <rect x="302" y="224" width="330" height="72" rx="6" class="svg-node"/>
-                <text x="316" y="247" class="svg-title">Workspaces API</text>
+                <text x="316" y="247" class="svg-title">Municode API</text>
                 <text x="316" y="267" class="svg-subtitle">Orgs, RBAC, images, plans &amp; lifecycle</text>
 
                 <!-- Worker -->
                 <rect x="662" y="224" width="328" height="72" rx="6" class="svg-node-emphasis"/>
-                <text x="676" y="247" class="svg-title">Workspaces Worker</text>
+                <text x="676" y="247" class="svg-title">Municode Worker</text>
                 <text x="676" y="267" class="svg-subtitle">Reconciles VMs, volumes &amp; SSH tunnels</text>
 
                 <!-- Backing Stores -->
@@ -203,7 +203,7 @@
           <figure class="diagram-figure">
             <div class="diagram-canvas">
               <svg viewBox="0 0 1040 486" role="img" aria-labelledby="diag-seq-title">
-                <title id="diag-seq-title">Sequence diagram across Browser/CLI, Proxy+Gateway, Workspaces API, Worker, and Cloud VM showing VM bootstrap and one-time enrollment first, followed by launch request, single-use URL redemption, cookie issuance, and private tunnel streaming.</title>
+                <title id="diag-seq-title">Sequence diagram across Browser/CLI, Proxy+Gateway, Municode API, Worker, and Cloud VM showing VM bootstrap and one-time enrollment first, followed by launch request, single-use URL redemption, cookie issuance, and private tunnel streaming.</title>
                 <defs>
                   <marker id="arr-q" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
                     <path d="M1 1.5L8.5 5L1 8.5Z" class="svg-arrow"/>
@@ -221,7 +221,7 @@
                 <text x="310" y="42" text-anchor="middle" class="svg-title">Proxy + Gateway</text>
 
                 <rect x="436" y="16" width="168" height="42" rx="6" class="svg-node"/>
-                <text x="520" y="42" text-anchor="middle" class="svg-title">Workspaces API</text>
+                <text x="520" y="42" text-anchor="middle" class="svg-title">Municode API</text>
 
                 <rect x="646" y="16" width="168" height="42" rx="6" class="svg-node-emphasis"/>
                 <text x="730" y="42" text-anchor="middle" class="svg-title">Worker</text>
@@ -369,10 +369,10 @@
         <section id="source-map">
           <h2>4. Repository layout</h2>
           <ul class="plain-list">
-            <li><a href="https://github.com/muniperez/municode/tree/main/src/Workspaces.Api"><code>src/Workspaces.Api</code></a> &mdash; Authentication, organization RBAC, image/plan admission, and workspace lifecycle API.</li>
-            <li><a href="https://github.com/muniperez/municode/tree/main/src/Workspaces.Worker"><code>src/Workspaces.Worker</code></a> &mdash; Cloud VM/volume reconciliation, guest bootstrap, and SSH port forwarding.</li>
-            <li><a href="https://github.com/muniperez/municode/tree/main/src/Workspaces.Gateway"><code>src/Workspaces.Gateway</code></a> &mdash; Launch-code redemption, origin isolation, and HTTP/WebSocket session relay.</li>
-            <li><a href="https://github.com/muniperez/municode/tree/main/src/Workspaces.Cli"><code>src/Workspaces.Cli</code></a> &mdash; Standalone <code>municode</code> / <code>workspaces</code> CLI and <code>seed</code> bootstrap commands.</li>
+            <li><a href="https://github.com/muniperez/municode/tree/main/src/Municode.Api"><code>src/Municode.Api</code></a> &mdash; Authentication, organization RBAC, image/plan admission, and workspace lifecycle API.</li>
+            <li><a href="https://github.com/muniperez/municode/tree/main/src/Municode.Worker"><code>src/Municode.Worker</code></a> &mdash; Cloud VM/volume reconciliation, guest bootstrap, and SSH port forwarding.</li>
+            <li><a href="https://github.com/muniperez/municode/tree/main/src/Municode.Gateway"><code>src/Municode.Gateway</code></a> &mdash; Launch-code redemption, origin isolation, and HTTP/WebSocket session relay.</li>
+            <li><a href="https://github.com/muniperez/municode/tree/main/src/Municode.Cli"><code>src/Municode.Cli</code></a> &mdash; Standalone <code>municode</code> / <code>workspaces</code> CLI and <code>seed</code> bootstrap commands.</li>
             <li><a href="https://github.com/muniperez/municode/tree/main/modules/dashboard"><code>modules/dashboard</code></a> &mdash; Web console frontend.</li>
             <li><a href="https://github.com/muniperez/municode/tree/main/templates/development-workspaces"><code>templates/development-workspaces</code></a> &mdash; Reference guest runtime scripts and image builder template.</li>
           </ul>
