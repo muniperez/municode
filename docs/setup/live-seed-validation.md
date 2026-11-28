@@ -8,7 +8,8 @@ credentials, existing customer data or a shared installation.
 ## Safety gates
 
 - [ ] Select a new, funded test provider account; record its billing and cleanup
-      owner. Register no provider credential unless you are validating the seed opt-in.
+      owner. Seed reuses this credential as `Default provider` unless run with
+      `--workspace-provider no`.
 - [ ] Use a fresh public DNS zone or isolated records under operator control.
 - [ ] Use an exact published `municode-vX.Y.Z`, released `municode` CLI,
       Cosign 2.6.5 and the provider's current API token in an owner-only file.
