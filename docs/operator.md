@@ -61,6 +61,11 @@ choice and the quote are journaled. Apply or resume then:
   stdin into an owner-only file on a Compose-managed volume
   (`api-bootstrap stage-provider`).
 
+If the first-owner token expires after seed completes, run
+`municode seed rotate-setup-token <operation>` with the same CLI configuration
+directory. It uses the pinned SSH host and replaces the protected local token
+file. An interactive terminal prints the new one-time setup link.
+
 After first-owner setup completes, the API validates the credential with the
 provider, stores it through the normal OpenBao provider-account path as
 `Default provider` (`provider_seed`), creates `Default workspace plan`

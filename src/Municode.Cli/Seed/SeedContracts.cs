@@ -230,6 +230,7 @@ internal interface ISeedHost
         string directory,
         string credential,
         CancellationToken cancellationToken);
+    Task RotateSetupTokenAsync(SeedState state, string directory, CancellationToken cancellationToken);
     Task VerifyHttpsAndHealthAsync(SeedState state, CancellationToken cancellationToken);
 }
 

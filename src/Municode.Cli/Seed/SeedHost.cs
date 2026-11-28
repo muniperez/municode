@@ -223,6 +223,26 @@ install -d -m 0700 __REMOTE__
         await DownloadAsync(state, directory, remote + "/setup-token", setupToken, cancellationToken);
     }
 
+    public async Task RotateSetupTokenAsync(SeedState state, string directory, CancellationToken cancellationToken)
+    {
+        const string fileName = "setup-token-cli-rotation";
+        const string remoteFile = "/etc/municode/secrets/bootstrap/" + fileName;
+        var localFile = Path.Combine(directory, "setup-token");
+        if (File.Exists(localFile)) SeedFiles.Check(localFile);
+        var input = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            installationId = state.InstallationId,
+            operationId = "first-owner"
+        });
+        await RequireSshAsync(state, directory,
+            "if [ ! -f " + Quote(remoteFile) + " ]; then "
+            + "municode-compose --profile maintenance run --rm --no-TTY api-bootstrap "
+            + "rotate-token --stdin --output-file /run/municode-bootstrap/" + fileName + "; fi",
+            cancellationToken, input);
+        await DownloadAsync(state, directory, remoteFile, localFile, cancellationToken, replace: true);
+        await RequireSshAsync(state, directory, "rm -f " + Quote(remoteFile), cancellationToken);
+    }
+
     public async Task<bool> StageWorkspaceProviderAsync(
         SeedState state,
         string directory,
@@ -340,9 +360,10 @@ install -d -m 0700 __REMOTE__
         SeedState state,
         string directory,
         string command,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        byte[]? input = null)
     {
-        var result = await SshAsync(state, directory, command, cancellationToken);
+        var result = await SshAsync(state, directory, command, cancellationToken, input);
         SeedGuard.Require(result.ExitCode == 0,
             "A pinned SSH host operation failed. The journal and billable VPS are retained; diagnostics may contain secrets and were suppressed.");
     }
@@ -367,7 +388,8 @@ install -d -m 0700 __REMOTE__
         string directory,
         string remote,
         string local,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool replace = false)
     {
         var expectedResult = await SshAsync(state, directory,
             "sha256sum " + Quote(remote) + " | cut -d ' ' -f 1", cancellationToken);
@@ -396,6 +418,11 @@ install -d -m 0700 __REMOTE__
         if (File.Exists(local))
         {
             SeedFiles.Check(local);
+            if (replace)
+            {
+                File.Move(local + ".pending", local, overwrite: true);
+                return;
+            }
             var existingBytes = File.ReadAllBytes(local);
             ValidateSetupTokenBytes(existingBytes);
             SeedGuard.Require(CryptographicOperations.FixedTimeEquals(existingBytes, pendingBytes),

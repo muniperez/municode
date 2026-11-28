@@ -522,6 +522,8 @@ public sealed class CliSeedTests
             StagedCredentials.Add(credential);
             return Task.FromResult(StagingSupported);
         }
+        public Task RotateSetupTokenAsync(SeedState state, string directory, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
         public Task VerifyHttpsAndHealthAsync(SeedState state, CancellationToken cancellationToken)
         {
             HealthCalls++;

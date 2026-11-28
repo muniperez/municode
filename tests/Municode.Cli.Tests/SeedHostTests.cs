@@ -179,6 +179,27 @@ public sealed class SeedHostTests
     }
 
     [Fact]
+    public async Task ExplicitTokenRotationReplacesOnlyTheVerifiedLocalToken()
+    {
+        using var fixture = new HostFixture();
+        var state = State();
+        state.HostFingerprint = "SHA256:" + new string('A', 43);
+        state.InstallationId = "municode-" + state.Id;
+        var tokenPath = Path.Combine(fixture.Root, "setup-token");
+        SeedFiles.WriteNew(tokenPath, Encoding.ASCII.GetBytes(new string('a', 64) + "\n"));
+        var replacement = new string('b', 64);
+        var process = new DownloadProcess(Encoding.ASCII.GetBytes(replacement));
+
+        await new SeedHost(process).RotateSetupTokenAsync(state, fixture.Root, CancellationToken.None);
+
+        Assert.Equal(replacement + "\n", File.ReadAllText(tokenPath));
+        Assert.False(File.Exists(tokenPath + ".pending"));
+        Assert.Contains("api-bootstrap rotate-token", process.Commands[0]);
+        Assert.Contains("rm -f", process.Commands[^1]);
+        Assert.All(process.Commands, command => Assert.DoesNotContain(replacement, command));
+    }
+
+    [Fact]
     public async Task DownloadedTokenMustHashToExactRemoteBytes()
     {
         using var fixture = new HostFixture();
