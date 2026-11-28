@@ -40,12 +40,17 @@ public sealed class DevelopmentWorkspaceWorkerOptions
         TimeSpan.FromSeconds(Math.Max(Math.Max(75, GatewayDrainSeconds),
             Math.Clamp(gateway.HttpTimeoutSeconds, 1, 300) + 10));
 
+    internal bool HasManagementAddresses()
+    {
+        try { WorkspaceOwnership.RequireManagementAddresses(ManagementAddresses); return true; }
+        catch (ArgumentException) { return false; }
+    }
+
     internal void Validate(WorkspaceSshOptions ssh, DevelopmentWorkspaceGatewayOptions gateway)
     {
         if (!Uri.TryCreate(ApiBaseUrl, UriKind.Absolute, out var origin) || origin.Scheme != "https" ||
             origin.UserInfo.Length != 0 || origin.Query.Length != 0 || origin.Fragment.Length != 0)
             throw new InvalidOperationException("Workspace enrollment requires a Workspaces API HTTPS base URL.");
-        WorkspaceOwnership.RequireManagementAddresses(ManagementAddresses);
         if (!Path.IsPathFullyQualified(RelayLockFile) || !DevelopmentWorkspaceGatewayOptions.IsPrivateAddress(RelayBindAddress) ||
             RelayMinimumPort < Math.Max(1024, gateway.MinimumRelayPort) ||
             RelayMaximumPort > Math.Min(65535, gateway.MaximumRelayPort) || RelayMinimumPort > RelayMaximumPort)

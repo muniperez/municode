@@ -63,7 +63,11 @@ public sealed partial class CliApplication
                 selection.ReleaseTag, Path.Combine(journal.DirectoryPath, "release"), cancellationToken);
             using var provider = _seed.Providers(selection.Provider, credential, null);
             var quote = await provider.QuoteAsync(selection, operationId, cancellationToken);
-            var state = new SeedState { Id = operationId, Plan = new(selection, quote, release.Identity, instanceName) };
+            var state = new SeedState
+            {
+                Id = operationId, Plan = new(selection, quote, release.Identity, instanceName),
+                RegisterWorkspaceProvider = AskToRegisterWorkspaceProvider(selection.Provider)
+            };
             journal.Save(state);
             _console.WriteLine("Seed operation: " + operationId);
             foreach (var cost in quote.Costs)
@@ -71,7 +75,10 @@ public sealed partial class CliApplication
                 _console.WriteLine("Cost: " + SeedGuard.FormatCost(cost));
                 _console.WriteLine("  " + cost.Exclusions + " Source: " + cost.Source);
             }
-            _console.WriteLine("One control-plane VPS only; no coding VM or provider credential registration.");
+            _console.WriteLine("One control-plane VPS only; no coding VM.");
+            _console.WriteLine(state.RegisterWorkspaceProvider
+                ? $"Workspace provider: this {selection.Provider} account will be registered in the first organization after first-owner setup."
+                : "Workspace provider: not registered. Add one in organization settings after setup.");
             _console.WriteLine("Exact release: " + release.Identity.Tag
                 + " source " + release.Identity.SourceRevision
                 + " manifest " + release.Identity.ManifestSha256
@@ -100,7 +107,7 @@ public sealed partial class CliApplication
                 "The exact release identity changed. Refusing to resume or install another bundle.");
             using var provider = _seed.Providers(state.Plan.Selection.Provider, credential, null);
             var lifecycle = new SeedLifecycle(provider, _seed.Host(), journal, release.Directory,
-                _console.WriteLine);
+                _console.WriteLine, state.RegisterWorkspaceProvider ? credential : null);
             await lifecycle.ResumeAsync(state,
                 options.GetValueOrDefault("--approve"),
                 options.GetValueOrDefault("--confirm-console-fingerprint"),
@@ -108,6 +115,15 @@ public sealed partial class CliApplication
             if (state.IsComplete) await RegisterCompletedSeedAsync(state, journal, cancellationToken);
             return state.IsComplete ? CliExitCodes.Success : CliExitCodes.ValidationError;
         }
+    }
+
+    private bool AskToRegisterWorkspaceProvider(string provider)
+    {
+        // Unattended seed never prompts and never registers a workspace provider.
+        if (!_console.IsInteractive) return false;
+        _console.WriteError($"Also add this {provider} account as a workspace provider in the first organization "
+            + "after first-owner setup? Seed creates no coding VM either way. [y/N]");
+        return _console.ReadLine()?.Trim().ToLowerInvariant() is "y" or "yes";
     }
 
     private async Task RegisterCompletedSeedAsync(SeedState state, SeedJournal journal, CancellationToken ct)
@@ -168,6 +184,8 @@ public sealed partial class CliApplication
         _console.WriteLine("  municode seed resume <operation> --credential-file <path> [--confirm-console-fingerprint <SHA256:...>]");
         _console.WriteLine("  municode seed status <operation>");
         _console.WriteLine("Plan is read-only except for protected local state and exact release verification.");
-        _console.WriteLine("Seed provisions one control-plane VPS only. It never registers provider credentials in the control plane or creates coding VMs.");
+        _console.WriteLine("Seed provisions one control-plane VPS only and never creates coding VMs.");
+        _console.WriteLine("Interactive plan asks whether to add the same provider account as a workspace provider (default no).");
+        _console.WriteLine("On yes, the control plane registers it in the first organization after first-owner setup. Unattended plan never prompts or registers it.");
     }
 }

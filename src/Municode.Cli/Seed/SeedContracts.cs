@@ -132,6 +132,11 @@ internal sealed class SeedState
     public string? LastFailurePhase { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool InstanceRegistered { get; set; }
+    // Only the owner's choice is journaled; the credential is re-read from --credential-file when staging.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool RegisterWorkspaceProvider { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool WorkspaceProviderStaged { get; set; }
 
     [JsonIgnore]
     public bool IsComplete => Phase == "complete";
@@ -160,6 +165,11 @@ internal interface ISeedHost
         SeedState state,
         string directory,
         string releaseDirectory,
+        CancellationToken cancellationToken);
+    Task<bool> StageWorkspaceProviderAsync(
+        SeedState state,
+        string directory,
+        string credential,
         CancellationToken cancellationToken);
     Task VerifyHttpsAndHealthAsync(SeedState state, CancellationToken cancellationToken);
 }

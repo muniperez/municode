@@ -139,6 +139,8 @@ install -d -m 0700 __REMOTE__
         var selection = state.Plan.Selection;
         var setupToken = Path.Combine(directory, "setup-token");
         var archiveRoot = remoteRelease + "/extracted";
+        // Bundles older than #208 lack --management-address; only pass it when seed-start advertises it.
+        var managementAddress = ManagementAddress(state);
         var config = string.Join(" ",
             ["--release-tag", Quote(selection.ReleaseTag),
              "--installation-id", Quote(state.InstallationId!),
@@ -169,12 +171,49 @@ install -d -m 0700 __REMOTE__
             + " && [ \"$(cat " + Quote(archiveRoot + "/.verified") + ")\" = "
             + Quote(state.Plan.Release.BundleSha256) + " ]"
             + " && python3 -B \"$bundle_root/verify_bundle.py\""
-            + " && \"$bundle_root/seed-start.sh\" " + config
+            + " && management_args=''"
+            + " && if grep -qF -e '--management-address' \"$bundle_root/seed-start.sh\"; then management_args="
+            + Quote("--management-address " + managementAddress) + "; fi"
+            + " && \"$bundle_root/seed-start.sh\" " + config + " $management_args"
             + " --release-root \"$bundle_root\""
             + " --bundle-sha256 " + Quote(state.Plan.Release.BundleSha256)
             + " --setup-token-output " + Quote(remote + "/setup-token");
         await RequireSshAsync(state, directory, command, cancellationToken);
         await DownloadAsync(state, directory, remote + "/setup-token", setupToken, cancellationToken);
+    }
+
+    public async Task<bool> StageWorkspaceProviderAsync(
+        SeedState state,
+        string directory,
+        string credential,
+        CancellationToken cancellationToken)
+    {
+        // The credential travels only on pinned SSH stdin into the maintenance container; never argv or logs.
+        var input = JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, string>
+        {
+            ["providerType"] = state.Plan.Selection.Provider,
+            ["credential"] = credential
+        });
+        try
+        {
+            var result = await SshAsync(state, directory,
+                "/usr/local/sbin/municode-compose --profile maintenance run --rm --no-TTY api-bootstrap "
+                + "stage-provider --stdin >/dev/null 2>&1", cancellationToken, input);
+            return result.ExitCode == 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(input);
+        }
+    }
+
+    internal static string ManagementAddress(SeedState state)
+    {
+        SeedGuard.Require(IPAddress.TryParse(state.Server?.Address, out var address)
+            && address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+            && !IPAddress.IsLoopback(address) && !address.Equals(IPAddress.Any),
+            "The control-plane VPS needs one attributed public IPv4 address.");
+        return address + "/32";
     }
 
     public async Task VerifyHttpsAndHealthAsync(SeedState state, CancellationToken cancellationToken)
@@ -234,7 +273,8 @@ install -d -m 0700 __REMOTE__
         SeedState state,
         string directory,
         string command,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        byte[]? input = null)
     {
         SeedGuard.Require(state.Server?.Address is not null && state.HostFingerprint is not null,
             "SSH commands require an attributed public IPv4 and pinned host fingerprint.");
@@ -243,7 +283,7 @@ install -d -m 0700 __REMOTE__
             .Append("env -i HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/sh -c "
                 + Quote(command))
             .ToArray();
-        return await _process.RunAsync("ssh", args, null, cancellationToken);
+        return await _process.RunAsync("ssh", args, input, cancellationToken);
     }
 
     private async Task RequireSshAsync(

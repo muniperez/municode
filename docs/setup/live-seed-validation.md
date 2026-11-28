@@ -8,7 +8,7 @@ credentials, existing customer data or a shared installation.
 ## Safety gates
 
 - [ ] Select a new, funded test provider account; record its billing and cleanup
-      owner. No provider credential may be registered in Municode.
+      owner. Register no provider credential unless you are validating the seed opt-in.
 - [ ] Use a fresh public DNS zone or isolated records under operator control.
 - [ ] Use an exact published `municode-vX.Y.Z`, released `municode` CLI,
       Cosign 2.6.5 and the provider's current API token in an owner-only file.
@@ -85,10 +85,18 @@ municode seed resume <operation> \
       first-owner setup. Sign out, sign back in and list workspaces without
       creating one. The one-time token must not be reusable.
 - [ ] Confirm the provider credential never appears in the release, journal,
-      control-plane environment, OpenBao paths or provider account records.
-- [ ] Confirm exactly zero workspace/coding VMs exist. After owner sign-in,
-      explicitly registering a provider and qualifying an image are separate
-      actions; creation of a workspace is outside seed validation.
+      control-plane environment, logs or URLs. If you answered no or ran
+      unattended, also confirm no OpenBao path or provider account holds it.
+- [ ] On a second disposable seed, answer yes to the workspace-provider prompt.
+      After first-owner setup, confirm exactly one seed provider account in the
+      first organization, a `provider.created` audit from `system:seed`, the
+      staged file removed from the `seed-provider` volume, and no duplicate
+      after an API restart.
+- [ ] Confirm the host policy's `DevelopmentWorkspaceWorker:ManagementAddresses`
+      holds the VPS's public IPv4 `/32`.
+- [ ] Confirm exactly zero workspace/coding VMs exist. Qualifying an image is a
+      separate action, and so is registering a provider when the seed opt-in was
+      declined. Workspace creation is outside seed validation.
 
 ## Recovery and cleanup
 

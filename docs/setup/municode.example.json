@@ -26,7 +26,6 @@
     "EnvironmentPrefix": "example"
   },
   "DevelopmentWorkspaces": {
-    "Enabled": false,
     "Profiles": {
       "standard": {
         "MemoryGiB": 8,

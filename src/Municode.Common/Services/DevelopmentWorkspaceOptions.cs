@@ -4,7 +4,6 @@ public sealed class DevelopmentWorkspaceOptions
 {
     public const string SectionName = "DevelopmentWorkspaces";
 
-    public bool Enabled { get; set; }
     public int MaxActiveVms { get; set; } = 9;
     public int MaxVmsPerWorkspace { get; set; } = 3;
     public int MaxVmsPerOrganization { get; set; } = 3;

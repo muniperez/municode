@@ -429,7 +429,7 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task DiscoveryHidesForeignWorkspaceAndDistinguishesEmptyAndDisabledConfiguration()
+    public async Task DiscoveryHidesForeignWorkspaceAndDistinguishesEmptyAndInvalidConfiguration()
     {
         using var owner = Client(token);
         var workspace = await Create(owner);
@@ -444,12 +444,6 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
         Assert.True(empty.Available);
         Assert.Null(empty.UnavailableReason);
         Assert.Empty(empty.Options);
-        factory.Policy.Enabled = false;
-        var disabled = (await owner.GetFromJsonAsync<WorkspaceSelections>($"{Root}/selections?organizationId=org"))!;
-        Assert.False(disabled.Available);
-        Assert.Contains("disabled", disabled.UnavailableReason);
-        Assert.Empty(disabled.Options);
-        factory.Policy.Enabled = true;
         factory.Policy.PricingUpdatedAt = DateTimeOffset.UtcNow.AddDays(-100);
         var invalid = (await owner.GetFromJsonAsync<WorkspaceSelections>($"{Root}/selections?organizationId=org"))!;
         Assert.False(invalid.Available);
@@ -668,7 +662,7 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task DisabledMutationsAndStaleGenerationFailClosed()
+    public async Task StaleGenerationFailsClosed()
     {
         using var client = Client(token);
         var workspace = await Create(client);
@@ -677,10 +671,6 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
             new DevelopmentWorkspaceGenerationRequest(999));
         Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
         Assert.Equal("workspace_generation_stale", (await stale.Content.ReadFromJsonAsync<ErrorResponse>())!.Error.Code);
-        factory.Policy.Enabled = false;
-        var disabled = await client.PostAsync($"{Root}/{workspace.Id}/start?organizationId=org", null);
-        Assert.Equal(HttpStatusCode.Conflict, disabled.StatusCode);
-        Assert.Equal("workspaces_disabled", (await disabled.Content.ReadFromJsonAsync<ErrorResponse>())!.Error.Code);
         await AssertNoCompute();
     }
 
@@ -779,9 +769,10 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
     {
         public ProviderSecrets Secrets { get; } = new();
         public BudgetEmailOptions Email { get; } = new();
+        public DevelopmentWorkspaceManagementOptions Management { get; } = new() { ManagementAddresses = ["198.51.100.1/32"] };
         public DevelopmentWorkspaceOptions Policy { get; } = new()
         {
-            Enabled = true, VolumeMonthlyRatePerGb = .1m, PricingUpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+            VolumeMonthlyRatePerGb = .1m, PricingUpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-1),
             Profiles = new()
             {
                 ["standard"] = new() { CpuCount = 4, MemoryGiB = 8, ComputeHourlyRate = .1m,
@@ -805,6 +796,7 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
             builder.ConfigureTestServices(services =>
             {
                 services.AddSingleton<IOptions<DevelopmentWorkspaceOptions>>(Options.Create(Policy));
+                services.AddSingleton<IOptions<DevelopmentWorkspaceManagementOptions>>(Options.Create(Management));
                 services.AddSingleton<ISecretStore>(Secrets);
                 services.AddSingleton<IOptions<BudgetEmailOptions>>(Options.Create(Email));
                 services.AddHttpClient(ProviderAccountClientFactory.HttpClientName)
@@ -819,6 +811,8 @@ public sealed partial class DevelopmentWorkspaceApiTests : IAsyncLifetime
         {
             Assert.Equal(HttpMethod.Get, request.Method);
             Assert.Equal("/v1/servers", request.RequestUri!.AbsolutePath);
+            if (request.Headers.Authorization?.Parameter == "rejected-provider-token")
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
             Assert.Equal("synthetic-provider-token", request.Headers.Authorization?.Parameter);
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {

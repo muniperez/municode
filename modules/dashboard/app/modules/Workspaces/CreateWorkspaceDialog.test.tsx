@@ -168,6 +168,12 @@ describe("CreateWorkspaceDialog", () => {
     await open();
     expect(screen.getByText(/No approved setup is available/)).toBeInTheDocument();
     expect(submitButton()).toBeDisabled();
+    cleanup();
+    vi.mocked(getWorkspaceSelections).mockResolvedValueOnce({ ...catalog([]), missingConfiguration: "Add a provider account." });
+    render(<CreateWorkspaceDialog {...props} />);
+    await open();
+    expect(screen.getByText("Add a provider account.")).toBeInTheDocument();
+    expect(screen.queryByText(/No approved setup is available/)).not.toBeInTheDocument();
   });
 
   it("keeps entries and the idempotency key after an ambiguous failure and prevents duplicate submission", async () => {

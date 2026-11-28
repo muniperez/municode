@@ -14,7 +14,7 @@ public sealed record DevelopmentWorkspaceAgentResponse(string Id, string Name, s
 
 public sealed record WorkspaceSelections(
     bool Available, string? UnavailableReason, IReadOnlyList<WorkspaceSelectionOption> Options,
-    string? Currency = null, decimal? VolumeMonthlyRatePerGb = null);
+    string? Currency = null, decimal? VolumeMonthlyRatePerGb = null, string? MissingConfiguration = null);
 
 public sealed record CreateDevelopmentWorkspaceRequest(
     string OrganizationId,

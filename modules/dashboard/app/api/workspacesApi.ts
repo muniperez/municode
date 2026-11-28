@@ -117,6 +117,7 @@ export type WorkspaceSelections = {
   available: boolean;
   unavailableReason?: string | null;
   options: WorkspaceSelectionOption[];
+  missingConfiguration?: string | null;
   currency?: string | null;
   volumeMonthlyRatePerGb?: number | null;
 };

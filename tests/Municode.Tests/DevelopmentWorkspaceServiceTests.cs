@@ -18,7 +18,7 @@ public sealed class DevelopmentWorkspaceServiceTests : IAsyncLifetime
     private readonly TestClock clock = new();
     private readonly DevelopmentWorkspaceOptions policy = new()
     {
-        Enabled = true, MaxActiveVms = 5,
+        MaxActiveVms = 5,
         MaxVmsPerWorkspace = 3, MaxVmsPerOrganization = 4,
         VolumeMonthlyRatePerGb = .1m, PricingUpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-1),
         Repositories = [new() { OrganizationId = "org", Repository = "https://git.example.test/team/repo.git",
@@ -37,9 +37,10 @@ public sealed class DevelopmentWorkspaceServiceTests : IAsyncLifetime
                 QualifiedAt = DateTimeOffset.UtcNow.AddMinutes(-1), T3ConnectForNewWorkspaces = true }
         }
     };
+    private readonly DevelopmentWorkspaceManagementOptions management = new() { ManagementAddresses = ["198.51.100.1/32"] };
     private WorkspaceDbContext db = default!;
     private DevelopmentWorkspaceService Service(WorkspaceDbContext? context = null) =>
-        new(context ?? db, new IdGenerator(), clock, Options.Create(policy));
+        new(context ?? db, new IdGenerator(), clock, Options.Create(policy), Options.Create(management));
 
     public async Task InitializeAsync()
     {
@@ -111,22 +112,17 @@ public sealed class DevelopmentWorkspaceServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task DiscoveryDistinguishesEmptyDisabledAndInvalidConfiguration()
+    public async Task DiscoveryDistinguishesEmptyAndInvalidConfiguration()
     {
         var foreign = await Service().GetSelectionsAsync("other", null, default);
         Assert.True(foreign.Available);
         Assert.Null(foreign.UnavailableReason);
         Assert.Empty(foreign.Options);
-        policy.Enabled = false;
-        var disabled = await Service().GetSelectionsAsync("org", null, default);
-        Assert.False(disabled.Available);
-        Assert.Contains("disabled", disabled.UnavailableReason);
-        Assert.Empty(disabled.Options);
-        policy.Enabled = true;
         policy.PricingUpdatedAt = clock.GetUtcNow().AddDays(-100);
         var invalid = await Service().GetSelectionsAsync("org", null, default);
         Assert.False(invalid.Available);
         Assert.Contains("pricing", invalid.UnavailableReason);
+        Assert.Contains("DevelopmentWorkspaces:PricingUpdatedAt", invalid.UnavailableReason);
         Assert.Empty(invalid.Options);
         Assert.Empty(await db.DevelopmentWorkspaces.ToListAsync());
     }
@@ -1348,14 +1344,66 @@ public sealed class DevelopmentWorkspaceServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task DefaultDisabledAndIncompletePoliciesCannotAdmitResources()
+    public async Task IncompletePoliciesCannotAdmitResources()
     {
-        Assert.False(new DevelopmentWorkspaceOptions().Enabled);
-        policy.Enabled = false;
-        await AssertCode("workspaces_disabled", () => Workspace());
+        policy.VolumeMonthlyRatePerGb = 0;
+        policy.PricingUpdatedAt = null;
+        var error = await Assert.ThrowsAsync<DevelopmentWorkspaceException>(() => Workspace());
+        Assert.Equal("workspace_policy_invalid", error.Code);
+        Assert.Contains("DevelopmentWorkspaces:VolumeMonthlyRatePerGb", error.Message);
+        Assert.Contains("DevelopmentWorkspaces:PricingUpdatedAt", error.Message);
         Assert.Empty(await db.DevelopmentWorkspaces.ToListAsync());
-        policy.Enabled = true; policy.VolumeMonthlyRatePerGb = 0;
-        await AssertCode("workspace_policy_invalid", () => Workspace());
+    }
+
+    [Fact]
+    public async Task LegacyGlobalDisabledSettingIsIgnoredAndValidConfigurationStartsWorkspaces()
+    {
+        new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DevelopmentWorkspaces:Enabled"] = "false"
+        }).Build().GetSection(DevelopmentWorkspaceOptions.SectionName).Bind(policy);
+
+        var selections = await Service().GetSelectionsAsync("org", null, default);
+        Assert.True(selections.Available);
+        Assert.NotEmpty(selections.Options);
+        var workspace = await Service().StartAsync((await Workspace()).Id, "org", default);
+        Assert.Equal("running", Primary(workspace).DesiredState);
+        Assert.True(Primary(workspace).ComputeReserved);
+    }
+
+    [Fact]
+    public async Task MissingManagementAddressesAreReportedBeforeAnyComputeIsReserved()
+    {
+        var workspace = await Workspace();
+        management.ManagementAddresses = [];
+        var selections = await Service().GetSelectionsAsync("org", null, default);
+        Assert.False(selections.Available);
+        Assert.Contains("DevelopmentWorkspaceWorker:ManagementAddresses", selections.UnavailableReason);
+        await AssertCode("workspace_management_addresses_missing", () => Service().StartAsync(workspace.Id, "org", default));
+        db.ChangeTracker.Clear();
+        Assert.False((await db.DevelopmentWorkspaceVms.SingleAsync()).ComputeReserved);
+        Assert.Empty(await db.DevelopmentWorkspaceOperations.ToListAsync());
+    }
+
+    [Fact]
+    public async Task EmptyDiscoveryNamesTheFirstMissingPrerequisite()
+    {
+        Assert.Contains("provider account", (await Service().GetSelectionsAsync("other", null, default)).MissingConfiguration);
+        db.ProviderAccounts.Add(new ProviderAccount { Id = "other-account", OrganizationId = "other", Name = "Other",
+            ProviderType = CloudProvider.Hetzner, CredentialPath = "synthetic", CredentialGeneration = "test" });
+        await db.SaveChangesAsync();
+        Assert.Contains("provider plan", (await Service().GetSelectionsAsync("other", null, default)).MissingConfiguration);
+        db.ProviderPlans.Add(new ProviderPlan { Id = "other-plan", OrganizationId = "other", ProviderAccountId = "other-account",
+            Name = "Other", NormalizedName = "other", Region = "nbg1", Sku = "cx-test" });
+        await db.SaveChangesAsync();
+        Assert.Contains("ProviderAccountId", (await Service().GetSelectionsAsync("other", null, default)).MissingConfiguration);
+        policy.Images["other-image"] = new() { Enabled = true, RuntimeQualified = true, ProviderAccountId = "other-account",
+            AllowedRegions = ["nbg1"], ProviderImageId = "image-456", ManifestSha256 = new('c', 64),
+            QualifiedAt = clock.GetUtcNow().AddMinutes(-1), T3ConnectForNewWorkspaces = true };
+        Assert.Contains("DevelopmentWorkspaces:Profiles", (await Service().GetSelectionsAsync("other", null, default)).MissingConfiguration);
+        policy.Images.Clear();
+        Assert.Contains("DevelopmentWorkspaces:Images", (await Service().GetSelectionsAsync("org", null, default)).MissingConfiguration);
+        Assert.Empty(await db.DevelopmentWorkspaces.ToListAsync());
     }
 
     private async Task Ready(string id, bool idle = false)

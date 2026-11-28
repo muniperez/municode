@@ -166,6 +166,9 @@ public sealed class SeedHostTests
         var digestArgument = SeedGuard.SafeShellQuote(state.Plan.Release.BundleSha256);
         Assert.Contains(SeedGuard.SafeShellQuote("--bundle-sha256 " + digestArgument)[1..^1], extraction);
         Assert.DoesNotContain("if [ -d ", extraction);
+        Assert.Contains(SeedGuard.SafeShellQuote("management_args="
+            + SeedGuard.SafeShellQuote("--management-address 203.0.113.10/32"))[1..^1], extraction);
+        Assert.Contains("grep -qF -e '\\''--management-address'\\''", extraction);
 
         using var malformed = new HostFixture();
         var badHost = new SeedHost(new DownloadProcess("partial"u8.ToArray()));
@@ -207,6 +210,37 @@ public sealed class SeedHostTests
         await Assert.ThrowsAsync<CliCommandException>(() =>
             host.InstallAsync(state, fixture.Root, release, CancellationToken.None));
         Assert.False(File.Exists(Path.Combine(fixture.Root, "setup-token")));
+    }
+
+    [Fact]
+    public async Task WorkspaceProviderStagingSendsTheCredentialOnlyOnPinnedStdin()
+    {
+        var process = new StdinProcess();
+        var state = State();
+        state.HostFingerprint = "SHA256:" + new string('A', 43);
+        Assert.True(await new SeedHost(process).StageWorkspaceProviderAsync(
+            state, "unused", "synthetic-provider-token", CancellationToken.None));
+        Assert.DoesNotContain("synthetic-provider-token", string.Join(" ", process.Arguments), StringComparison.Ordinal);
+        Assert.Contains("api-bootstrap stage-provider --stdin", process.Arguments[^1]);
+        Assert.Contains("StrictHostKeyChecking=yes", process.Arguments);
+        using var input = System.Text.Json.JsonDocument.Parse(process.Input);
+        Assert.Equal("hetzner", input.RootElement.GetProperty("providerType").GetString());
+        Assert.Equal("synthetic-provider-token", input.RootElement.GetProperty("credential").GetString());
+
+        process.ExitCode = 1;
+        Assert.False(await new SeedHost(process).StageWorkspaceProviderAsync(
+            state, "unused", "synthetic-provider-token", CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData("127.0.0.1")]
+    [InlineData("0.0.0.0")]
+    [InlineData("2001:db8::1")]
+    public void ManagementAddressRequiresOneUsableIpv4(string address)
+    {
+        var state = State();
+        state.Server = state.Server! with { Address = address };
+        Assert.Throws<CliCommandException>(() => SeedHost.ManagementAddress(state));
     }
 
     private static string ReleaseFiles(string root)
@@ -289,6 +323,25 @@ public sealed class SeedHostTests
             return SeedProcess.Default.RunAsync("/bin/sh",
                 ["-c", "export MUNICODE_SEED_INHERITED=inherited\n" + arguments[^1]],
                 input, cancellationToken);
+        }
+    }
+
+    private sealed class StdinProcess : ISeedProcess
+    {
+        public IReadOnlyList<string> Arguments { get; private set; } = [];
+        public byte[] Input { get; private set; } = [];
+        public int ExitCode { get; set; }
+
+        public Task<SeedProcessResult> RunAsync(
+            string fileName,
+            IReadOnlyList<string> arguments,
+            byte[]? input,
+            CancellationToken cancellationToken)
+        {
+            Assert.Equal("ssh", fileName);
+            Arguments = arguments;
+            Input = input!.ToArray();
+            return Task.FromResult(new SeedProcessResult(ExitCode, ""));
         }
     }
 

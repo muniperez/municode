@@ -7,7 +7,8 @@ internal sealed class SeedLifecycle(
     ISeedHost host,
     SeedJournal journal,
     string releaseDirectory,
-    Action<string> write)
+    Action<string> write,
+    string? workspaceProviderCredential = null)
 {
     public async Task ResumeAsync(
         SeedState state,
@@ -132,6 +133,16 @@ internal sealed class SeedLifecycle(
         state.InstallationId ??= "municode-" + state.Id;
         journal.Save(state);
         await host.InstallAsync(state, journal.DirectoryPath, releaseDirectory, cancellationToken);
+        if (state.RegisterWorkspaceProvider)
+        {
+            state.WorkspaceProviderStaged = workspaceProviderCredential is not null
+                && await host.StageWorkspaceProviderAsync(state, journal.DirectoryPath,
+                    workspaceProviderCredential, cancellationToken);
+            journal.Save(state);
+            if (!state.WorkspaceProviderStaged)
+                write("This release could not stage the workspace provider registration. Seed continues; "
+                    + "register the provider in organization settings after setup.");
+        }
         state.Phase = "verifying";
         journal.Save(state);
         await host.VerifyHttpsAndHealthAsync(state, cancellationToken);
@@ -142,8 +153,12 @@ internal sealed class SeedLifecycle(
         write($"HTTPS and API health verified for https://{setup}/ and https://{state.Plan.Selection.ApiHostname}/health.");
         write($"First owner: read the protected one-time token from {Path.Combine(journal.DirectoryPath, "setup-token")} "
             + $"and enter it at https://{setup}/setup. Never place it in a URL or paste it into support output.");
-        write("After sign-in, explicitly register a provider, then qualify an image and plan. "
-            + "The bootstrap credential remains local; seed did not register it and created no coding VM.");
+        if (state.WorkspaceProviderStaged)
+            write($"After setup, the control plane registers this {state.Plan.Selection.Provider} account as a workspace "
+                + "provider in the first organization. Then qualify an image and plan. Seed created no coding VM.");
+        else
+            write("After sign-in, explicitly register a provider, then qualify an image and plan. "
+                + "The bootstrap credential remains local; seed did not register it and created no coding VM.");
     }
 
     private void WriteCost(SeedPlan plan)

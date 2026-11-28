@@ -69,7 +69,7 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         await db.SaveChangesAsync();
         policy = new()
         {
-            Enabled = true, MaxActiveVms = 5, MaxVmsPerWorkspace = 3, MaxVmsPerOrganization = 5,
+            MaxActiveVms = 5, MaxVmsPerWorkspace = 3, MaxVmsPerOrganization = 5,
             VolumeMonthlyRatePerGb = .1m, PricingUpdatedAt = clock.GetUtcNow().AddMinutes(-1),
             Profiles = new()
             {
@@ -85,7 +85,8 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
             Repositories = [new() { OrganizationId = "org", Repository = "https://github.com/fixture-owner/project.git",
                 AllowedBaseRefs = ["refs/heads/main"], AllowPush = true }]
         };
-        lifecycle = new(db, new IdGenerator(), clock, Options.Create(policy));
+        lifecycle = new(db, new IdGenerator(), clock, Options.Create(policy),
+            Options.Create(new DevelopmentWorkspaceManagementOptions { ManagementAddresses = workerOptions.ManagementAddresses }));
         services = new ServiceCollection()
             .AddSingleton(db).AddSingleton(lifecycle)
             .AddSingleton<ProviderAccountClientFactory>(new FakeFactory(cloud))
@@ -423,6 +424,25 @@ public sealed partial class DevelopmentWorkspaceProcessorTests : IAsyncLifetime
         Assert.Null(runtime.BootstrapConfiguration);
         Assert.Equal("blocked", (await CurrentVm(vm.Id)).Phase);
         Assert.Equal(0, cloud.Deletes);
+    }
+
+    [Fact]
+    public async Task StartWaitsWithoutProvisioningUntilManagementAddressesAreConfigured()
+    {
+        var (_, vm, operation) = await Seed("pending");
+        workerOptions.ManagementAddresses = [];
+
+        await Hop("pending");
+
+        var waiting = await CurrentVm(vm.Id);
+        Assert.Equal("workspace_management_addresses_missing", waiting.ErrorCode);
+        Assert.Contains("DevelopmentWorkspaceWorker:ManagementAddresses", waiting.ErrorMessage);
+        Assert.Equal("pending", (await CurrentOperation(operation.Id)).Status);
+        Assert.Equal(0, cloud.Creates);
+        Assert.Equal(0, cloud.VolumeCreates);
+        workerOptions.ManagementAddresses = ["198.51.100.1/32"];
+        await Hop("bootstrap-secret");
+        Assert.Null((await CurrentVm(vm.Id)).ErrorCode);
     }
 
     [Fact]

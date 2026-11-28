@@ -183,6 +183,14 @@ public sealed partial class DevelopmentWorkspaceProcessor(
         {
             case "pending":
             case "git-recovery-pending":
+                if (!options.Value.HasManagementAddresses())
+                {
+                    // Nothing has been provisioned yet; keep the start queued until the operator configures the host.
+                    await SaveAsync(op, evidence, op.Step, null, ct, blocker: new DrainBlocker(
+                        "workspace_management_addresses_missing",
+                        "Set DevelopmentWorkspaceWorker:ManagementAddresses to the control-plane host's public /32 or /128 address, then restart the worker. No provider resource was created."));
+                    break;
+                }
                 var image = await cloud.GetWorkspaceImageAsync(op.ProviderImage, ct);
                 if (image is null || image.Status != "available" || image.Type != "snapshot" || image.Architecture != "x86" || image.OsFlavor != "ubuntu")
                     throw new InvalidOperationException("The exact qualified Ubuntu amd64 workspace snapshot is unavailable.");

@@ -20,8 +20,9 @@ public sealed partial class DevelopmentWorkspaceService
                 ?? throw Invalid("workspace_not_found", "Workspace was not found.");
         }
 
-        try { EnsureEnabled(); }
-        catch (DevelopmentWorkspaceException error) when (error.Code is "workspaces_disabled" or "workspace_policy_invalid")
+        try { ValidatePolicy(); ValidateManagementAddresses(); }
+        catch (DevelopmentWorkspaceException error)
+            when (error.Code is "workspace_policy_invalid" or "workspace_management_addresses_missing")
         {
             return new(false, error.Message, []);
         }
@@ -54,7 +55,42 @@ public sealed partial class DevelopmentWorkspaceService
                 }
             }
         }
-        return new(true, null, selections, Policy.Currency, Policy.VolumeMonthlyRatePerGb);
+        var missing = selections.Count == 0
+            ? await MissingConfigurationAsync(organizationId, plans, forNewWorkspace: workspace is null, ct)
+            : null;
+        return new(true, null, selections, Policy.Currency, Policy.VolumeMonthlyRatePerGb, missing);
+    }
+
+    // Explains the first missing prerequisite for an empty catalog. Only public catalog metadata is consulted.
+    private async Task<string> MissingConfigurationAsync(string organizationId, IReadOnlyList<SelectionPlan> plans,
+        bool forNewWorkspace, CancellationToken ct)
+    {
+        const string section = DevelopmentWorkspaceOptions.SectionName + ":";
+        var accounts = await db.ProviderAccounts.AsNoTracking()
+            .Where(x => x.OrganizationId == organizationId && x.Enabled)
+            .Select(x => x.Id).ToListAsync(ct);
+        if (accounts.Count == 0)
+            return "Add an enabled cloud provider account for this organization under Providers.";
+        var enabledPlans = plans.Where(x => x.Enabled && x.AccountEnabled && x.OrganizationId == organizationId
+            && x.AccountOrganizationId == organizationId).ToList();
+        if (enabledPlans.Count == 0)
+            return "Create an enabled provider plan (region and server type) under Providers.";
+        var images = Policy.Images.Where(x => ValidText(x.Key, 128) && EligibleImage(x.Value, forNewWorkspace)).ToList();
+        if (images.Count == 0)
+            return forNewWorkspace
+                ? $"Ask an operator to register a runtime-qualified T3 Connect image under {section}Images in the deployment policy."
+                : $"Ask an operator to register a runtime-qualified image under {section}Images in the deployment policy.";
+        var ownImages = images.Where(x => accounts.Contains(x.Value.ProviderAccountId, StringComparer.Ordinal)).ToList();
+        if (ownImages.Count == 0)
+            return $"No qualified image belongs to this organization's provider accounts; ask an operator to set an image's ProviderAccountId under {section}Images.";
+        if (!ownImages.Any(image => enabledPlans.Any(plan => plan.ProviderAccountId == image.Value.ProviderAccountId
+                && plan.BuildPlatform == "linux/amd64" && image.Value.AllowedRegions.Contains(plan.Region, StringComparer.Ordinal))))
+            return "No enabled linux/amd64 plan uses the same provider account and an allowed region as a qualified image; update the plan or the image's AllowedRegions.";
+        if (Policy.Profiles.Count == 0)
+            return $"Ask an operator to define a workspace size under {section}Profiles in the deployment policy.";
+        if (!forNewWorkspace)
+            return $"No workspace size allows an enabled plan in this workspace's provider account and region; ask an operator to update {section}Profiles.";
+        return $"No workspace size allows an enabled plan; ask an operator to add the plan's ID, server type and region to a profile's AllowedPlanIds, AllowedSkus and AllowedRegions under {section}Profiles.";
     }
 
     private bool EligibleImage(DevelopmentWorkspaceImage image, bool forNewWorkspace) =>

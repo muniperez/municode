@@ -10,5 +10,5 @@ first-owner bootstrap, startup and rollback. Client projects supply their compil
 outputs through the package targets in `packaging/targets.json`; this release does
 not include a shared client framework. The released CLI owns `municode seed`,
 which verifies the exact signed release and resumably provisions one
-control-plane VPS without importing the provider credential or creating coding
-VMs.
+control-plane VPS without creating coding VMs. It imports the provider
+credential as a workspace provider only when an interactive operator opts in.

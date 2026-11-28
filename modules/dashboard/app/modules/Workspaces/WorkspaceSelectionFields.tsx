@@ -17,6 +17,7 @@ type Catalog = {
   scope: string;
   available: boolean;
   unavailableReason?: string | null;
+  missingConfiguration?: string | null;
   options: WorkspaceSelectionOption[];
 };
 const selectClass = "h-10 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
@@ -112,10 +113,10 @@ export function WorkspaceSelectionFields({ organizationId, workspaceId, value, o
     {pending && <p role="status" className="text-sm text-muted-foreground">Loading options…</p>}
     {error && <p role="alert" className="text-sm text-destructive">Couldn't load options. {error}</p>}
     {unavailable && <p role="status" className="text-sm text-muted-foreground">
-      {current.unavailableReason || "Workspaces are turned off. Ask an administrator to turn them on."}
+      {current.unavailableReason || "Workspace provisioning is unavailable. Ask an administrator to check its settings."}
     </p>}
     {!pending && !error && current?.available && !options.length && <p role="status" className="text-sm text-muted-foreground">
-      No matching options. Ask an administrator to approve an image and a matching plan, then reload.
+      {current.missingConfiguration || "No matching options. Ask an administrator to approve an image and a matching plan, then reload."}
     </p>}
     <Button type="button" size="sm" variant="outline" disabled={disabled || pending} onClick={() => {
       setLoading(true);

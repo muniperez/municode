@@ -279,7 +279,9 @@ public sealed partial class CliApplication
             _console.WriteLine($"--image {option.ImageId} --profile {option.Profile} --plan {option.PlanId}  "
                 + $"# {option.ImageName}; {option.PlanName} on {option.ProviderAccountName} {option.Region}/{option.Sku}"
                 + (option.Agents is { Count: > 0 } agents ? "; agents: " + string.Join(", ", agents.Select(x => x.Id)) : ""));
-        if (selections.Options.Count == 0) _console.WriteLine("No eligible image, profile and plan combinations.");
+        if (selections.Options.Count == 0)
+            _console.WriteLine("No eligible image, profile and plan combinations."
+                + (string.IsNullOrWhiteSpace(selections.MissingConfiguration) ? "" : " " + selections.MissingConfiguration));
     }
 
     internal static string KeepRunningCostNote(DevelopmentWorkspaceResponse workspace)

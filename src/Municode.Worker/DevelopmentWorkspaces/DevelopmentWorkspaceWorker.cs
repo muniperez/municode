@@ -29,15 +29,20 @@ public static class DevelopmentWorkspaceWorkerRegistration
 }
 
 public sealed class DevelopmentWorkspaceWorker(
-    IServiceScopeFactory scopes, IOptions<DevelopmentWorkspaceOptions> feature,
+    IServiceScopeFactory scopes,
     IOptions<DevelopmentWorkspaceWorkerOptions> options, IOptions<WorkspaceSshOptions> ssh,
     IOptions<DevelopmentWorkspaceGatewayOptions> gateway, ILogger<DevelopmentWorkspaceWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!feature.Value.Enabled) return;
-
         var settings = options.Value;
+        if (string.IsNullOrWhiteSpace(settings.ApiBaseUrl))
+        {
+            logger.LogInformation("Development workspace processing is not configured in this process; set {Setting} to enable it.",
+                DevelopmentWorkspaceWorkerOptions.SectionName + ":ApiBaseUrl");
+            return;
+        }
+        // Management addresses are checked before provisioning, so a fresh install can start without them.
         settings.Validate(ssh.Value, gateway.Value);
         var lockOptions = new FileStreamOptions
         {

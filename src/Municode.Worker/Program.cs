@@ -24,6 +24,7 @@ services.AddSingleton<IIdGenerator, IdGenerator>();
 services.AddScoped<DevelopmentWorkspaceService>();
 services.AddScoped<ProviderAccountClientFactory>();
 services.Configure<DevelopmentWorkspaceOptions>(configuration.GetSection(DevelopmentWorkspaceOptions.SectionName));
+services.Configure<DevelopmentWorkspaceManagementOptions>(configuration.GetSection(DevelopmentWorkspaceManagementOptions.SectionName));
 services.Configure<DevelopmentWorkspaceGatewayOptions>(configuration.GetSection(DevelopmentWorkspaceGatewayOptions.SectionName));
 services.Configure<WorkspaceSshOptions>(configuration.GetSection(WorkspaceSshOptions.SectionName));
 services.Configure<HetznerOptions>(configuration.GetSection("Providers:Hetzner"));

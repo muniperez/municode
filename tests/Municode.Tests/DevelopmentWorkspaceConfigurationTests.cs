@@ -33,7 +33,7 @@ public sealed class DevelopmentWorkspaceConfigurationTests
         Directory.CreateDirectory(directory);
         var file = Path.Combine(directory, "workspace.json");
         File.WriteAllText(file, """
-            {"DevelopmentWorkspaces":{"Enabled":true,"MaxActiveVms":2,
+            {"DevelopmentWorkspaces":{"Enabled":false,"MaxActiveVms":2,
               "MaxActiveWorkspaces":"obsolete","MaxWorkspacesPerOrganization":"obsolete",
               "MaxEstimatedMonthlySpend":1,"MaxEstimatedMonthlySpendPerOrganization":"obsolete"}}
             """);
@@ -48,7 +48,6 @@ public sealed class DevelopmentWorkspaceConfigurationTests
                 var options = configuration.GetRequiredSection(DevelopmentWorkspaceOptions.SectionName)
                     .Get<DevelopmentWorkspaceOptions>();
                 Assert.NotNull(options);
-                Assert.True(options.Enabled);
                 Assert.Equal(1, options.MaxActiveVms);
             });
         }

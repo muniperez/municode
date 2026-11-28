@@ -174,6 +174,57 @@ public sealed class CliSeedTests
         "--credential-file", credential
     ];
 
+    [Theory]
+    [InlineData(false, null, false)]
+    [InlineData(true, "", false)]
+    [InlineData(true, "n", false)]
+    [InlineData(true, "Yes", true)]
+    public async Task WorkspaceProviderOptInIsInteractiveDefaultsNoAndJournalsOnlyTheChoice(
+        bool interactive, string? answer, bool expected)
+    {
+        using var fixture = new SeedCliFixture();
+        fixture.Console.IsInteractive = interactive;
+        fixture.Console.Input = answer;
+        var operation = await fixture.PlanAsync();
+        Assert.Equal(interactive, fixture.Console.Error.Contains("[y/N]", StringComparison.Ordinal));
+        var journalPath = Path.Combine(fixture.Environment.ConfigHome, "seed", operation, "operation.json");
+        Assert.DoesNotContain(SeedCliFixture.Credential, File.ReadAllText(journalPath), StringComparison.Ordinal);
+        using (var journal = new SeedJournal(fixture.Environment.ConfigHome, operation))
+            Assert.Equal(expected, journal.Load().RegisterWorkspaceProvider);
+        Assert.Contains(expected ? "will be registered in the first organization" : "Workspace provider: not registered",
+            fixture.Console.Output);
+
+        Assert.Equal(CliExitCodes.Success, await fixture.Application.RunAsync(
+        [
+            "seed", "apply", operation, "--credential-file", fixture.CredentialPath,
+            "--approve", fixture.Approval(), "--confirm-console-fingerprint", FakeInstanceSsh.Fingerprint
+        ], CancellationToken.None));
+        Assert.Equal(expected ? [SeedCliFixture.Credential] : [], fixture.Host.StagedCredentials);
+        Assert.Equal(1, fixture.Host.InstallCalls);
+        var output = File.ReadAllText(journalPath);
+        Assert.DoesNotContain(SeedCliFixture.Credential, output, StringComparison.Ordinal);
+        Assert.Equal(expected, fixture.Console.Output.Contains(
+            "the control plane registers this hetzner account", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task OlderReleaseWithoutProviderStagingWarnsAndStillCompletesSeed()
+    {
+        using var fixture = new SeedCliFixture();
+        fixture.Console.IsInteractive = true;
+        fixture.Console.Input = "y";
+        fixture.Host.StagingSupported = false;
+        var operation = await fixture.PlanAsync();
+        Assert.Equal(CliExitCodes.Success, await fixture.Application.RunAsync(
+        [
+            "seed", "apply", operation, "--credential-file", fixture.CredentialPath,
+            "--approve", fixture.Approval(), "--confirm-console-fingerprint", FakeInstanceSsh.Fingerprint
+        ], CancellationToken.None));
+        Assert.Contains("could not stage the workspace provider registration", fixture.Console.Output);
+        Assert.Contains("seed did not register it", fixture.Console.Output);
+        Assert.Equal(1, fixture.Host.HealthCalls);
+    }
+
     private sealed class SeedCliFixture : IDisposable
     {
         private readonly string _root;
@@ -334,6 +385,14 @@ public sealed class CliSeedTests
             SeedFiles.WriteNew(Path.Combine(directory, "setup-token"),
                 Encoding.UTF8.GetBytes("synthetic-first-owner-token"));
             return Task.CompletedTask;
+        }
+        public List<string> StagedCredentials { get; } = [];
+        public bool StagingSupported { get; set; } = true;
+        public Task<bool> StageWorkspaceProviderAsync(SeedState state, string directory, string credential,
+            CancellationToken cancellationToken)
+        {
+            StagedCredentials.Add(credential);
+            return Task.FromResult(StagingSupported);
         }
         public Task VerifyHttpsAndHealthAsync(SeedState state, CancellationToken cancellationToken)
         {

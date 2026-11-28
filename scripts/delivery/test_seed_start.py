@@ -268,6 +268,23 @@ class SeedStartTests(unittest.TestCase):
         })
         self.assertEqual(json.loads(self.active.read_text()), release | {"previous": None})
 
+    def test_seed_adds_management_address_only_to_the_bundled_policy(self):
+        command = [value for value in self.command()]
+        policy_index = command.index("--policy-file")
+        del command[policy_index:policy_index + 2]
+        completed = subprocess.run(command + ["--management-address", "198.51.100.7/32"],
+                                   env=self.env, capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        policy = json.loads(self.policy.read_text())
+        bundled = json.loads((SEED_START.parent / "municode.json").read_text())
+        self.assertEqual(policy["DevelopmentWorkspaceWorker"]["ManagementAddresses"], ["198.51.100.7/32"])
+        policy["DevelopmentWorkspaceWorker"]["ManagementAddresses"] = []
+        self.assertEqual(policy, bundled)
+
+        rejected = subprocess.run(self.command() + ["--management-address", "127.0.0.1/32"],
+                                  env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(rejected.returncode, 0)
+
     def test_openbao_commands_use_verified_internal_tls(self):
         completed = self.run_seed(
             BAO_ADDR="https://untrusted.invalid:8200",

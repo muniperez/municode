@@ -33,6 +33,19 @@ create a provider resource. Review the currency, hourly/monthly terms, taxes,
 traffic and optional-service exclusions. `municode` reports an approval digest;
 there is no `latest`, token-on-command-line or implicit-cost approval.
 
+In an interactive terminal, plan also asks whether to add the same provider
+account as a workspace provider in the first organization (default no). Only
+the yes/no choice is journaled. On yes, apply or resume re-reads
+`--credential-file` and stages it over the pinned SSH connection's stdin into
+an owner-only file on a Compose-managed volume (`api-bootstrap stage-provider`).
+After first-owner setup completes, the API validates it with the provider,
+stores it through the normal OpenBao provider-account path, records a
+`provider.created` audit event from `system:seed` and deletes the staged file.
+Retries never create a second account of the same type. A rejected credential is
+discarded and logged without its value. Unattended (non-interactive) plans never
+prompt and never register a provider. Releases without `stage-provider` print a
+warning and continue. Seed still creates no coding VM.
+
 ```sh
 municode seed apply <operation> \
   --credential-file /protected/provider.token --approve <approval-digest>
@@ -110,11 +123,13 @@ workspace exists.
 The protected one-time owner token is downloaded to
 `<config-home>/seed/<operation>/setup-token` with owner-only permissions and is
 never printed. Open `https://console.example.com/setup`, enter the token manually
-and complete first-owner sign-in. Then register the provider account explicitly and use a
-test plan to run [image release acceptance](setup/runtime.md#release-a-workspace-image)
+and complete first-owner sign-in. Unless you opted in during plan, register the provider
+account explicitly. Then use a test plan to run [image release acceptance](setup/runtime.md#release-a-workspace-image)
 before admitting the image for users. The seed token remains on the
-operator workstation and is not copied to OpenBao or the provider API store by
-seed. No coding VM is created by this flow.
+operator workstation. The provider credential is copied to OpenBao only if you
+opted in. Seed also sets `DevelopmentWorkspaceWorker:ManagementAddresses` in
+the initial host policy to the VPS's public IPv4 `/32`. No coding VM is
+created by this flow.
 
 OpenBao is initialized with one protected recovery record at
 `/etc/municode/secrets/openbao-seed-init.json`. Move an independent
@@ -231,6 +246,9 @@ and worker consistency described in [runtime setup](setup/runtime.md).
 Workspace policy lives at `/etc/municode/config/municode.json`, outside the
 release tree. If no policy exists, the installer copies the bundled template,
 or copies the input file supplied with `--policy-file`, into that location.
+With the bundled template, `--management-address <ipv4>/32` (or an IPv6 `/128`)
+fills an empty `DevelopmentWorkspaceWorker:ManagementAddresses`. An existing
+policy is never rewritten.
 
 Passkey sign-in is enabled by default. Kratos uses `CONSOLE_HOSTNAME` as the
 WebAuthn relying-party ID and `CONSOLE_URL` as its only allowed origin, so

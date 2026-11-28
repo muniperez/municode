@@ -92,6 +92,9 @@ public static class MunicodeApiServiceCollectionExtensions
         services.Configure<BudgetEmailOptions>(configuration.GetSection(BudgetEmailOptions.SectionName));
         services.AddDevelopmentWorkspaceGateway(configuration);
         services.Configure<DevelopmentWorkspaceOptions>(configuration.GetSection(DevelopmentWorkspaceOptions.SectionName));
+        services.Configure<DevelopmentWorkspaceManagementOptions>(configuration.GetSection(DevelopmentWorkspaceManagementOptions.SectionName));
+        services.Configure<SeedProviderRegistrationOptions>(configuration.GetSection(SeedProviderRegistrationOptions.SectionName));
+        services.AddScoped<SeedProviderRegistrar>();
         services.Configure<HetznerOptions>(configuration.GetSection("Providers:Hetzner"));
         services.Configure<DigitalOceanOptions>(configuration.GetSection("Providers:DigitalOcean"));
         services.Configure<VultrOptions>(configuration.GetSection("Providers:Vultr"));
@@ -129,6 +132,7 @@ public static class MunicodeApiServiceCollectionExtensions
                 OpenBaoHttpHandler.Create(provider.GetRequiredService<IOptions<OpenBaoSecretStoreOptions>>().Value));
         services.AddHostedService<OpenBaoTokenRenewalService>();
         services.AddHostedService<ProviderCredentialCleanupWorker>();
+        services.AddHostedService<SeedProviderRegistrationWorker>();
         services.AddScoped<GitHubAppService>();
         services.AddHttpClient<GitHubAppClient>()
             .RemoveAllLoggers()
