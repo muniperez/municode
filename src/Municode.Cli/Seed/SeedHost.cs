@@ -80,16 +80,41 @@ internal sealed class SeedHost(ISeedProcess? runner = null) : ISeedHost
         const string script = """
 set -eu
 export DEBIAN_FRONTEND=noninteractive
+if [ "__SMALL_VULTR__" = yes ]; then
+    swap_file=/var/lib/municode-seed.swap
+    if [ ! -f "$swap_file" ] && ! swapon --noheadings --show=NAME | grep -q .; then
+        temporary_swap=$(mktemp "$swap_file.XXXXXX")
+        trap 'rm -f "$temporary_swap"' EXIT
+        fallocate -l 1G "$temporary_swap"
+        mkswap "$temporary_swap"
+        mv "$temporary_swap" "$swap_file"
+        trap - EXIT
+    fi
+    if [ -f "$swap_file" ]; then
+        if ! swapon --noheadings --show=NAME | grep -Fxq "$swap_file"; then
+            swapon "$swap_file"
+        fi
+        if ! grep -Fq "$swap_file " /etc/fstab; then
+            printf '%s none swap sw 0 0\n' "$swap_file" >> /etc/fstab
+        fi
+    fi
+fi
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl docker.io docker-compose-v2 openssl openssh-client python3
+compose_package=docker-compose-v2
+if [ "__SMALL_VULTR__" = yes ]; then
+    compose_package=docker-compose
+fi
+apt-get install -y -qq ca-certificates curl docker.io "$compose_package" openssl openssh-client python3
 systemctl enable --now docker
 install -d -m 0700 __REMOTE__
 """;
         var result = await SshAsync(state, directory,
-            script.Replace("__REMOTE__", RemoteDirectory(state), StringComparison.Ordinal),
+            script.Replace("__REMOTE__", RemoteDirectory(state), StringComparison.Ordinal)
+                .Replace("__SMALL_VULTR__", state.Plan.Selection is { Provider: "vultr", Size: "vc2-1c-0.5gb" } ? "yes" : "no",
+                    StringComparison.Ordinal),
             cancellationToken);
         SeedGuard.Require(result.ExitCode == 0,
-            "Ubuntu control-plane prerequisites failed. The billable VPS and its pinned SSH identity are retained.");
+            "Control-plane prerequisites failed. The billable VPS and its pinned SSH identity are retained.");
     }
 
     public async Task<bool> DnsReadyAsync(SeedState state, CancellationToken cancellationToken)

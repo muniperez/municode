@@ -100,8 +100,11 @@ internal sealed partial class SeedProvider : ISeedProvider
             "digitalocean" => await DigitalOceanQuoteAsync(selection, cancellationToken),
             _ => await VultrQuoteAsync(selection, cancellationToken)
         };
-        SeedGuard.Require(quote.CpuCount >= 2 && quote.MemoryMiB >= 2048 && quote.DiskGiB >= 20,
-            "Select a control-plane VPS with at least 2 CPUs, 2 GiB RAM and 20 GiB disk.");
+        var minimumVultrPlan = selection.Provider == "vultr" && selection.Size == "vc2-1c-0.5gb"
+            && quote.CpuCount >= 1 && quote.MemoryMiB >= 512 && quote.DiskGiB >= 10;
+        SeedGuard.Require(minimumVultrPlan || (quote.CpuCount >= 2 && quote.MemoryMiB >= 2048 && quote.DiskGiB >= 20),
+            "Select a control-plane VPS with at least 2 CPUs, 2 GiB RAM and 20 GiB disk, "
+            + "or the Vultr vc2-1c-0.5gb IPv4 plan.");
         SeedGuard.Require(quote.Costs.Length > 0
             && quote.Costs.All(cost => cost.Monthly > 0 && cost.Currency.Length == 3
                 && (cost.Hourly is null || cost.Hourly > 0)),
