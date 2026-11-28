@@ -80,7 +80,7 @@ def archive_image_id(archive):
         require(isinstance(manifest, list) and len(manifest) == 1,
                 "Expected one image in the Docker archive.")
         with image.extractfile(manifest[0]["Config"]) as config:
-            return "sha256:" + hashlib.file_digest(config, "sha256").hexdigest()
+            return "sha256:" + hashlib.sha256(config.read()).hexdigest()
 
 
 def save_images(source, images, targets, platform, build_id):
