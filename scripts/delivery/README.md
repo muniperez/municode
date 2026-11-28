@@ -16,7 +16,10 @@ ARM64 deployment host. Docker must support building the selected platform.
 The last line is the path to `.local/artifacts/release/local-<rev12>-<bundle12>/`,
 where the suffix is the first 12 hex characters of the bundle archive's
 SHA-256. Pass that directory to `municode deploy plan --instance <name>
---bundle-dir <dir> --trust local-build`. It contains the usual
+--bundle-dir <dir> --trust local-build`, or to `municode seed plan ...
+--bundle-dir <dir> --trust local-build` for a fresh control plane. Use the CLI
+from the same bundle (`cli/<rid>/municode`), because seed requires the CLI and
+bundle source revisions to match. It contains the usual
 `release-manifest.json`, `municode-0.0.0-local-linux-any.tar.gz` and
 `checksums.txt`, but no Sigstore bundle. Check the output with
 `sha256sum --check --strict checksums.txt` from inside the release directory.

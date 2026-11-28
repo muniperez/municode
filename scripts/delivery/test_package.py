@@ -100,7 +100,15 @@ class FakeDeployDocker:
         if args[:3] == ("docker", "image", "pull") or args[:3] == ("docker", "image", "tag"):
             return ""
         if args[:4] == ("docker", "image", "load", "--input"):
-            return "Loaded image ID: " + ("sha256:" + "0" * 64 if self.wrong_loaded_id else Path(args[4]).read_text())
+            image = Path(args[4])
+            if self.wrong_loaded_id:
+                return "Loaded image ID: sha256:" + "0" * 64
+            if tarfile.is_tarfile(image):
+                with tarfile.open(image) as archive:
+                    entry = json.load(archive.extractfile("manifest.json"))[0]
+                    config = archive.extractfile(entry["Config"]).read()
+                return "Loaded image ID: sha256:" + hashlib.sha256(config).hexdigest()
+            return "Loaded image ID: " + image.read_text()
         if args[:5] == ("docker", "image", "inspect", "--format", "{{.Id}}"):
             return args[-1]
         if args[:3] == ("docker", "image", "inspect"):
@@ -1007,7 +1015,7 @@ class LocalBuildTests(unittest.TestCase):
         tool.write_text(
             "#!/usr/bin/env python3\n"
             "from pathlib import Path\n"
-            "import sys\n"
+            "import io, json, sys, tarfile\n"
             "tool, *args = sys.argv\n"
             "tool = Path(tool).name\n"
             "if tool == 'dotnet' and args[0] == 'publish':\n"
@@ -1039,7 +1047,12 @@ class LocalBuildTests(unittest.TestCase):
             "        print('sha256:' + {'municode-api': 'a', 'municode-worker': 'b', 'municode-gateway': 'c'}[name] * 64)\n"
             "    elif args[:2] == ['image', 'save']:\n"
             "        assert args[2] == '--output' and args[-1].startswith('sha256:')\n"
-            "        Path(args[3]).write_text(args[-1])\n"
+            "        with tarfile.open(args[3], 'w') as archive:\n"
+            "            for name, data in [('manifest.json', json.dumps([{'Config': 'config.json'}]).encode()),\n"
+            "                               ('config.json', args[-1].encode())]:\n"
+            "                member = tarfile.TarInfo(name)\n"
+            "                member.size = len(data)\n"
+            "                archive.addfile(member, io.BytesIO(data))\n"
             "    else:\n"
             "        assert args[:2] == ['image', 'rm']\n"
         )
@@ -1112,13 +1125,12 @@ class LocalBuildTests(unittest.TestCase):
         self.assertIn("MUNICODE_RUNTIME_PULL_POLICY=never\n", env)
         self.assertEqual(set(manifest["imageArchives"]), {"api", "worker", "gateway"})
         for name, letter in (("api", "a"), ("worker", "b"), ("gateway", "c")):
-            config = letter * 64
+            config = hashlib.sha256(("sha256:" + letter * 64).encode()).hexdigest()
             image_id = f"sha256:{config}"
             reference = f"municode-{name}:local-{config}"
             path = f"images/{name}.tar"
-            self.assertEqual((release / path).read_text(), image_id)
             self.assertEqual(manifest["imageArchives"][name], {
-                "path": path, "sha256": hashlib.sha256(image_id.encode()).hexdigest(),
+                "path": path, "sha256": hashlib.sha256((release / path).read_bytes()).hexdigest(),
                 "imageId": image_id, "reference": reference,
             })
             self.assertIn(f"MUNICODE_{name.upper()}_IMAGE={reference}\n", env)
@@ -1132,8 +1144,9 @@ class LocalBuildTests(unittest.TestCase):
         self.assertEqual((host / "opt/municode/current").readlink(), Path("releases") / output.name)
         rendered = (installed / ".env").read_text().splitlines()
         self.assertIn("MUNICODE_RUNTIME_PULL_POLICY=never", rendered)
-        for name, letter in (("api", "a"), ("worker", "b"), ("gateway", "c")):
-            self.assertIn(f"MUNICODE_{name.upper()}_IMAGE=municode-{name}:local-{letter * 64}", rendered)
+        for name in ("api", "worker", "gateway"):
+            reference = manifest["imageArchives"][name]["reference"]
+            self.assertIn(f"MUNICODE_{name.upper()}_IMAGE={reference}", rendered)
         self.assertEqual(json.loads((host / "var/lib/municode/active-release.json").read_text())["releaseId"],
                          output.name)
 

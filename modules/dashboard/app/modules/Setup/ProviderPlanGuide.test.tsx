@@ -14,20 +14,25 @@ function mount(hasOrganization = true) {
 }
 
 describe("provider and plan guidance", () => {
-  it.each([{ items: [] }, { items: [{ id: "existing" }] }])("uses existing read APIs/screens for new and ready operators; never allocates", async ({ items }) => {
-    const fetcher = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify(items), {
-      headers: { "content-type": "application/json" }
-    })));
+  it("shows the seeded plan and makes workspace creation the primary action", async () => {
+    const fetcher = vi.fn().mockImplementation((url: string) => {
+      const items = new URL(url).pathname === "/api/providers"
+        ? [{ id: "provider_seed", name: "Default provider", providerType: "vultr", enabled: true }]
+        : [{ id: "plan_seed", providerAccountId: "provider_seed", name: "Default workspace plan",
+            region: "ewr", sku: "vc2-4c-8gb", enabled: true, accountEnabled: true }];
+      return Promise.resolve(new Response(JSON.stringify(items), {
+        headers: { "content-type": "application/json" },
+      }));
+    });
     vi.stubGlobal("fetch", fetcher);
     mount();
-    expect(await screen.findByText(`${items.length} provider account(s), ${items.length} workspace plan(s) in this organization.`)).toBeInTheDocument();
+    expect(await screen.findByText("Default provider · Vultr")).toBeInTheDocument();
+    expect(screen.getByText("Default workspace plan · ewr · vc2-4c-8gb")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create workspace" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Add another provider" })).toHaveAttribute("href", "/plans/accounts");
+    expect(screen.getByRole("link", { name: "Finish" })).toHaveAttribute("href", "/workspaces");
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(fetcher.mock.calls.every(([, options]) => options.method === "GET")).toBe(true);
-    expect(fetcher.mock.calls.map(([url]) => new URL(url).pathname).sort()).toEqual(["/api/plans", "/api/providers"]);
-    expect(screen.getByRole("link", { name: "Connect a provider account" })).toHaveAttribute("href", "/plans/accounts");
-    expect(screen.getByRole("link", { name: "Create a workspace plan" })).toHaveAttribute("href", "/plans");
-    expect(screen.getByText(/choose a workspace plan/)).toBeInTheDocument();
-    expect(screen.getByText(/Starting a workspace can allocate billable VPS resources/)).toBeInTheDocument();
   });
 
   it("keeps unavailable provider reads separate from setup and permits explicit safe read retry", async () => {
@@ -35,11 +40,11 @@ describe("provider and plan guidance", () => {
       .mockResolvedValue(new Response("[]", { headers: { "content-type": "application/json" } }));
     vi.stubGlobal("fetch", fetcher);
     mount();
-    expect(await screen.findByRole("alert")).toHaveTextContent("Existing configuration has not been changed");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn’t load your provider configuration.");
     expect(document.body.textContent).not.toContain("private provider");
     fetcher.mockImplementation(() => Promise.resolve(new Response("[]", { headers: { "content-type": "application/json" } })));
     fireEvent.click(screen.getByRole("button", { name: "Retry provider check" }));
-    expect(await screen.findByText("0 provider account(s), 0 workspace plan(s) in this organization.")).toBeInTheDocument();
+    expect(await screen.findByText("Connect a provider to create a workspace.")).toBeInTheDocument();
     expect(fetcher.mock.calls.every(([, options]) => options.method === "GET")).toBe(true);
   });
 

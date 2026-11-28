@@ -67,6 +67,19 @@ public sealed class SeedProviderTests
     }
 
     [Fact]
+    public async Task VultrQuotesTheLowestCostIpv4Plan()
+    {
+        using var subject = new SeedProvider("vultr", "synthetic-credential", new ProviderHandler("vultr"));
+        var selection = Selection("vultr") with { Size = "vc2-1c-0.5gb" };
+        var quote = await subject.QuoteAsync(selection, new string('a', 32), true, CancellationToken.None);
+
+        Assert.Equal("2625", quote.Image);
+        Assert.Equal("2284", quote.Workspace!.Image);
+        Assert.Equal(512, quote.MemoryMiB);
+        Assert.Equal(3.50m, Assert.Single(quote.Costs).Monthly);
+    }
+
+    [Fact]
     public async Task HetznerCreateAndFindReturnTheSameExactOperationAndImmutableFields()
     {
         var handler = new ProviderHandler("hetzner");
@@ -359,6 +372,9 @@ public sealed class SeedProviderTests
                     {
                         plans = new[]
                         {
+                            new { id = "vc2-1c-0.5gb", type = "vc2", locations = new[] { "ewr" },
+                                vcpu_count = 1, ram = 512, disk = 10, monthly_cost = "3.50",
+                                bandwidth = 1, hourly_cost = 0.005m },
                             new { id = "vc2-2c-4gb", type = "vc2", locations = new[] { "ewr" },
                                 vcpu_count = 2, ram = 4096, disk = 80, monthly_cost = "24.00",
                                 bandwidth = 3, hourly_cost = 0.036m },
@@ -374,10 +390,10 @@ public sealed class SeedProviderTests
                         }
                     },
                 "/v2/regions/ewr/availability" =>
-                    new { available_plans = new[] { "vc2-2c-4gb", "voc-m-1c-8gb", "vhf-3c-8gb", "vc2-4c-8gb" } },
+                    new { available_plans = new[] { "vc2-1c-0.5gb", "vc2-2c-4gb", "voc-m-1c-8gb", "vhf-3c-8gb", "vc2-4c-8gb" } },
                 var value when value.StartsWith("/v2/os", StringComparison.Ordinal) =>
                     new { os = new[] { new { id = 2284, family = "ubuntu", arch = "x64",
-                        name = "Ubuntu 24.04 LTS" } } },
+                        name = "Ubuntu 24.04 LTS" }, new { id = 2625, family = "debian", arch = "x64", name = "Debian 13 x64" } } },
                 _ => throw new InvalidOperationException(path)
             };
         }

@@ -2,10 +2,13 @@
 """Build an unsigned Municode release from an exact local Git revision."""
 
 import argparse
+import hashlib
+import json
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 
 from package import (
@@ -69,6 +72,17 @@ def publish_payloads(source, payload, targets, revision):
     return source / dashboard["artifactDirectory"]
 
 
+def archive_image_id(archive):
+    # Docker's containerd store can report an OCI manifest ID. Docker load
+    # on a conventional image store identifies the image by its config digest.
+    with tarfile.open(archive) as image:
+        manifest = json.load(image.extractfile("manifest.json"))
+        require(isinstance(manifest, list) and len(manifest) == 1,
+                "Expected one image in the Docker archive.")
+        with image.extractfile(manifest[0]["Config"]) as config:
+            return "sha256:" + hashlib.sha256(config.read()).hexdigest()
+
+
 def save_images(source, images, targets, platform, build_id):
     images.mkdir()
     ids = {}
@@ -79,10 +93,11 @@ def save_images(source, images, targets, platform, build_id):
         run(source, "docker", "buildx", "build", "--platform", platform, "--load",
             "--file", str(dockerfile), "--tag", tag, ".")
         try:
-            image_id = run(source, "docker", "image", "inspect", "--format", "{{.Id}}", tag, capture=True).strip()
-            require(re.fullmatch(r"sha256:[0-9a-f]{64}", image_id), f"Docker returned an invalid {name} image ID.")
-            run(source, "docker", "image", "save", "--output", str(images / f"{name}.tar"), image_id)
-            ids[name] = image_id
+            archive = images / f"{name}.tar"
+            stored_id = run(source, "docker", "image", "inspect", "--format", "{{.Id}}", tag, capture=True).strip()
+            require(re.fullmatch(r"sha256:[0-9a-f]{64}", stored_id), f"Docker returned an invalid {name} image ID.")
+            run(source, "docker", "image", "save", "--output", str(archive), stored_id)
+            ids[name] = archive_image_id(archive)
         finally:
             run(source, "docker", "image", "rm", tag)
     return ids

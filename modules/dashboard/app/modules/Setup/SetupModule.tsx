@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -105,10 +105,8 @@ export function SetupModule() {
         <Button onClick={() => void load()}>Check status</Button>
       </> : null}
       {phase === "loaded" && status?.state === "ready" ? <>
-        <p role="status">Setup is complete. Sign in using the ordinary operator login. No browser session was created by setup.</p>
+        <p role="status">Setup is complete. Sign in to create your first workspace.</p>
         <Button onClick={() => void signIn()}>Continue to sign in</Button>
-        <Link className="underline" to="/getting-started">Provider and plan guide (sign in required)</Link>
-        <Link className="underline" to="/workspaces">Open workspaces</Link>
       </> : null}
       {phase === "loaded" && (status?.state === "required" || status?.state === "in_progress") ? <>
         <p>Open the HTTPS setup link printed by seed, or paste the one-time token from protected host output. The link carries the token only in the URL fragment, which browsers do not send to the server; this screen removes it from the address bar as soon as it is read. Setup creates one operator and workspace, not a VPS.</p>

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using Municode.Cli.Commands;
 using Municode.Cli.Seed;
 
@@ -64,51 +63,8 @@ internal sealed class DeployReleaseSource(HttpClient http, SeedRelease verifier)
 
     private static DeployRelease VerifyLocal(string directory)
     {
-        var path = Path.Combine(directory, "release-manifest.json");
-        SeedRelease.CheckLocalAsset(path, 128L * 1024 * 1024);
-        var bytes = File.ReadAllBytes(path);
-        using var document = JsonDocument.Parse(bytes);
-        var manifest = document.RootElement;
-        SeedRelease.RequireDeployProtocol(manifest, Protocol);
-        var version = manifest.GetProperty("version").GetString();
-        var revision = manifest.GetProperty("sourceRevision").GetString();
-        var tag = "municode-v" + version;
-        var bundle = $"municode-{version}-linux-any.tar.gz";
-        SeedGuard.Require(SeedRelease.IsReleaseTag(tag)
-            && manifest.GetProperty("schemaVersion").GetInt32() == 1
-            && manifest.GetProperty("product").GetString() == "municode"
-            && manifest.GetProperty("rid").GetString() == "linux-any"
-            && manifest.GetProperty("sourceRepository").GetString() == "https://github.com/muniperez/municode"
-            && manifest.GetProperty("bundle").GetString() == bundle
-            && revision is not null && Regex.IsMatch(revision, @"\A(?:[a-f0-9]{40}|[a-f0-9]{64})\z"),
-            "The local build manifest has an invalid release identity or inexact source revision.");
-        SeedGuard.Require(manifest.TryGetProperty("sourceDirty", out var dirty) && dirty.ValueKind == JsonValueKind.False,
-            "Deploy requires a clean local build (sourceDirty: false).");
-        SeedGuard.Require(manifest.GetProperty("imagePlatform").GetString() is "linux/amd64" or "linux/arm64",
-            "The local build has an invalid image platform.");
-        var images = manifest.GetProperty("imageArchives").EnumerateObject().ToDictionary(item => item.Name, item => item.Value);
-        SeedGuard.Require(images.Count == 3 && new[] { "api", "worker", "gateway" }.All(images.ContainsKey),
-            "The local build image archive inventory is incomplete.");
-        var digests = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (component, image) in images)
-        {
-            var relative = $"images/{component}.tar";
-            var id = image.GetProperty("imageId").GetString();
-            var digest = image.GetProperty("sha256").GetString();
-            SeedGuard.Require(id is not null && Regex.IsMatch(id, @"\Asha256:[a-f0-9]{64}\z")
-                && image.GetProperty("path").GetString() == relative
-                && image.GetProperty("reference").GetString() == $"municode-{component}:local-{id[7..]}"
-                && DeployApproval.IsDigest(digest), "The local build has invalid image archive metadata.");
-            digests.Add(relative, digest!);
-        }
-        var inventory = SeedRelease.VerifyInventory(directory, ["release-manifest.json", bundle], local: true);
-        SeedGuard.Require(SeedRelease.Hash(bytes) == inventory["release-manifest.json"],
-            "The local build manifest changed during verification.");
-        SeedRelease.VerifyDependencies(manifest);
-        SeedRelease.VerifyComponentsAndArchive(directory, manifest, bundle, deploy: true, digests,
-            inventory["release-manifest.json"]);
-        var sha = inventory[bundle];
-        return new(new($"local-{revision![..12]}-{sha[..12]}", tag, revision, sha, LocalBuild),
-            Path.Combine(directory, bundle), null);
+        var local = SeedRelease.VerifyLocalBuild(directory, Protocol);
+        return new(new(local.ReleaseId, local.Tag, local.SourceRevision, local.BundleSha256, LocalBuild),
+            Path.Combine(directory, local.BundleName), null);
     }
 }

@@ -33,6 +33,16 @@ create a provider resource. Review the currency, hourly/monthly terms, taxes,
 traffic and optional-service exclusions. `municode` reports an approval digest;
 there is no `latest`, token-on-command-line or implicit-cost approval.
 
+To seed from an unsigned local build instead, build a clean bundle with
+[`build-release.sh`](../scripts/delivery/README.md) and replace `--release` with
+`--bundle-dir <dir> --trust local-build`. Plan requires exactly one of the two.
+It verifies the bundle's checksum inventory, archive component hashes and image
+archives, requires `sourceDirty: false` and the CLI's own source revision, and
+labels the plan as an unsigned local build. Apply and resume re-verify the same
+directory and refuse a changed bundle. The host loads and checks the bundle's
+image archives before starting Compose and records trust `local-build`, which
+is also reported by `/health/version`. Cosign is not needed for this path.
+
 Plan also decides whether to reuse the same provider account for coding VMs in
 the first organization. The default is yes: an interactive terminal asks
 `[Y/n]`, unattended plans choose yes, and `--workspace-provider no` opts out.
@@ -50,6 +60,14 @@ choice and the quote are journaled. Apply or resume then:
 - re-reads `--credential-file` and stages it over the pinned SSH connection's
   stdin into an owner-only file on a Compose-managed volume
   (`api-bootstrap stage-provider`).
+
+If the first-owner token expires after seed completes, run
+`municode seed rotate-setup-token <operation>` with the same CLI configuration
+directory. It uses the pinned SSH host and replaces the protected local token
+file. An interactive terminal prints the new one-time setup link.
+
+Use `municode seed clean-staging <operation>` after seed completes to remove
+the installer upload and extraction from the host before an in-place update.
 
 After first-owner setup completes, the API validates the credential with the
 provider, stores it through the normal OpenBao provider-account path as

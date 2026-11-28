@@ -21,6 +21,8 @@ credentials, existing customer data or a shared installation.
 - [ ] Run `municode seed plan` for each provider path selected for qualification.
       Check the provider-reported region, size, monthly/hourly amount, currency,
       exclusions, exact source revision, manifest digest and bundle digest.
+      For a local-build qualification, plan with `--bundle-dir <dir> --trust
+      local-build` and confirm the plan's unsigned local-build label.
 - [ ] Run `municode seed apply` with the displayed approval digest.
 - [ ] Interrupt or terminate the workstation process immediately after the
       provider reports VPS creation and before any SSH trust completes.

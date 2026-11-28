@@ -57,7 +57,7 @@ describe("first operator screen", () => {
     const auth = mount();
     await fill();
     fireEvent.click(screen.getByRole("button", { name: "Complete setup" }));
-    expect(await screen.findByText(/No browser session was created/)).toBeInTheDocument();
+    expect(await screen.findByText(/Setup is complete/)).toBeInTheDocument();
     expect(completeSetup).toHaveBeenCalledOnce();
     expect(completeSetup).toHaveBeenCalledWith({
       setupToken: "synthetic-token", email: "operator@example.test", password: "synthetic-password",
@@ -135,7 +135,7 @@ describe("first operator screen", () => {
       ["Operator password", "synthetic-password"]
     ]) fireEvent.change(screen.getByLabelText(label), { target: { value } });
     fireEvent.click(screen.getByRole("button", { name: "Complete setup" }));
-    await screen.findByText(/No browser session was created/);
+    await screen.findByText(/Setup is complete/);
     expect(completeSetup).toHaveBeenCalledWith(expect.objectContaining({ setupToken: "linked/token" }));
   });
 

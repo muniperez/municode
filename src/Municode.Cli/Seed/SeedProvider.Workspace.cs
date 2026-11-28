@@ -125,7 +125,10 @@ internal sealed partial class SeedProvider
             ? rate.GetDecimal()
             : Math.Ceiling(monthly / 672m * 1000m) / 1000m;
         // Vultr publishes no block storage pricing API; this is the documented NVMe (high_perf) block rate.
-        return new(Text(size, "id"), size.GetProperty("vcpu_count").GetInt32(), 8, quote.Image,
+        var image = selection.Size == "vc2-1c-0.5gb"
+            ? Text(await VultrOsAsync(false, cancellationToken), "id")
+            : quote.Image;
+        return new(Text(size, "id"), size.GetProperty("vcpu_count").GetInt32(), 8, image,
             hourly, monthly, 0.10m, "USD",
             "https://api.vultr.com/v2/plans; block storage https://www.vultr.com/pricing/#block-storage");
     }

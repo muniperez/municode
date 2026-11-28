@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Municode.Cli.Commands;
+using Municode.Cli.Deploy;
 
 namespace Municode.Cli.Seed;
 
@@ -79,16 +80,41 @@ internal sealed class SeedHost(ISeedProcess? runner = null) : ISeedHost
         const string script = """
 set -eu
 export DEBIAN_FRONTEND=noninteractive
+if [ "__SMALL_VULTR__" = yes ]; then
+    swap_file=/var/lib/municode-seed.swap
+    if [ ! -f "$swap_file" ] && ! swapon --noheadings --show=NAME | grep -q .; then
+        temporary_swap=$(mktemp "$swap_file.XXXXXX")
+        trap 'rm -f "$temporary_swap"' EXIT
+        fallocate -l 1G "$temporary_swap"
+        mkswap "$temporary_swap"
+        mv "$temporary_swap" "$swap_file"
+        trap - EXIT
+    fi
+    if [ -f "$swap_file" ]; then
+        if ! swapon --noheadings --show=NAME | grep -Fxq "$swap_file"; then
+            swapon "$swap_file"
+        fi
+        if ! grep -Fq "$swap_file " /etc/fstab; then
+            printf '%s none swap sw 0 0\n' "$swap_file" >> /etc/fstab
+        fi
+    fi
+fi
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl docker.io docker-compose-v2 openssl openssh-client python3
+compose_package=docker-compose-v2
+if [ "__SMALL_VULTR__" = yes ]; then
+    compose_package=docker-compose
+fi
+apt-get install -y -qq ca-certificates curl docker.io "$compose_package" openssl openssh-client python3
 systemctl enable --now docker
 install -d -m 0700 __REMOTE__
 """;
         var result = await SshAsync(state, directory,
-            script.Replace("__REMOTE__", RemoteDirectory(state), StringComparison.Ordinal),
+            script.Replace("__REMOTE__", RemoteDirectory(state), StringComparison.Ordinal)
+                .Replace("__SMALL_VULTR__", state.Plan.Selection is { Provider: "vultr", Size: "vc2-1c-0.5gb" } ? "yes" : "no",
+                    StringComparison.Ordinal),
             cancellationToken);
         SeedGuard.Require(result.ExitCode == 0,
-            "Ubuntu control-plane prerequisites failed. The billable VPS and its pinned SSH identity are retained.");
+            "Control-plane prerequisites failed. The billable VPS and its pinned SSH identity are retained.");
     }
 
     public async Task<bool> DnsReadyAsync(SeedState state, CancellationToken cancellationToken)
@@ -123,17 +149,18 @@ install -d -m 0700 __REMOTE__
         var remoteRelease = remote + "/release";
         await RequireSshAsync(state, directory,
             "install -d -m 0700 " + SeedGuard.SafeShellQuote(remoteRelease), cancellationToken);
-        var names = new[]
-        {
-            "release-manifest.json",
-            state.Plan.Release.BundleName,
-            "checksums.txt",
-            "checksums.txt.sigstore.json"
-        };
+        var localBuild = state.Plan.Release.Trust == DeployReleaseSource.LocalBuild;
+        string[] names = localBuild
+            ? ["release-manifest.json", state.Plan.Release.BundleName, "checksums.txt"]
+            : ["release-manifest.json", state.Plan.Release.BundleName, "checksums.txt", "checksums.txt.sigstore.json"];
         foreach (var name in names)
         {
             var local = Path.Combine(releaseDirectory, name);
-            SeedFiles.Check(local);
+            // A local build stays in its build output directory; its contents were re-verified against the plan.
+            if (localBuild)
+                SeedRelease.CheckLocalAsset(local, name.EndsWith(".tar.gz", StringComparison.Ordinal)
+                    ? 32L * 1024 * 1024 * 1024 : 128L * 1024 * 1024);
+            else SeedFiles.Check(local);
             await UploadAsync(state, directory, local, remoteRelease + "/" + name, cancellationToken);
         }
         var selection = state.Plan.Selection;
@@ -158,7 +185,8 @@ install -d -m 0700 __REMOTE__
              "--installation-id", Quote(state.InstallationId!),
              "--dashboard-hostname", Quote(selection.DashboardHostname),
              "--api-hostname", Quote(selection.ApiHostname),
-             "--gateway-domain", Quote(selection.GatewayDomain)]);
+             "--gateway-domain", Quote(selection.GatewayDomain),
+             .. (localBuild ? new[] { "--trust", DeployReleaseSource.LocalBuild } : [])]);
         var command = "cd " + Quote(remoteRelease)
             + " && sha256sum --check --strict --status checksums.txt"
             + " && if [ ! -f " + Quote(archiveRoot + "/.verified") + " ]; then "
@@ -193,6 +221,29 @@ install -d -m 0700 __REMOTE__
             + " --setup-token-output " + Quote(remote + "/setup-token");
         await RequireSshAsync(state, directory, command, cancellationToken);
         await DownloadAsync(state, directory, remote + "/setup-token", setupToken, cancellationToken);
+    }
+
+    public Task CleanStagingAsync(SeedState state, string directory, CancellationToken cancellationToken) =>
+        RequireSshAsync(state, directory, "rm -rf -- " + Quote(RemoteDirectory(state) + "/release"), cancellationToken);
+
+    public async Task RotateSetupTokenAsync(SeedState state, string directory, CancellationToken cancellationToken)
+    {
+        const string fileName = "setup-token-cli-rotation";
+        const string remoteFile = "/etc/municode/secrets/bootstrap/" + fileName;
+        var localFile = Path.Combine(directory, "setup-token");
+        if (File.Exists(localFile)) SeedFiles.Check(localFile);
+        var input = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            installationId = state.InstallationId,
+            operationId = "first-owner"
+        });
+        await RequireSshAsync(state, directory,
+            "if [ ! -f " + Quote(remoteFile) + " ]; then "
+            + "municode-compose --profile maintenance run --rm --no-TTY api-bootstrap "
+            + "rotate-token --stdin --output-file /run/municode-bootstrap/" + fileName + "; fi",
+            cancellationToken, input);
+        await DownloadAsync(state, directory, remoteFile, localFile, cancellationToken, replace: true);
+        await RequireSshAsync(state, directory, "rm -f " + Quote(remoteFile), cancellationToken);
     }
 
     public async Task<bool> StageWorkspaceProviderAsync(
@@ -312,9 +363,10 @@ install -d -m 0700 __REMOTE__
         SeedState state,
         string directory,
         string command,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        byte[]? input = null)
     {
-        var result = await SshAsync(state, directory, command, cancellationToken);
+        var result = await SshAsync(state, directory, command, cancellationToken, input);
         SeedGuard.Require(result.ExitCode == 0,
             "A pinned SSH host operation failed. The journal and billable VPS are retained; diagnostics may contain secrets and were suppressed.");
     }
@@ -339,7 +391,8 @@ install -d -m 0700 __REMOTE__
         string directory,
         string remote,
         string local,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool replace = false)
     {
         var expectedResult = await SshAsync(state, directory,
             "sha256sum " + Quote(remote) + " | cut -d ' ' -f 1", cancellationToken);
@@ -368,6 +421,11 @@ install -d -m 0700 __REMOTE__
         if (File.Exists(local))
         {
             SeedFiles.Check(local);
+            if (replace)
+            {
+                File.Move(local + ".pending", local, overwrite: true);
+                return;
+            }
             var existingBytes = File.ReadAllBytes(local);
             ValidateSetupTokenBytes(existingBytes);
             SeedGuard.Require(CryptographicOperations.FixedTimeEquals(existingBytes, pendingBytes),

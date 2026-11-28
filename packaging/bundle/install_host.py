@@ -96,10 +96,11 @@ def seed_settings(args):
     if all(field is None for field in fields):
         return {}
     installation, dashboard, api, gateway = fields
-    if (not args.verified_release_tag or not installation
+    if (not (args.verified_release_tag or args.local_build) or not installation
             or not re.fullmatch(r"[a-zA-Z0-9._-]+", installation)
             or not all(host and re.fullmatch(HOSTNAME, host) for host in (dashboard, api, gateway))):
-        raise ValueError("Seed requires a verified tag, an installation ID and all three public hostnames.")
+        raise ValueError("Seed requires a verified tag or an explicit local build, an installation ID "
+                         "and all three public hostnames.")
     return {
         "MUNICODE_INSTALLATION_ID": installation,
         "CONSOLE_HOSTNAME": dashboard,
@@ -375,6 +376,8 @@ def main():
     parser.add_argument("--host-root", type=Path, default=Path("/"))
     parser.add_argument("--policy-file", type=Path, help="Input policy to copy into /etc/municode/config")
     parser.add_argument("--verified-release-tag", help="Tag whose Sigstore provenance was already verified")
+    parser.add_argument("--local-build", action="store_true",
+                        help="Install an explicitly trusted, clean unsigned local build with bundled images")
     parser.add_argument("--management-address", type=management_address,
                         help="Control-plane public /32 or /128 added to a newly created bundled policy")
     parser.add_argument("--workspace-defaults", type=Path,
@@ -395,6 +398,9 @@ def main():
     tag = "municode-v" + manifest["version"]
     if args.verified_release_tag is not None and args.verified_release_tag != tag:
         raise ValueError("Verified release tag does not match the manifest.")
+    if args.local_build and (args.verified_release_tag is not None or manifest.get("sourceDirty") is not False
+                             or "imageArchives" not in manifest):
+        raise ValueError("A local-build install requires a clean local bundle with image archives and no signed tag.")
     signed = args.verified_release_tag is not None
     identity = {
         "releaseId": tag if signed else f"local-{revision[:12]}-{args.bundle_sha256[:12]}",

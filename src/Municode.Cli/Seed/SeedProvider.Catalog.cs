@@ -132,11 +132,7 @@ internal sealed partial class SeedProvider
         SeedGuard.Require(availability.GetProperty("available_plans").EnumerateArray()
                 .Any(value => value.GetString() == selection.Size),
             "Vultr regional capacity is unavailable.");
-        var image = One(await ListAsync("os", "os", cancellationToken),
-            value => Text(value, "family") == "ubuntu" && Text(value, "arch") == "x64"
-                && System.Text.RegularExpressions.Regex.IsMatch(
-                    Text(value, "name"), @"^Ubuntu 24\.04(?:\s|$)"),
-            "No unique supported Vultr Ubuntu 24.04 x64 image is available.");
+        var image = await VultrOsAsync(selection.Size == "vc2-1c-0.5gb", cancellationToken);
         var costs = new[]
         {
             new SeedCost("one control-plane instance with public IPv4",
@@ -152,4 +148,14 @@ internal sealed partial class SeedProvider
             "Provision ACL, active funded account and allowed workstation IP are required. "
             + "Availability is not a reservation; stopped VPSs remain billable.");
     }
+    private async Task<JsonElement> VultrOsAsync(bool smallControlPlane, CancellationToken cancellationToken)
+    {
+        var family = smallControlPlane ? "debian" : "ubuntu";
+        var pattern = smallControlPlane ? @"^Debian 13(?:\s|$)" : @"^Ubuntu 24\.04(?:\s|$)";
+        return One(await ListAsync("os", "os", cancellationToken),
+            value => Text(value, "family") == family && Text(value, "arch") == "x64"
+                && System.Text.RegularExpressions.Regex.IsMatch(Text(value, "name"), pattern),
+            "No unique supported Vultr " + (smallControlPlane ? "Debian 13" : "Ubuntu 24.04") + " x64 image is available.");
+    }
+
 }
