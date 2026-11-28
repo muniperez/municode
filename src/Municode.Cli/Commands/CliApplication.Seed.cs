@@ -20,9 +20,9 @@ public sealed partial class CliApplication
     private async Task<int> RunSeedAsync(string[] args, CancellationToken cancellationToken)
     {
         var action = args.FirstOrDefault();
-        if (action is not ("plan" or "apply" or "resume" or "status" or "rotate-setup-token"))
+        if (action is not ("plan" or "apply" or "resume" or "status" or "rotate-setup-token" or "clean-staging"))
             throw new CliCommandException(CliExitCodes.ValidationError,
-                "Usage: municode seed <plan|apply|resume|status|rotate-setup-token> [operation] [options].");
+                "Usage: municode seed <plan|apply|resume|status|rotate-setup-token|clean-staging> [operation] [options].");
         var operationId = action == "plan" ? null : args.ElementAtOrDefault(1);
         var optionOffset = action == "plan" ? 1 : 2;
         if (action != "plan")
@@ -31,7 +31,7 @@ public sealed partial class CliApplication
         var options = ParseSeedOptions(args.Skip(optionOffset).ToArray());
         var allowed = action == "plan"
             ? SeedValues.Except(["--approve", "--confirm-console-fingerprint"]).ToHashSet()
-            : action is "status" or "rotate-setup-token"
+            : action is "status" or "rotate-setup-token" or "clean-staging"
                 ? []
                 : new HashSet<string>(["--credential-file", "--approve", "--confirm-console-fingerprint"]);
         SeedGuard.Require(options.Keys.All(allowed.Contains),
@@ -117,6 +117,14 @@ public sealed partial class CliApplication
         using (var journal = new SeedJournal(_environment.ConfigHome, operationId!))
         {
             var state = journal.Load();
+            if (action == "clean-staging")
+            {
+                SeedGuard.Require(state.IsComplete && state.HostFingerprint is not null && state.Server?.Address is not null,
+                    "Staging cleanup requires a completed seed with a pinned SSH host.");
+                await _seed.Host().CleanStagingAsync(state, journal.DirectoryPath, cancellationToken);
+                _console.WriteLine("Completed seed release staging removed.");
+                return CliExitCodes.Success;
+            }
             if (action == "rotate-setup-token")
             {
                 SeedGuard.Require(state.IsComplete && state.InstallationId is not null
@@ -237,6 +245,7 @@ public sealed partial class CliApplication
         _console.WriteLine("  municode seed resume <operation> --credential-file <path> [--confirm-console-fingerprint <SHA256:...>]");
         _console.WriteLine("  municode seed status <operation>");
         _console.WriteLine("  municode seed rotate-setup-token <operation>");
+        _console.WriteLine("  municode seed clean-staging <operation>");
         _console.WriteLine("Plan is read-only except for protected local state and exact release verification.");
         _console.WriteLine("--bundle-dir --trust local-build seeds an unsigned scripts/delivery/build-release.sh output");
         _console.WriteLine("after the same manifest, checksum, image and archive checks as deploy; signed releases are the default.");

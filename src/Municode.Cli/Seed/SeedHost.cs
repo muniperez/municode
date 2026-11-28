@@ -223,6 +223,9 @@ install -d -m 0700 __REMOTE__
         await DownloadAsync(state, directory, remote + "/setup-token", setupToken, cancellationToken);
     }
 
+    public Task CleanStagingAsync(SeedState state, string directory, CancellationToken cancellationToken) =>
+        RequireSshAsync(state, directory, "rm -rf -- " + Quote(RemoteDirectory(state) + "/release"), cancellationToken);
+
     public async Task RotateSetupTokenAsync(SeedState state, string directory, CancellationToken cancellationToken)
     {
         const string fileName = "setup-token-cli-rotation";

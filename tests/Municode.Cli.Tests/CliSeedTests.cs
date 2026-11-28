@@ -109,6 +109,9 @@ public sealed class CliSeedTests
         Assert.True(File.Exists(Path.Combine(fixture.Environment.ConfigHome, "instances", expectedName, "instance.json")));
         Assert.Equal(CliExitCodes.Success, await fixture.Application.RunAsync(
             ["seed", "resume", operation], CancellationToken.None));
+        Assert.Equal(CliExitCodes.Success, await fixture.Application.RunAsync(
+            ["seed", "clean-staging", operation], CancellationToken.None));
+        Assert.Contains("Completed seed release staging removed.", fixture.Console.Output);
         Assert.Single(fixture.Ssh.Calls);
     }
 
@@ -522,6 +525,8 @@ public sealed class CliSeedTests
             StagedCredentials.Add(credential);
             return Task.FromResult(StagingSupported);
         }
+        public Task CleanStagingAsync(SeedState state, string directory, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
         public Task RotateSetupTokenAsync(SeedState state, string directory, CancellationToken cancellationToken) =>
             Task.CompletedTask;
         public Task VerifyHttpsAndHealthAsync(SeedState state, CancellationToken cancellationToken)
