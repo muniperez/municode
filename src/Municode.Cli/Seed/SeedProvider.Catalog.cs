@@ -114,8 +114,9 @@ internal sealed partial class SeedProvider
     {
         var account = (await SendAsync(HttpMethod.Get, "account", null, cancellationToken))
             .GetProperty("account");
-        SeedGuard.Require(account.GetProperty("acls").EnumerateArray().Any(value => value.GetString() == "provision"),
-            "The Vultr key requires the provision ACL and must allow this workstation IP.");
+        SeedGuard.Require(account.GetProperty("acls").EnumerateArray()
+                .Any(value => value.GetString() is "provisioning" or "root"),
+            "The Vultr key requires the provisioning ACL and must allow this workstation IP.");
         One(await ListAsync("regions", "regions", cancellationToken),
             value => Text(value, "id") == selection.Region, "Unknown Vultr region.");
         var size = One(await ListAsync("plans", "plans", cancellationToken),

@@ -41,6 +41,21 @@ public sealed class SeedProviderTests
         Assert.All(handler.Authorizations, value => Assert.Equal("Bearer synthetic-credential", value));
     }
 
+    [Theory]
+    [InlineData("provisioning", true)]
+    [InlineData("root", true)]
+    [InlineData("provision", false)]
+    [InlineData("dns", false)]
+    public async Task VultrQuoteRequiresTheProvisioningAcl(string acl, bool accepted)
+    {
+        var handler = new ProviderHandler("vultr") { VultrAcls = [acl] };
+        using var subject = new SeedProvider("vultr", "synthetic-credential", handler);
+        var quote = () => subject.QuoteAsync(Selection("vultr"), new string('a', 32), CancellationToken.None);
+
+        if (accepted) Assert.Equal("linux/amd64", (await quote()).Architecture);
+        else Assert.Contains("provisioning ACL", (await Assert.ThrowsAnyAsync<Exception>(quote)).Message);
+    }
+
     [Fact]
     public async Task HetznerCreateAndFindReturnTheSameExactOperationAndImmutableFields()
     {
@@ -201,6 +216,7 @@ public sealed class SeedProviderTests
         public List<string> CreateBodies { get; } = [];
         public List<string> RequestPaths { get; } = [];
         public List<string> Authorizations { get; } = [];
+        public string[] VultrAcls { get; init; } = ["provisioning"];
         public List<JsonObject> HetznerServers { get; } = [];
         public JsonObject HetznerServer { get; } = (JsonObject)JsonSerializer.SerializeToNode(new
         {
@@ -305,7 +321,7 @@ public sealed class SeedProviderTests
             {
                 "/v2/account" => new
                 {
-                    account = new { email = "operator@example.test", acls = new[] { "provision" } }
+                    account = new { email = "operator@example.test", acls = VultrAcls }
                 },
                 var value when value.StartsWith("/v2/regions?per_page", StringComparison.Ordinal) =>
                     new { regions = new[] { new { id = "ewr" } } },
