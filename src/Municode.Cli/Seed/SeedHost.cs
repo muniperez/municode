@@ -105,6 +105,23 @@ if [ "__SMALL_VULTR__" = yes ]; then
     compose_package=docker-compose
 fi
 apt-get install -y -qq ca-certificates curl docker.io "$compose_package" openssl openssh-client python3
+if [ "__SMALL_VULTR__" = yes ] && ! docker compose run --help | grep -q -- '--pull '; then
+    plugin_dir=/usr/local/lib/docker/cli-plugins
+    install -d -m 0755 "$plugin_dir"
+    plugin=$(mktemp "$plugin_dir/.docker-compose.XXXXXX")
+    trap 'rm -f "$plugin"' EXIT
+    curl -fsSL --retry 2 --max-time 120 -o "$plugin" \
+        https://github.com/docker/compose/releases/download/v2.39.4/docker-compose-linux-x86_64
+    printf '%s  %s\n' 7af95166a730b87e172d4fc9aefea8725d3c6c7327d59149267b452114ddb7d4 "$plugin" \
+        | sha256sum --check --status
+    chmod 0755 "$plugin"
+    mv "$plugin" "$plugin_dir/docker-compose"
+    trap - EXIT
+    docker compose run --help | grep -q -- '--pull '
+fi
+if [ "__SMALL_VULTR__" = yes ]; then
+    apt-get clean
+fi
 systemctl enable --now docker
 install -d -m 0700 __REMOTE__
 """;

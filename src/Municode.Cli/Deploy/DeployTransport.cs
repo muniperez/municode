@@ -48,9 +48,9 @@ internal sealed class DeployTransport(InstanceRegistry registry, InstanceEntry i
 
     public async Task StageAsync(DeployPlan plan, DeployRelease release, CancellationToken ct)
     {
-        var created = await registry.RunPinnedAsync(instance, "umask 077; mktemp -d /tmp/municode-deploy.XXXXXXXXXX", ct);
+        var created = await registry.RunPinnedAsync(instance, "umask 077; mktemp -d /var/tmp/municode-deploy.XXXXXXXXXX", ct);
         var directory = created.Output.Trim();
-        SeedGuard.Require(created.ExitCode == 0 && Regex.IsMatch(directory, @"\A/tmp/municode-deploy\.[A-Za-z0-9]{10}\z"),
+        SeedGuard.Require(created.ExitCode == 0 && Regex.IsMatch(directory, @"\A/var/tmp/municode-deploy\.[A-Za-z0-9]{10}\z"),
             "Could not create an SSH-user-owned deploy upload directory.");
         var path = directory + "/bundle.tar.gz";
         try
